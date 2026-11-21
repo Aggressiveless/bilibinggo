@@ -19,10 +19,12 @@ from src.llm_client import chat_json
 from src.lottery_api import DYNAMIC_DETAIL_URL, LOTTERY_NOTICE_URL, is_upower_dynamic
 from src.sources.common import opus_link
 from src.user_data_io import atomic_write_json
+from src.watch_feed import SPACE_FEED_URL, extract_feed_pub_ts
 
 SEARCH_URL = "https://api.bilibili.com/x/web-interface/wbi/search/type"
 VIDEO_URL = "https://api.bilibili.com/x/web-interface/view"
 REPLIES_URL = "https://api.bilibili.com/x/v2/reply/wbi/main"
+FOLLOWER_URL = "https://api.bilibili.com/x/relation/stat"
 DEFAULT_KEYWORDS = ("评论区抽奖", "转发抽奖", "粉丝福利 抽奖")
 CST = timezone(timedelta(hours=8))
 RATE_CODES = {-352, -412, -509, -799}
@@ -34,6 +36,8 @@ DYNAMIC_RE = re.compile(
 )
 LOTTERY_RE = re.compile(r"抽奖|抽取|开奖|抽.{0,8}(?:人|位|名)|(?:揪|送).{0,8}(?:人|位|名)|roll|评论区.{0,10}抽", re.I)
 COMMENT_RE = re.compile(r"评论|留言|留评|盖楼")
+VIDEO_COMMENT_RE = re.compile(r"本视频|这条视频|本期视频|视频评论区")
+HOME_RE = re.compile(r"(?:主页|首页|个人空间|我的空间|空间).{0,14}(?:动态|置顶)|(?:去|到|看|见).{0,10}(?:置顶动态|最新动态)")
 DATE_RE = re.compile(
     r"(?<!\d)(?:(\d{4})[年./-])?(\d{1,2})[月./-](\d{1,2})(?:日|号)?"
     r"\s*(凌晨|早上|上午|中午|下午|晚上)?\s*"
@@ -223,21 +227,36 @@ def _owner_comments(data: dict, owner: str) -> list[str]:
     return list(dict.fromkeys(message for message in messages if message))[:3]
 
 
-def discover(client: DiscoveryClient, keywords: list[str], *, video_limit: int, now: int) -> dict[str, Any]:
+def discover(
+    client: DiscoveryClient, keywords: list[str], *, video_limit: int, now: int,
+    comprehensive_page: bool = False,
+) -> dict[str, Any]:
     videos: dict[str, dict] = {}
     seen_dynamics: set[str] = set()
+    home_feeds: dict[str, list[dict]] = {}
     rows: list[dict] = []
     errors: list[str] = []
     stopped = ""
+    reviewed_videos = 0
 
-    def verify_dynamic(dynamic_id: str, source_video: str) -> None:
+    def extract_fields(text: str, ref: str) -> dict:
+        try:
+            return client.extract(text[:4800])
+        except (RuntimeError, ValueError):
+            errors.append(f"{ref}: 无法用模型提取规则")
+            return {}
+
+    def verify_dynamic(
+        dynamic_id: str, source_video: str, *, item: dict | None = None,
+        home_prize: str | None = None, home_owner: dict | None = None,
+    ) -> None:
         if dynamic_id in seen_dynamics:
             return
-        seen_dynamics.add(dynamic_id)
         url = opus_link(dynamic_id)
-        detail = client.read(DYNAMIC_DETAIL_URL, {"id": dynamic_id}, referer=url, ttl=600)
-        item = (detail.get("data") or {}).get("item")
-        if api_code(detail) != 0 or not item or is_upower_dynamic(item):
+        if item is None:
+            detail = client.read(DYNAMIC_DETAIL_URL, {"id": dynamic_id}, referer=url, ttl=600)
+            item = (detail.get("data") or {}).get("item") if api_code(detail) == 0 else None
+        if not item or is_upower_dynamic(item):
             return
         raw = client.read(
             LOTTERY_NOTICE_URL, {"business_id": dynamic_id, "business_type": 1},
@@ -247,35 +266,96 @@ def discover(client: DiscoveryClient, keywords: list[str], *, video_limit: int, 
         notice = notice if notice.get("lottery_id") else None
         modules = item.get("modules") or {}
         author = (modules.get("module_author") or {}) if isinstance(modules, dict) else {}
-        published = author.get("pub_ts")
-        published = published if isinstance(published, int) else 0
+        published = extract_feed_pub_ts(item) or 0
         text = _extract_from_detail_item({key: value for key, value in item.items() if key != "orig"})[:4800]
         if notice or LOTTERY_RE.search(text):
-            fields = client.extract(text) if LOTTERY_RE.search(text) else {}
-            rows.append({"kind": "dynamic", "url": url, "source_video": source_video,
-                         **assess_candidate(fields, now=now, notice=notice, published=published)})
+            fields = extract_fields(text, dynamic_id) if LOTTERY_RE.search(text) else {}
+            prizes = "、".join(
+                str(notice[key]) for key in ("first_prize_cmt", "second_prize_cmt", "third_prize_cmt")
+                if notice and notice.get(key)
+            )
+            assessment = assess_candidate(fields, now=now, notice=notice, published=published)
+            if home_prize is not None and assessment["status"] in {"open", "review"}:
+                if not home_prize or not any(home_prize in value for value in (text, prizes)):
+                    assessment.update(status="review", reason="已找到主页抽奖动态，尚未确认与视频指向同一场")
+            home_owner = home_owner or {}
+            rows.append({
+                "kind": "dynamic", "url": url, "source_video": source_video,
+                "found_via": "publisher_home" if home_prize is not None else "video_link",
+                "publisher": author.get("name") or home_owner.get("name") or "",
+                "publisher_uid": str(author.get("mid") or (notice or {}).get("sender_uid") or home_owner.get("mid") or ""),
+                "prize": prizes or fields.get("prize", ""),
+                **assessment,
+            })
+            if home_prize is None or assessment["status"] == "open":
+                seen_dynamics.add(dynamic_id)
+
+    def verify_home(source_video: str, owner: dict, source_fields: dict) -> None:
+        uid = str(owner.get("mid") or "")
+        if not uid.isdigit():
+            return
+        home = f"https://space.bilibili.com/{uid}/dynamic"
+        if uid not in home_feeds:
+            feed = client.read(SPACE_FEED_URL, {"host_mid": uid, "type": "all", "platform": "web"},
+                               referer=home, ttl=600, wbi=True)
+            home_feeds[uid] = (feed.get("data") or {}).get("items") or []
+        candidates = []
+        for item in home_feeds[uid]:
+            modules = item.get("modules") or {}
+            author = modules.get("module_author") or {}
+            dynamic_id = str(item.get("id_str") or "")
+            if str(author.get("mid") or "") != uid or not re.fullmatch(r"\d{15,22}", dynamic_id):
+                continue
+            if item.get("type") == "DYNAMIC_TYPE_FORWARD":
+                continue
+            text = _extract_from_detail_item(item)
+            if LOTTERY_RE.search(text):
+                candidates.append((dynamic_id, item))
+        before = len(rows)
+        prize = source_fields.get("prize", "")
+        if prize:
+            candidates.sort(key=lambda pair: prize in _extract_from_detail_item(pair[1]), reverse=True)
+        for dynamic_id, item in candidates[:3]:
+            verify_dynamic(dynamic_id, source_video, item=item, home_prize=prize, home_owner=owner)
+        if len(rows) == before and not any(dynamic_id in seen_dynamics for dynamic_id, _ in candidates):
+            rows.append({
+                "kind": "home_referral", "url": None, "source_video": source_video,
+                "found_via": "publisher_home", "publisher_home": home, "publisher": owner.get("name") or "",
+                "publisher_uid": uid, "prize": prize, "status": "review",
+                "reason": "视频指向主页动态，当前读取范围内没有核实到抽奖入口",
+                "deadline": None, "draw_time": None, "evidence": source_fields,
+            })
 
     try:
         for keyword in keywords:
+            params = {"search_type": "video", "keyword": keyword, "order": "pubdate", "page": 1}
+            if comprehensive_page:
+                params.update(order="totalrank", page_size=36)
             data = client.read(
-                SEARCH_URL, {"search_type": "video", "keyword": keyword, "order": "pubdate", "page": 1},
+                SEARCH_URL, params,
                 referer="https://search.bilibili.com/", ttl=1800, wbi=True,
             )
             for item in (data.get("data") or {}).get("result") or []:
                 bvid = str(item.get("bvid") or "")
                 published = item.get("pubdate")
-                if BV_RE.fullmatch(bvid) and isinstance(published, int) and now - RECENT_SECONDS <= published <= now:
+                recent = isinstance(published, int) and now - RECENT_SECONDS <= published <= now
+                if BV_RE.fullmatch(bvid) and (comprehensive_page or recent):
                     videos.setdefault(bvid, item)
 
-        for bvid, item in sorted(videos.items(), key=lambda pair: pair[1]["pubdate"], reverse=True)[:video_limit]:
+        video_rows = list(videos.items())
+        if not comprehensive_page:
+            video_rows.sort(key=lambda pair: pair[1]["pubdate"], reverse=True)
+        for bvid, item in video_rows[:video_limit]:
             url = f"https://www.bilibili.com/video/{bvid}"
+            reviewed_videos += 1
             try:
                 video = client.read(VIDEO_URL, {"bvid": bvid}, referer=url, ttl=900)
                 detail = video.get("data") or {}
                 if not detail:
                     errors.append(f"{bvid}: 无法读取视频详情")
                     continue
-                owner = str((detail.get("owner") or {}).get("mid") or "")
+                author = detail.get("owner") or {}
+                owner = str(author.get("mid") or "")
                 title = str(detail.get("title") or item.get("title") or "")
                 description = str(detail.get("desc") or "")
                 texts = [title, description]
@@ -288,19 +368,25 @@ def discover(client: DiscoveryClient, keywords: list[str], *, video_limit: int, 
                     except (httpx.HTTPError, RuntimeError, ValueError):
                         errors.append(f"{bvid}: 无法读取评论，继续检查视频简介")
                 text = "\n".join(texts)
-                for dynamic_id in list(dict.fromkeys(DYNAMIC_RE.findall(text)))[:3]:
+                dynamic_ids = list(dict.fromkeys(DYNAMIC_RE.findall(text)))[:3]
+                for dynamic_id in dynamic_ids:
                     try:
                         verify_dynamic(dynamic_id, url)
                     except (httpx.HTTPError, RuntimeError, ValueError):
                         errors.append(f"{dynamic_id}: 动态核验失败")
-                if LOTTERY_RE.search(text) and COMMENT_RE.search(text):
-                    fields = client.extract(text[:4800])
+                home_hint = bool(HOME_RE.search(text) and LOTTERY_RE.search(text) and not dynamic_ids)
+                if home_hint or (LOTTERY_RE.search(text) and COMMENT_RE.search(text)):
+                    fields = extract_fields(text, bvid)
                     rules = fields.get("rules", "")
-                    if COMMENT_RE.search(rules) and (
-                        not DYNAMIC_RE.search(text) or re.search(r"本视频|这条视频|本期视频|视频评论区", rules)
-                    ):
+                    if home_hint:
+                        verify_home(url, author, fields)
+                    if COMMENT_RE.search(rules) and (VIDEO_COMMENT_RE.search(rules) or not (dynamic_ids or home_hint)):
+                        published = detail.get("pubdate") or item.get("pubdate")
                         rows.append({"kind": "video_comment", "url": url, "title": title,
-                                     **assess_candidate(fields, now=now, published=item["pubdate"])})
+                                     "publisher": author.get("name") or item.get("author") or "",
+                                     "publisher_uid": owner or str(item.get("mid") or ""),
+                                     "prize": fields.get("prize", ""),
+                                     **assess_candidate(fields, now=now, published=published if isinstance(published, int) else 0)})
             except (httpx.HTTPError, RuntimeError, ValueError) as exc:
                 errors.append(f"{bvid}: {str(exc).splitlines()[0][:200]}")
     except DiscoveryStopped as exc:
@@ -308,7 +394,35 @@ def discover(client: DiscoveryClient, keywords: list[str], *, video_limit: int, 
     except (httpx.HTTPError, RuntimeError, ValueError) as exc:
         errors.append(str(exc).splitlines()[0][:200])
 
+    ranked = {"irrelevant": 0, "review": 1, "open": 2, "closed": 3, "joined": 3}
+    unique_rows: dict[str, dict] = {}
+    for row in rows:
+        key = row["url"] or row["source_video"] + "#publisher-home"
+        existing = unique_rows.get(key)
+        if not existing or ranked[row["status"]] > ranked[existing["status"]]:
+            unique_rows[key] = row
+    rows = list(unique_rows.values())
+    followers: dict[str, int | None] = {}
+    for row in rows:
+        uid = row.get("publisher_uid", "")
+        row["followers"] = None
+        if stopped or row["status"] == "irrelevant" or not uid.isdigit():
+            continue
+        if uid not in followers:
+            followers[uid] = None
+            try:
+                profile = f"https://space.bilibili.com/{uid}"
+                stats = client.read(FOLLOWER_URL, {"vmid": uid}, referer=profile, ttl=3600)
+                count = (stats.get("data") or {}).get("follower")
+                if api_code(stats) == 0 and isinstance(count, int) and count >= 0:
+                    followers[uid] = count
+            except DiscoveryStopped as exc:
+                stopped = str(exc)
+            except (httpx.HTTPError, RuntimeError, ValueError):
+                errors.append(f"{uid}: 无法获取粉丝量")
+        row["followers"] = followers[uid]
+
     result = {status: [row for row in rows if row["status"] == status]
               for status in ("open", "review", "closed", "joined")}
     return {"checked_at": now, "requests": client.request_count, "stopped": stopped,
-            "errors": errors, "search_video_count": len(videos), **result}
+            "errors": errors, "search_video_count": len(videos), "videos_checked": reviewed_videos, **result}

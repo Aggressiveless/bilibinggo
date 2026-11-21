@@ -19,12 +19,15 @@ def main() -> int:
     parser.add_argument("--home", type=Path, help="现有 Binggo user-data 目录")
     parser.add_argument("--keyword", action="append", help="搜索词，可指定最多三次")
     parser.add_argument("--expand-keywords", action="store_true", help="用现有 DeepSeek 配置补充搜索词，本轮仍最多三个词")
-    parser.add_argument("--videos", type=int, default=6, choices=range(1, 9), metavar="1-8")
-    parser.add_argument("--budget", type=int, default=24, choices=range(1, 31), metavar="1-30")
+    parser.add_argument("--comprehensive-page", action="store_true", help="单关键词、综合排序、只查第一页，最多检查 36 个视频")
+    parser.add_argument("--videos", type=int, choices=range(1, 37), metavar="1-36")
+    parser.add_argument("--budget", type=int, choices=range(1, 111), metavar="1-110")
     parser.add_argument("--output", type=Path, help="另存 JSON 报告")
     args = parser.parse_args()
     if args.keyword and (len(args.keyword) > 3 or any(not term.strip() for term in args.keyword)):
         parser.error("请提供 1 至 3 个非空关键词")
+    if args.comprehensive_page and (len(args.keyword or []) > 1 or args.expand_keywords):
+        parser.error("单页模式只接受一个搜索词")
     if args.home:
         os.environ["BINGGO_HOME"] = str(args.home.resolve())
 
@@ -38,6 +41,8 @@ def main() -> int:
         parser.error("未找到 LLM 配置，请通过 --home 指定已配置 DeepSeek 的 Binggo 数据目录")
 
     keywords = args.keyword or list(DEFAULT_KEYWORDS)
+    if args.comprehensive_page:
+        keywords = keywords[:1]
     keyword_error = ""
     if args.expand_keywords and not args.keyword:
         keywords = keywords[:1]
@@ -47,9 +52,12 @@ def main() -> int:
         except (RuntimeError, ValueError) as exc:
             keyword_error = f"生成搜索词失败，已使用原搜索词：{exc}"
 
-    with DiscoveryClient(data_dir() / "lottery-discovery-cache.json", budget=args.budget) as client:
+    budget = args.budget or (96 if args.comprehensive_page else 24)
+    video_limit = args.videos or (36 if args.comprehensive_page else 6)
+    with DiscoveryClient(data_dir() / "lottery-discovery-cache.json", budget=budget) as client:
         try:
-            result = discover(client, keywords, video_limit=args.videos, now=int(time.time()))
+            result = discover(client, keywords, video_limit=video_limit, now=int(time.time()),
+                              comprehensive_page=args.comprehensive_page)
         finally:
             client.save()
     result["model"] = llm.model_name

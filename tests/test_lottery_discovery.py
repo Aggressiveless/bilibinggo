@@ -146,3 +146,60 @@ def test_model_keyword_expansion_is_bounded(monkeypatch):
         "keywords": ["评论区抽奖", "https://example.org", "动态转发送周边", "外设抽奖", "额外搜索词"],
     })
     assert discovery.expand_keywords(["评论区抽奖"]) == ["评论区抽奖", "动态转发送周边", "外设抽奖"]
+
+
+def test_single_page_homepage_referral_and_report_metadata():
+    now = date(2026, 11, 21, 20)
+    bvids = [f"BV{idx:010d}" for idx in range(36)]
+    dynamic_id = "1234567890123456789"
+    old_dynamic_id = "1234567890123456790"
+    source_text = "抽奖送机械键盘，去主页置顶动态参与。"
+    open_text = "抽奖送机械键盘，在本动态评论区留言，11月25日20:00截止。"
+    old_text = "抽奖送机械键盘，在本动态评论区留言，11月21日18:00截止。"
+
+    class FakeClient:
+        request_count = 0
+
+        def __init__(self):
+            self.requests = []
+
+        def read(self, url, params, **kwargs):
+            self.request_count += 1
+            self.requests.append((url, params))
+            if url == discovery.SEARCH_URL:
+                assert params["order"] == "totalrank" and params["page"] == 1
+                assert params["page_size"] == 36
+                return {"code": 0, "data": {"result": [{"bvid": bvid, "pubdate": now - 60} for bvid in bvids]}}
+            if url == discovery.VIDEO_URL:
+                text = source_text if params["bvid"] in bvids[:2] else "普通视频"
+                return {"code": 0, "data": {"desc": text, "owner": {"mid": 99, "name": "测试发布者"}}}
+            if url == discovery.SPACE_FEED_URL:
+                return {"code": 0, "data": {"items": [
+                    {"id_str": post, "modules": {
+                        "module_author": {"mid": 99, "name": "测试发布者", "pub_ts": now - 86400},
+                        "module_dynamic": {"desc": {"text": text}},
+                    }} for post, text in ((dynamic_id, open_text), (old_dynamic_id, old_text))
+                ]}}
+            if url == discovery.LOTTERY_NOTICE_URL:
+                return {"code": 0, "data": {}}
+            assert url == discovery.FOLLOWER_URL and params == {"vmid": "99"}
+            return {"code": 0, "data": {"follower": 12345}}
+
+        def extract(self, text):
+            if text == source_text:
+                return {"prize": "机械键盘", "rules": "去主页置顶动态参与"}
+            deadline = "11月25日20:00截止" if text == open_text else "11月21日18:00截止"
+            return {"prize": "机械键盘", "rules": "在本动态评论区留言", "deadline": deadline}
+
+    client = FakeClient()
+    result = discovery.discover(client, ["抽奖"], video_limit=36, now=now, comprehensive_page=True)
+    assert result["search_video_count"] == result["videos_checked"] == 36
+    assert result["errors"] == [] and not result["stopped"]
+    assert len(result["open"]) == len(result["closed"]) == 1
+    row = result["open"][0]
+    assert (row["publisher"], row["publisher_uid"], row["followers"], row["prize"]) == ("测试发布者", "99", 12345, "机械键盘")
+    assert row["url"] == discovery.opus_link(dynamic_id)
+    assert row["found_via"] == "publisher_home"
+    assert row["source_video"].endswith(bvids[0])
+    for endpoint in (discovery.SEARCH_URL, discovery.SPACE_FEED_URL, discovery.FOLLOWER_URL):
+        assert sum(url == endpoint for url, _ in client.requests) == 1
