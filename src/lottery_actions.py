@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import Callable, Literal
@@ -8,6 +9,7 @@ import httpx
 
 from src.bilibili_auth import get_login_uid, require_login
 from src.bilibili_client import BilibiliClient, api_code
+from src.forward_parser import _extract_desc_text
 from src.lottery_api import fetch_dynamic_detail, fetch_notice_for_interact, fetch_opus_detail_item
 from src.sources.common import opus_link
 
@@ -41,6 +43,10 @@ ACTION_LABELS: dict[ActionName, str] = {
     "reserve": "预约",
 }
 PARTICIPATION_STEPS: tuple[ActionName, ...] = ("like", "follow", "favorite", "repost", "comment")
+FAVORITE_NOT_REQUIRED = "活动未要求收藏，跳过"
+_RULE_ACTIONS = frozenset({"关注", "转发", "点赞", "评论"})
+_RULE_ACTION = r"(关注|转发|点赞|评论)"
+_RULE_CHAIN = re.compile(r"[^\S\n]*[+＋&＆、][^\S\n]*".join([_RULE_ACTION] * 4))
 
 
 @dataclass
@@ -63,6 +69,7 @@ class DynamicContext:
     followed: bool
     reposted: bool
     commented: bool
+    favorite_skip_reason: str = ""
 
 
 def _api_code(payload: dict) -> int:
@@ -148,12 +155,30 @@ def favorite_supported(
     return True
 
 
+def _forward_rules_omit_favorite(item: dict) -> bool:
+    # 只看发布抽奖的外层动态，避免读取被转发动态的条件。
+    modules = item.get("modules") or {}
+    if not isinstance(modules, dict):
+        return False
+    dynamic = modules.get("module_dynamic") or {}
+    if not isinstance(dynamic, dict):
+        return False
+    description = _extract_desc_text(dynamic)
+    if "收藏" in description:
+        return False
+    return any(
+        set(match.groups()) == _RULE_ACTIONS
+        for match in _RULE_CHAIN.finditer(description)
+    )
+
+
 def build_dynamic_context(
     client: BilibiliClient,
     *,
     dynamic_id: str,
     action_text: str,
     sender_uid: int | None = None,
+    lottery_type: str | None = None,
 ) -> DynamicContext:
     item = fetch_dynamic_detail(client, dynamic_id)
     if not item:
@@ -171,7 +196,10 @@ def build_dynamic_context(
     liked = bool(like_obj.get("status"))
 
     followed = is_following(client, uid=uid, referer=referer)
-    favorite_available = favorite_supported(item, client=client, dynamic_id=dynamic_id)
+    favorite_skip_reason = ""
+    if lottery_type == "转发抽奖" and _forward_rules_omit_favorite(item):
+        favorite_skip_reason = FAVORITE_NOT_REQUIRED
+    favorite_available = not favorite_skip_reason and favorite_supported(item, client=client, dynamic_id=dynamic_id)
     favorited = (
         is_favorited(client, dynamic_id=dynamic_id, referer=referer)
         if favorite_available
@@ -198,6 +226,7 @@ def build_dynamic_context(
         followed=followed,
         reposted=reposted,
         commented=commented,
+        favorite_skip_reason=favorite_skip_reason,
     )
 
 
@@ -470,6 +499,7 @@ def execute_full_participation(
     *,
     dynamic_id: str,
     sender_uid: int | None = None,
+    lottery_type: str | None = None,
     action_text: str = DEFAULT_PARTICIPATE_TEXT,
     dry_run: bool = False,
     on_step: Callable[[int, int, str, ActionName], None] | None = None,
@@ -480,6 +510,7 @@ def execute_full_participation(
         dynamic_id=dynamic_id,
         action_text=text,
         sender_uid=sender_uid,
+        lottery_type=lottery_type,
     )
 
     total_steps = len(PARTICIPATION_STEPS)
@@ -502,7 +533,10 @@ def execute_full_participation(
                 True,
                 "跳过"
                 if context.favorited
-                else ("无收藏入口，跳过" if not context.favorite_available else f"将收藏 rid={context.comment_rid}"),
+                else (
+                    f"将收藏 rid={context.comment_rid}" if context.favorite_available
+                    else context.favorite_skip_reason or "无收藏入口，跳过"
+                ),
             ),
             ActionResult("repost", True, "跳过" if context.reposted else f"将转发 {text[:40]}"),
             ActionResult(
@@ -531,7 +565,7 @@ def execute_full_participation(
 
     report_step(3, "favorite")
     if not context.favorite_available:
-        actions.append(ActionResult("favorite", True, "无收藏入口，跳过"))
+        actions.append(ActionResult("favorite", True, context.favorite_skip_reason or "无收藏入口，跳过"))
     elif context.favorited:
         actions.append(ActionResult("favorite", True, "已收藏，跳过"))
     else:

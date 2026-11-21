@@ -9,6 +9,7 @@ from src.bilibili_client import BilibiliClient
 from src.lottery_actions import (
     ACTION_INTERVAL_SEC,
     DEFAULT_PARTICIPATE_TEXT,
+    FAVORITE_NOT_REQUIRED,
     ActionResult,
     execute_full_participation,
     follow_user,
@@ -228,6 +229,7 @@ def participate_five_action_lottery(
             client,
             dynamic_id=dynamic_id,
             sender_uid=sender_uid,
+            lottery_type=lottery_type,
             action_text=text,
             dry_run=dry_run,
             on_step=on_step,
@@ -256,6 +258,8 @@ def participate_five_action_lottery(
         comment = next((item for item in actions if item.action == "comment"), None)
         if lottery_type == "互动抽奖" and comment and not comment.ok:
             message = "核心操作已完成（评论受限，已视为参与成功）"
+        elif any(item.action == "favorite" and item.detail == FAVORITE_NOT_REQUIRED for item in actions):
+            message = "活动要求的四项操作均已完成（未要求收藏）"
         else:
             message = "五项操作均已完成" if lottery_type == "转发抽奖" else "核心操作均已完成"
     else:
