@@ -1,0 +1,264 @@
+--- a/src/lottery_actions.py
++++ b/src/lottery_actions.py
+@@ -3,6 +3,8 @@
+ import time
+ from dataclasses import dataclass
+ from typing import Callable, Literal
++
++import httpx
+ 
+ from src.bilibili_auth import get_login_uid, require_login
+ from src.bilibili_client import BilibiliClient, api_code
+@@ -20,7 +22,7 @@
+ FAV_RESOURCE_LIST_URL = "https://api.bilibili.com/x/v3/fav/resource/list"
+ FAV_DEAL_URL = "https://api.bilibili.com/x/v3/fav/resource/deal"
+ COSMO_SIMPLE_ACTION_URL = "https://api.bilibili.com/x/community/cosmo/interface/simple_action"
+-REPOST_URL = "https://api.vc.bilibili.com/dynamic_repost/v1/dynamic_repost/repost"
++REPOST_URL = "https://api.bilibili.com/x/dynamic/feed/create/dyn"
+ COMMENT_URL = "https://api.bilibili.com/x/v2/reply/add"
+ REPLY_MAIN_URL = "https://api.bilibili.com/x/v2/reply/main"
+ 
+@@ -398,24 +400,45 @@
+     referer: str,
+     content: str,
+ ) -> ActionResult:
+-    payload = client.post_form(
+-        REPOST_URL,
+-        {
+-            "uid": str(my_uid),
+-            "dynamic_id": dynamic_id,
+-            "content": content[:233],
+-            "ctrl": "[]",
+-            "csrf": csrf,
+-        },
+-        referer=referer,
+-        raise_on_code=False,
+-    )
++    text = content[:233] or "转发动态"
++    try:
++        # This creates a public dynamic. Never replay an ambiguous submission.
++        payload = client.post_json(
++            REPOST_URL,
++            {
++                "dyn_req": {
++                    "content": {"contents": [{"raw_text": text, "type": 1, "biz_id": ""}]},
++                    "scene": 4,
++                    "meta": {"app_meta": {"from": "create.dynamic.web", "mobi_app": "web"}},
++                },
++                "web_repost_src": {"dyn_id_str": str(dynamic_id)},
++            },
++            params={"csrf": csrf, "platform": "web"},
++            referer=referer,
++            retries=0,
++            raise_on_code=False,
++        )
++    except (httpx.HTTPError, RuntimeError) as exc:
++        status = f"HTTP {exc.response.status_code}；" if isinstance(exc, httpx.HTTPStatusError) else ""
++        # Do not log the request URL: its query contains the CSRF token.
++        raise RuntimeError(
++            f"{status}转发结果未确认，未自动重试。请先到 B 站个人动态核对是否已发布，再决定是否重试。"
++        ) from None
++    if not isinstance(payload, dict):
++        raise RuntimeError("转发响应格式异常，未自动重试。请先到 B 站个人动态核对。")
+     code = _api_code(payload)
+     if code == 0:
+-        return ActionResult("repost", True, content[:80])
++        data = payload.get("data")
++        if not isinstance(data, dict):
++            raise RuntimeError("转发响应缺少结果，未自动重试。请先到 B 站个人动态核对。")
++        result = data.get("result")
++        if result is not None and result != 0:
++            return ActionResult("repost", False, f"转发未成功 result={result}")
++        new_id = str(data.get("dyn_id_str") or data.get("dyn_id") or "")
++        if result == 0 or (new_id.isdecimal() and int(new_id) > 0):
++            return ActionResult("repost", True, text[:80])
++        raise RuntimeError("转发响应缺少成功标志，未自动重试。请先到 B 站个人动态核对。")
+     message = _api_message(payload)
+-    if "已" in message or "重复" in message:
+-        return ActionResult("repost", True, "已转发")
+     return ActionResult("repost", False, f"code={code} {message}".strip())
+ 
+ 
+--- a/src/bilibili_client.py
++++ b/src/bilibili_client.py
+@@ -299,6 +299,8 @@
+                 resp = self._http_post(url, params=params or {}, json=payload, headers=headers)
+                 resp.raise_for_status()
+                 data = resp.json()
++                if not isinstance(data, dict):
++                    raise RuntimeError("响应不是 JSON 对象")
+                 code = data.get("code")
+                 if code in (0, None):
+                     return data
+--- a/src/app_paths.py
++++ b/src/app_paths.py
+@@ -7,7 +7,7 @@
+ import sys
+ from pathlib import Path
+ 
+-__version__ = "5.0.5"
++__version__ = "5.0.5+repostfix.1"
+ 
+ 
+ def is_frozen() -> bool:
+--- a/packaging/windows/binggo.spec
++++ b/packaging/windows/binggo.spec
+@@ -57,7 +57,7 @@
+ hiddenimports += collect_submodules("web")
+ 
+ a = Analysis(
+-    [str(root / "binggo_launcher.py")],
++    [str(root / "binggo_repair_launcher.py")],
+     pathex=[str(root)],
+     binaries=[],
+     datas=datas,
+@@ -79,7 +79,7 @@
+     a.scripts,
+     [],
+     exclude_binaries=True,
+-    name="Binggo",
++    name="Binggo-RepostFix",
+     debug=False,
+     bootloader_ignore_signals=False,
+     strip=False,
+@@ -101,5 +101,5 @@
+     strip=False,
+     upx=True,
+     upx_exclude=[],
+-    name="Binggo",
++    name="Binggo-RepostFix",
+ )
+--- /dev/null
++++ b/binggo_repair_launcher.py
+@@ -0,0 +1,24 @@
++"""Isolated local repair build: separate data, port and single-instance mutex."""
++from pathlib import Path
++import os
++import sys
++
++base = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
++os.environ['BINGGO_HOME'] = str(base / 'user-data')
++os.environ['BINGGO_PORTABLE'] = '1'
++
++from src import dashboard_server
++
++dashboard_server.PACKAGED_DASHBOARD_PORT = 8182
++dashboard_server.DEV_DASHBOARD_PORT = 8182
++dashboard_server.DASHBOARD_PORT = dashboard_server.get_dashboard_port()
++dashboard_server.DASHBOARD_URL = dashboard_server.get_dashboard_url()
++
++import binggo_launcher
++
++binggo_launcher.MUTEX_NAME = r'Global\BilibiliBinggoRepostFixDashboard'
++
++if __name__ == '__main__':
++    if binggo_launcher.SERVE_FLAG in sys.argv:
++        raise SystemExit(binggo_launcher.run_server_mode())
++    raise SystemExit(binggo_launcher.main())
+--- /dev/null
++++ b/tests/test_repost_migration.py
+@@ -0,0 +1,104 @@
++from __future__ import annotations
++
++import json
++
++import httpx
++import pytest
++
++from src.bilibili_client import BilibiliClient
++from src.lottery_actions import repost_dynamic
++
++
++@pytest.fixture
++def mock_client(monkeypatch):
++    # Never read real account credentials or contact Bilibili in these tests.
++    monkeypatch.setattr('src.bilibili_client._load_cookie_string', lambda: None)
++    monkeypatch.setattr('src.bilibili_client.acquire_bilibili_request_slot', lambda: None)
++    clients = []
++
++    def create(handler):
++        client = BilibiliClient(warmup=False)
++        client._client.close()
++        client._client = httpx.Client(transport=httpx.MockTransport(handler))
++        clients.append(client)
++        return client
++
++    yield create
++    for client in clients:
++        client.close()
++
++
++def submit(client, content='好运😀！'):
++    return repost_dynamic(client, dynamic_id='1252602820816797718', my_uid=123,
++                          csrf='csrf-test-secret', referer='https://t.bilibili.com/1252602820816797718',
++                          content=content)
++
++
++@pytest.mark.parametrize('content, expected', [('好运😀！', '好运😀！'), ('', '转发动态'), ('奖' * 240, '奖' * 233)])
++def test_repost_uses_new_json_contract(mock_client, content, expected):
++    requests = []
++
++    def handler(request):
++        requests.append(request)
++        return httpx.Response(200, json={'code': 0, 'data': {'result': 0}})
++
++    result = submit(mock_client(handler), content)
++    assert result.ok
++    assert len(requests) == 1
++    request = requests[0]
++    assert request.method == 'POST'
++    assert str(request.url).split('?')[0] == 'https://api.bilibili.com/x/dynamic/feed/create/dyn'
++    assert dict(request.url.params) == {'csrf': 'csrf-test-secret', 'platform': 'web'}
++    assert request.headers['content-type'] == 'application/json'
++    assert request.headers['referer'].startswith('https://t.bilibili.com/')
++    body = json.loads(request.content)
++    assert body['web_repost_src']['dyn_id_str'] == '1252602820816797718'
++    assert body['dyn_req']['scene'] == 4
++    assert body['dyn_req']['content']['contents'] == [{'raw_text': expected, 'type': 1, 'biz_id': ''}]
++    assert 'dynamic_id' not in body and 'csrf' not in body
++
++
++@pytest.mark.parametrize('payload, ok', [
++    ({'code': 0, 'data': {'result': 0}}, True),
++    ({'code': 0, 'data': {'dyn_id_str': '1252602820816797719'}}, True),
++    ({'code': 0, 'data': {'result': 1, 'dyn_id_str': '1252602820816797719'}}, False),
++    ({'code': -101, 'message': '已退出登录'}, False),
++    ({'code': 1101008, 'message': '操作太频繁'}, False),
++    ({'code': -352, 'message': '风控'}, False),
++    ({'message': '重复'}, False),
++])
++def test_repost_checks_business_result(mock_client, payload, ok):
++    requests = []
++
++    def handler(request):
++        requests.append(request)
++        return httpx.Response(200, json=payload)
++
++    assert submit(mock_client(handler)).ok is ok
++    assert len(requests) == 1
++
++
++@pytest.mark.parametrize('payload', [{'code': 0}, {'code': 0, 'data': {}}, {'code': 0, 'data': {'dyn_id_str': '0'}}, []])
++def test_repost_does_not_claim_ambiguous_success(mock_client, payload):
++    with pytest.raises(RuntimeError, match='核对'):
++        submit(mock_client(lambda request: httpx.Response(200, json=payload)))
++
++
++@pytest.mark.parametrize('failure', ['timeout', 'disconnect', 'invalid-json', 404, 429, 500])
++def test_repost_never_retries_ambiguous_submission(mock_client, failure):
++    requests = []
++
++    def handler(request):
++        requests.append(request)
++        if failure == 'timeout':
++            raise httpx.ReadTimeout('timeout', request=request)
++        if failure == 'disconnect':
++            raise httpx.RemoteProtocolError('disconnect', request=request)
++        if failure == 'invalid-json':
++            return httpx.Response(200, text='<html>not JSON</html>')
++        return httpx.Response(failure, text='failure')
++
++    with pytest.raises(RuntimeError, match='未自动重试') as caught:
++        submit(mock_client(handler))
++    assert len(requests) == 1
++    assert 'csrf-test-secret' not in str(caught.value)

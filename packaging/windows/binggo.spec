@@ -57,7 +57,7 @@ hiddenimports += collect_submodules("src")
 hiddenimports += collect_submodules("web")
 
 a = Analysis(
-    [str(root / "binggo_launcher.py")],
+    [str(root / "binggo_repair_launcher.py")],
     pathex=[str(root)],
     binaries=[],
     datas=datas,
@@ -79,7 +79,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Binggo",
+    name="Binggo-RepostFix",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -101,5 +101,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="Binggo",
+    name="Binggo-RepostFix",
 )
