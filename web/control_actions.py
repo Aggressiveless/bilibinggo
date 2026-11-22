@@ -13,9 +13,11 @@ def check_cancel(event):
 
 def run_control_action(action, params, *, on_progress, cancel_event):
     from src.control_telemetry import network_span
-    with network_span(read_only=action in {"control_discover", "control_network", "control_llm_test"}) as counts:
+    workflow = params.get("workflow") or {}
+    read_only = action in {"control_discover", "control_import", "control_network", "control_llm_test"} or action == "control_workflow" and "execute" not in workflow.get("stages", [])
+    with network_span(read_only=read_only, max_requests=workflow.get("request_budget", 110)) as counts:
         result = _run_control_action(action, params, on_progress=on_progress, cancel_event=cancel_event)
-        result["result"]["network_counts"] = {key: value for key, value in counts.items() if key != "read_only"}
+        result["result"]["network_counts"] = {key: value for key, value in counts.items() if key.startswith("platform_")}
         return result
 
 
@@ -26,7 +28,7 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
     check_cancel(cancel_event)
     on_progress(step=0, total=1, message="正在执行MCP控制任务")
     if action == "control_discover":
-        result = discover(service, job_id, params, cancel_event)
+        result = discover(service, job_id, params, cancel_event, on_progress)
     elif action == "control_import":
         result = import_candidates(service, params)
     elif action == "control_participate":
@@ -45,41 +47,73 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
     else:
         raise ControlError("NOT_FOUND", "未知控制任务")
     check_cancel(cancel_event)
-    on_progress(step=1, total=1, message="控制任务完成")
-    return {"ok": True, "message": "控制任务完成", "log": "MCP操作结果已保存", "result": redact_obj(result)}
+    message = (f"检索完成：找到 {result['eligible']} 条可导入活动，检查 {result.get('videos_checked', 0)} 个视频"
+               if action == "control_discover" else "控制任务完成")
+    on_progress(step=1, total=1, message=message)
+    return {"ok": True, "message": message, "log": message, "result": redact_obj(result)}
 
 
-def discover(service, job_id, params, event):
+def discovery_candidates(rows):
+    values = []
+    for row in rows:
+        url = row.get("url") or ""
+        match = re.search(r"(?:/opus/|/dynamic/|t\.bilibili\.com/)(\d{15,22})", url)
+        identifier = match[1] if match else None
+        source = row.get("source_video") or url
+        category = row.get("status", "review")
+        evidence = row.get("evidence") or {}
+        quotes = list(dict.fromkeys(v[:2000] for v in [*(evidence.get(k) for k in ("rules", "deadline", "draw")), row.get("rule_text")]
+                                   if isinstance(v, str) and v))
+        value = {"candidate_id": digest({"url": url, "source": source, "author": row.get("publisher_uid")})[:24],
+            "dynamic_id": identifier, "source_url": source, "target_url": url or None,
+            "resolution": "ambiguous" if row.get("ambiguous") else ("unresolved" if not identifier else ("author_home" if row.get("found_via") == "publisher_home" else "direct")),
+            "evidence_chain": row.get("source_chain") or [{"source": source, "author_mid": row.get("publisher_uid"), "target": url}],
+            "rule_quotes": quotes, "excluded_reasons": [] if category == "open" and identifier else [category, row.get("reason") or "not_eligible"],
+            "eligible": category == "open" and identifier is not None, "checked_at": utc_now(), "raw": row}
+        if str(row.get("publisher_uid") or "").isdigit() and int(row["publisher_uid"]) > 0:
+            value["author_mid"] = str(row["publisher_uid"])
+        values.append(value)
+    return values
+
+
+def discover(service, job_id, params, event, progress=None):
     from src.lottery_discovery import DiscoveryClient, DiscoveryStopped, discover as find, expand_keywords
     class CancellableClient(DiscoveryClient):
+        def read(self, *args, **kwargs):
+            if event is not None and event.is_set():
+                raise DiscoveryStopped("用户取消")
+            return super().read(*args, **kwargs)
         def _http_get(self, *args, **kwargs):
             if event is not None and event.is_set():
                 raise DiscoveryStopped("用户取消")
             return super()._http_get(*args, **kwargs)
     words = expand_keywords(params["keywords"]) if params.get("expand_keywords") else params["keywords"]
     comprehensive = params.get("mode") == "comprehensive_page"
-    with CancellableClient(service.home / "data/lottery-discovery-cache.json", budget=params.get("request_budget", 96 if comprehensive else 24)) as client:
+    def publish(snapshot):
+        value = {"job_id": job_id, "candidates": discovery_candidates(snapshot["rows"]),
+                 "errors": snapshot["errors"], "stopped": False, "requests_used": snapshot["requests"], "keywords": words}
+        service.store.put("discovery", str(job_id), redact_obj(value))
+        if progress:
+            progress(step=snapshot["videos_checked"], total=max(1, min(params.get("video_limit", 6), snapshot["search_video_count"])),
+                     message=f"{snapshot['message']} · 请求 {snapshot['requests']}，可导入 {snapshot['eligible']}",
+                     result_patch={"discovery_job_id": job_id, "eligible": snapshot["eligible"], "requests_used": snapshot["requests"],
+                                   "videos_checked": snapshot["videos_checked"], "phase": snapshot["phase"]})
+    from src.participation_store import load_participations
+    from src.activity_store import known_activity_ids
+    joined = {str(k) for k, v in load_participations().items() if v.user_status == "已参加"}
+    with CancellableClient(service.home / "data/lottery-discovery-cache.json", budget=params.get("request_budget", 96 if comprehensive else 60)) as client:
         try:
-            report = find(client, words, video_limit=params.get("video_limit", 36 if comprehensive else 6), now=int(time.time()), comprehensive_page=comprehensive)
+            report = find(client, words, video_limit=params.get("video_limit", 36 if comprehensive else 6), now=int(time.time()),
+                          comprehensive_page=comprehensive, joined_ids=joined, known_ids=known_activity_ids(), on_progress=publish,
+                          candidate_limit=params.get("candidate_limit", 9 if comprehensive else 3))
         finally:
             client.save()
-    rows = []
-    for category in ("open", "review", "closed", "joined"):
-        for row in report[category]:
-            url = row.get("url") or ""
-            match = re.search(r"(?:/opus/|/dynamic/|t\.bilibili\.com/)(\d{15,22})", url)
-            identifier = match[1] if match else None
-            source = row.get("source_video") or url
-            rows.append({"candidate_id": digest({"url": url, "source": source, "author": row.get("publisher_uid")})[:24],
-                "dynamic_id": identifier, "author_mid": str(row.get("publisher_uid") or "1"), "source_url": source,
-                "target_url": url or None, "resolution": "unresolved" if not identifier else ("author_home" if source != url else "direct"),
-                "evidence_chain": [{"source": source, "author_mid": row.get("publisher_uid"), "target": url}],
-                "rule_quotes": [row[k] for k in ("rules", "deadline", "draw") if isinstance(row.get(k), str) and row[k]],
-                "excluded_reasons": [] if category == "open" and identifier else [category, "not_eligible"],
-                "eligible": category == "open" and identifier is not None, "checked_at": utc_now(), "raw": row})
+    rows = discovery_candidates([row for category in ("open", "review", "closed", "joined") for row in report[category]])
     value = {"job_id": job_id, "candidates": rows, "errors": report["errors"], "stopped": bool(report["stopped"]), "requests_used": report["requests"], "raw": report, "keywords": words}
     service.store.put("discovery", str(job_id), redact_obj(value))
-    return {"discovery_job_id": job_id, "candidates": len(rows), "eligible": sum(v["eligible"] for v in rows), "requests_used": report["requests"], "partial": bool(value["stopped"] or value["errors"]), "errors": value["errors"]}
+    return {"discovery_job_id": job_id, "candidates": len(rows), "eligible": sum(v["eligible"] for v in rows),
+            "requests_used": report["requests"], "partial": bool(value["stopped"] or value["errors"]), "errors": value["errors"],
+            **{k: report[k] for k in ("videos_checked", "completion_reason", "cache_hits", "llm_requests", "llm_cache_hits")}}
 
 
 def import_candidates(service, params):
@@ -93,9 +127,13 @@ def import_candidates(service, params):
     selected = [mapping[k] for k in dict.fromkeys(params["candidate_ids"])]
     if any(not v["eligible"] for v in selected):
         raise ControlError("VALIDATION_ERROR", "仅允许导入已解析的可用动态活动")
+    if any((v.get("raw") or {}).get("draw_time") and v["raw"]["draw_time"] <= time.time() for v in selected):
+        raise ControlError("PLAN_STALE", "候选开奖时间已过，请重新检索")
     result = run_new_links_pipeline([v["target_url"] for v in selected], workers=1)
     if not result.ok:
         raise ControlError("PLATFORM_REJECTED", result.message)
+    from web.activity_service import invalidate_activity_cache
+    invalidate_activity_cache()
     return {"imported": result.persisted_count, "classified": result.classified_count, "message": result.message}
 
 
@@ -182,19 +220,27 @@ def workflow(service, job_id, config, progress, event):
             check_cancel(event)
             run_action("refresh_source", {"source_id": source_id}, on_progress=progress, cancel_event=event)
     if "discover" in stages:
-        summary["discovery"] = discover(service, job_id, {"keywords": config.get("keywords") or ["评论区抽奖"], "request_budget": config["request_budget"], "video_limit": 6, "mode": "standard"}, event)
-        if summary["discovery"]["partial"]:
-            raise ControlError("WORKFLOW_PAUSED", "发现阶段发生错误或预算停止")
+        reserve = min(config["request_budget"] // 3, 8 * config["max_activities_per_run"])
+        summary["discovery"] = discover(service, job_id, {"keywords": config.get("keywords") or ["转发抽奖"],
+            "request_budget": config["request_budget"] - reserve, "video_limit": 6, "mode": "standard",
+            "candidate_limit": config["max_activities_per_run"]}, event, progress)
         report = service.store.get("discovery", str(job_id))
         chosen = [v["candidate_id"] for v in report["candidates"] if v["eligible"]][:config["max_activities_per_run"]]
         if chosen:
             summary["import"] = import_candidates(service, {"discovery_job_id": job_id, "candidate_ids": chosen})
+        if summary["discovery"]["partial"]:
+            return {**summary, "paused": True, "pause_reason": "discovery_incomplete", "platform_execution": "not_run"}
+        if not chosen:
+            return {**summary, "skipped": "no_eligible_targets"}
     if "plan" in stages or "execute" in stages:
         from web.activity_service import pick_triple_participate_targets
-        rows = pick_triple_participate_targets()[:config["max_activities_per_run"]]
+        rows = ([v for v in report["candidates"] if v["candidate_id"] in chosen]
+                if "discover" in stages else pick_triple_participate_targets()[:config["max_activities_per_run"]])
         if not rows:
             return {**summary, "skipped": "no_eligible_targets"}
-        plan = service.make_plan([str(v["dynamic_id"]) for v in rows], 300)
+        # This code already owns the application's business worker. Public planning
+        # rejects a busy worker; invoking that public gate here would reject itself.
+        plan = service._make_plan([str(v["dynamic_id"]) for v in rows], 300)
         summary["plan_id"] = plan["plan_id"]
         if "execute" in stages:
             from datetime import datetime
@@ -208,5 +254,5 @@ def workflow(service, job_id, config, progress, event):
             service.store.put("consumed_plan", plan["plan_id"], {"job_id": job_id})
             summary["participation"] = execute_plan(service, job_id, plan["plan_id"], progress, event)
             if "verify" in stages:
-                summary["verification"] = service.verify(job_id)
+                summary["verification"] = service._verify(job_id)
     return summary

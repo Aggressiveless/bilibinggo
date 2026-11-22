@@ -35,6 +35,8 @@ def main() -> int:
     from src.llm_config import load_llm_config
     from src.lottery_discovery import DEFAULT_KEYWORDS, DiscoveryClient, discover, expand_keywords
     from src.user_data_io import atomic_write_json
+    from src.activity_store import known_activity_ids
+    from src.participation_store import load_participations
 
     llm = load_llm_config()
     if not llm:
@@ -52,12 +54,13 @@ def main() -> int:
         except (RuntimeError, ValueError) as exc:
             keyword_error = f"生成搜索词失败，已使用原搜索词：{exc}"
 
-    budget = args.budget or (96 if args.comprehensive_page else 24)
+    budget = args.budget or (96 if args.comprehensive_page else 60)
     video_limit = args.videos or (36 if args.comprehensive_page else 6)
     with DiscoveryClient(data_dir() / "lottery-discovery-cache.json", budget=budget) as client:
         try:
             result = discover(client, keywords, video_limit=video_limit, now=int(time.time()),
-                              comprehensive_page=args.comprehensive_page)
+                              comprehensive_page=args.comprehensive_page, known_ids=known_activity_ids(),
+                              joined_ids={key for key, value in load_participations().items() if value.user_status == "已参加"})
         finally:
             client.save()
     result["model"] = llm.model_name

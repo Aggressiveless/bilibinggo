@@ -28,6 +28,20 @@ python scripts/install_mcp_control.py --home D:/A_Bonus/Binggo-RepostFix/user-da
 
 任务与网页共享 JobRunner 和互斥。离线套件使用独立数据根并阻断外网；`network-read` 只读真实平台，`live-participation` 只执行既有计划。开发模式可用登记构建和包级验收后切换/回滚程序，用户数据保持独立。
 
+## 主动检索（修复版 5）
+
+`binggo_discovery_start` → `binggo_job_wait` → `binggo_discovery_get` → `binggo_discovery_import`。不需要手工提供活动 ID。标准模式默认检查最多 6 个视频，预算 60 次平台请求，找到 3 条经过核验的新动态后结束；综合单页模式仍为最多 36 个视频、96 次请求。已在本地活动库的目标不会再次计为新活动。
+
+检索会沿视频简介、UP 主置顶评论、专栏和主页动态查找入口，保留来源链。动态详情没有正文时会回退 Opus；模型只能摘录来源原文。开奖日期与报名截止分开处理，已结束、付费或规则证据不足的候选不会直接导入。只在主页公布中奖结果的文字不会触发主页参与查找。
+
+运行中的候选和请求/模型计数持续更新。预算停止会保留已经核验的候选，允许导入；持续工作流随后暂停并报告原因。导入与平台参与分开，检索不会自动点赞、关注、转发、评论或完成晒图等附加条件。
+
+实机验收命令（导入本地活动库，不参与活动）：
+
+```powershell
+D:/A_Bonus/work/binggo-mcp-venv/Scripts/python.exe scripts/check_discovery_control.py --profile D:/A_Bonus/work/binggo-control-profile.json --keyword 转发抽奖 --rounds 2 --output D:/A_Bonus/work/discovery-live.json
+```
+
 ## 验证
 
 ```powershell

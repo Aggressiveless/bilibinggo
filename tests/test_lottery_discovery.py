@@ -38,6 +38,18 @@ def test_year_inference_is_bound_to_recent_source_and_supports_rollover():
     assert discovery._date_from_quote("11月26日20:00", date(2025, 11, 20), date(2026, 11, 21)) is None
 
 
+def test_date_without_clock_is_not_lost():
+    assert discovery._date_from_quote("11月25日截止", date(2026, 11, 20), date(2026, 11, 21)) == date(2026, 11, 26) - 1
+    result = discovery.assess_candidate({"prize": "键盘", "rules": "转发评论", "draw": "11月20日开奖"},
+        now=date(2026, 11, 22), published=date(2026, 11, 19))
+    assert result["status"] == "closed"
+
+
+def test_winner_announcement_is_not_home_participation():
+    assert not discovery._home_participation_hint("参与方式是给本视频三连，抽奖结果会在后续我主页的动态公布")
+    assert discovery._home_participation_hint("抽机械键盘，去主页置顶动态参与")
+
+
 def test_discovery_reuses_link_and_keeps_only_author_comments():
     now = date(2026, 11, 21)
     bvid = "BV1234567890"
@@ -203,3 +215,88 @@ def test_single_page_homepage_referral_and_report_metadata():
     assert row["source_video"].endswith(bvids[0])
     for endpoint in (discovery.SEARCH_URL, discovery.SPACE_FEED_URL, discovery.FOLLOWER_URL):
         assert sum(url == endpoint for url, _ in client.requests) == 1
+
+
+def test_discovery_recovers_empty_dynamic_body_from_opus():
+    identifier = "1234567890123456789"
+    body = "抽键盘，转发并评论，11月25日截止"
+    now = date(2026, 11, 22)
+    class FakeClient:
+        request_count = 0
+        def read(self, url, params, **kwargs):
+            self.request_count += 1
+            if url == discovery.SEARCH_URL:
+                data = {"result": [{"bvid": "BV1234567890", "pubdate": now}]}
+            elif url == discovery.VIDEO_URL:
+                data = {"desc": discovery.opus_link(identifier)}
+            elif url == discovery.DYNAMIC_DETAIL_URL:
+                data = {"item": {"type": "DYNAMIC_TYPE_DRAW", "modules": {"module_author": {"pub_ts": now}, "module_dynamic": {"desc": None}}}}
+            elif url == discovery.OPUS_DETAIL_URL:
+                data = {"item": {"modules": [{"module_type": "MODULE_TYPE_CONTENT", "module_content": {
+                    "paragraphs": [{"text": {"nodes": [{"type": "TEXT_NODE_TYPE_WORD", "word": {"words": body}}]}}]}}]}}
+            else:
+                assert url == discovery.LOTTERY_NOTICE_URL
+                data = {}
+            return {"code": 0, "data": data}
+        def extract(self, text):
+            assert body in text
+            return {"prize": "键盘", "rules": "转发并评论", "deadline": "11月25日截止"}
+    progress = []
+    result = discovery.discover(FakeClient(), ["抽奖"], video_limit=1, now=now, on_progress=progress.append)
+    assert len(result["open"]) == 1 and not result["errors"]
+    assert result["open"][0]["rule_text"] == body
+    assert any(p["eligible"] == 1 for p in progress)
+
+
+def test_newest_collection_links_are_checked_before_old_first_three():
+    now = date(2026, 11, 22)
+    identifiers = [str(1234567890123456700 + i) for i in range(12)]
+    requested = []
+    class FakeClient:
+        request_count = 0
+        def read(self, url, params, **kwargs):
+            self.request_count += 1
+            if url == discovery.SEARCH_URL:
+                data = {"result": [{"bvid": "BV1234567890", "pubdate": now}]}
+            elif url == discovery.VIDEO_URL:
+                data = {"desc": "\n".join(discovery.opus_link(i) for i in identifiers)}
+            elif url == discovery.DYNAMIC_DETAIL_URL:
+                requested.append(params["id"])
+                data = {"item": {"modules": {"module_dynamic": {"desc": {"text": "抽键盘"}}}}}
+            else:
+                assert url == discovery.LOTTERY_NOTICE_URL
+                data = {"lottery_id": 1, "status": 0, "lottery_time": now + 86400, "first_prize_cmt": "键盘"}
+            return {"code": 0, "data": data}
+        def extract(self, text):
+            pytest.fail("Official notices don't require an LLM round trip")
+    result = discovery.discover(FakeClient(), ["抽奖"], video_limit=1, now=now, candidate_limit=3)
+    assert requested == list(reversed(identifiers))[:3]
+    assert len(result["open"]) == 3 and result["completion_reason"] == "target_reached"
+    assert not result["stopped"]
+
+
+def test_article_referral_preserves_source_chain():
+    now = date(2026, 11, 22)
+    identifier = "1234567890123456789"
+    article = "https://www.bilibili.com/read/cv12345"
+    class FakeClient:
+        request_count = 0
+        def read(self, url, params, **kwargs):
+            self.request_count += 1
+            if url == discovery.SEARCH_URL:
+                data = {"result": [{"bvid": "BV1234567890", "pubdate": now}]}
+            elif url == discovery.VIDEO_URL:
+                data = {"desc": "抽奖合集 " + article}
+            elif url == discovery.ARTICLE_URL:
+                data = {"opus": {"content": {"paragraphs": [{"text": {"nodes": [
+                    {"node_type": 4, "link": {"biz_id": identifier}}]}}]}}}
+            elif url == discovery.DYNAMIC_DETAIL_URL:
+                data = {"item": {"modules": {"module_dynamic": {"desc": {"text": "抽键盘"}}}}}
+            else:
+                assert url == discovery.LOTTERY_NOTICE_URL
+                data = {"lottery_id": 1, "status": 0, "lottery_time": now + 86400, "first_prize_cmt": "键盘"}
+            return {"code": 0, "data": data}
+    result = discovery.discover(FakeClient(), ["抽奖"], video_limit=1, now=now)
+    assert len(result["open"]) == 1
+    assert result["open"][0]["found_via"] == "article_link"
+    assert {"source": article} in result["open"][0]["source_chain"]

@@ -29,6 +29,20 @@ def test_normalize_opus_modules_list() -> None:
     assert extract_repost_count_from_detail(normalized) == 123
 
 
+def test_opus_body_is_kept_when_dynamic_api_returns_empty_body(monkeypatch):
+    from src.forward_parser import _extract_from_detail_item
+    body = "关注转发评论，11月25日抽机械键盘"
+    dynamic = {"type": "DYNAMIC_TYPE_DRAW", "modules": {"module_dynamic": {
+        "desc": None, "additional": {"reserve": {"rid": "42"}}}}}
+    opus = {"modules": [{"module_content": {"paragraphs": [
+        {"text": {"nodes": [{"type": "TEXT_NODE_TYPE_WORD", "word": {"words": body}}]}}]}}]}
+    monkeypatch.setattr("src.lottery_api._fetch_dynamic_api_item", lambda *a, **k: dynamic)
+    monkeypatch.setattr("src.lottery_api._fetch_opus_detail_item", lambda *a, **k: opus)
+    item = fetch_dynamic_detail(object(), "1234567890123456789")
+    assert _extract_from_detail_item(item) == body
+    assert item["modules"]["module_dynamic"]["additional"]["reserve"]["rid"] == "42"
+
+
 def test_extract_repost_from_opus_list_without_normalize() -> None:
     item = {
         "modules": [

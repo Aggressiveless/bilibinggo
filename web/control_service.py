@@ -507,8 +507,11 @@ class ControlService:
                     job = self.start("control_workflow", {"workflow": workflow}, require_llm=True)
                 while self.job(job["job_id"])["state"] == "running":
                     time.sleep(0.5)
-                if self.job(job["job_id"])["state"] != "success":
+                completed = self.job(job["job_id"])
+                if completed["state"] != "success":
                     raise ControlError("WORKFLOW_PAUSED", "本轮失败，调度已暂停")
+                if (completed.get("result") or {}).get("paused"):
+                    raise ControlError("WORKFLOW_PAUSED", "已保留并导入核实结果；本轮检索不完整，调度已暂停")
                 until = time.monotonic() + workflow["interval_minutes"]*60
                 while time.monotonic() < until:
                     if not (self.store.get("workflow", "current") or {}).get("running"):

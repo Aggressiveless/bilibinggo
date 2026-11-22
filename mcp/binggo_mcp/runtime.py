@@ -236,7 +236,7 @@ class Runtime:
             "api-integration": ["tests/test_control_api.py", "tests/test_api_errors.py", "tests/test_runtime_api.py"],
             "participation-regression": ["tests/test_favorite_optional.py", "tests/test_participation_success.py", "tests/test_participation_validation.py", "tests/test_repost_migration.py", "tests/test_participate_preflight.py", "tests/test_participate_triple.py", "tests/test_job_runner_login.py"],
             "full-regression": ["tests/"],
-            "discovery-regression": ["tests/test_lottery_discovery.py"],
+            "discovery-regression": ["tests/test_lottery_discovery.py", "tests/test_lottery_api_opus.py", "tests/test_discovery_workflow.py"],
             "package-smoke": ["tests/test_frontend_static.py", "tests/test_runtime_api.py"],
             "frontend-unit": ["frontend-unit"], "frontend-e2e": ["frontend-e2e"],
         }

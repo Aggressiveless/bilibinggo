@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextvars
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Literal
@@ -149,6 +151,7 @@ def run_new_links_pipeline(
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = {
                 executor.submit(
+                    contextvars.copy_context().run,
                     _enrich_one,
                     enrich_client,
                     did,

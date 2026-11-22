@@ -140,16 +140,28 @@ def _normalize_dynamic_item(item: dict) -> dict:
     for mod in modules:
         if not isinstance(mod, dict):
             continue
-        if mod.get("module_stat"):
-            modules_dict["module_stat"] = mod["module_stat"]
-        if mod.get("module_author"):
-            modules_dict["module_author"] = mod["module_author"]
-        if mod.get("module_dynamic"):
-            modules_dict["module_dynamic"] = mod["module_dynamic"]
+        for key, value in mod.items():
+            if key.startswith("module_") and key != "module_type" and value is not None:
+                modules_dict[key] = value
+
+    content = modules_dict.get("module_content") or {}
+    if content and not modules_dict.get("module_dynamic"):
+        from src.forward_parser import _collect_paragraph_text
+        text = _collect_paragraph_text(content.get("paragraphs") or [])
+        modules_dict["module_dynamic"] = {"desc": {"text": text}}
 
     normalized = dict(item)
     normalized["modules"] = modules_dict
     return normalized
+
+
+def merge_opus_content(primary: dict, opus: dict) -> dict:
+    """Add an Opus body without losing the dynamic's lottery/reservation fields."""
+    first, second = _normalize_dynamic_item(primary), _normalize_dynamic_item(opus)
+    modules = {**(first.get("modules") or {}), **(second.get("modules") or {})}
+    modules["module_dynamic"] = {**((first.get("modules") or {}).get("module_dynamic") or {}),
+                                 **((second.get("modules") or {}).get("module_dynamic") or {})}
+    return {**second, **first, "modules": modules}
 
 
 def _fetch_opus_detail_item(client: BilibiliClient, dynamic_id: str) -> dict | None:
@@ -261,6 +273,12 @@ def fetch_dynamic_detail(client: BilibiliClient, dynamic_id: str) -> dict | None
 
     if not item:
         return None
+    if item.get("type") in {"DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_WORD"}:
+        from src.forward_parser import _extract_from_detail_item
+        if not _extract_from_detail_item({k: v for k, v in item.items() if k != "orig"}):
+            opus = _fetch_opus_detail_item(client, dynamic_id)
+            if opus:
+                item = merge_opus_content(item, opus)
     return _normalize_dynamic_item(item)
 
 
