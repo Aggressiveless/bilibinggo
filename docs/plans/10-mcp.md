@@ -1,5 +1,7 @@
 # 方向十：MCP — 功能范围与使用规范（拍板稿）
 
+> 历史实现说明：本文描述旧版 MCP。2026-11-22 新增的实例识别、应用控制、自动化和测试设计见 [MCP v2 方案](11-mcp-control-automation.md)，新增能力尚待实施。
+
 > 状态：**已完成（收官）** — MCP + 本机 Skill 均已落地；见仓库 `mcp/`、`mcp/skills/`  
 > 关联：[全栈路线图 §10](../fullstack-roadmap.md)、[方向四 API 契约](./04-api-contract.md)、[实现规范](./10-mcp-impl.md)  
 > 更新：2026-07-21

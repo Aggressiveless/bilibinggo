@@ -1,5 +1,7 @@
 # Binggo MCP（私人本地扩展）
 
+> **2026-11-22：** 本文介绍现有 v1 实现（固定开发端口 8787）。针对当前 Windows 修复版 8182 的应用控制、自动化与测试升级设计见 [MCP v2 设计](../docs/plans/11-mcp-control-automation.md) 和 [工具契约](contracts/control-v2.tools.json)。v2 目前是待实施设计，尚未注册为可用工具。
+
 将本机已运行的 Binggo 控制台能力，通过 **MCP stdio** 暴露给任意 Agent。  
 **不修改**主项目 `src/` / `web/` 业务代码；只 HTTP 调用 `http://127.0.0.1:8787`。
 
