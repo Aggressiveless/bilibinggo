@@ -27,6 +27,15 @@ interface CoinBalance {
   refresh_after_coin: boolean;
 }
 
+interface Candidate {
+  dynamic_id: string;
+  prize: string;
+  publisher: string;
+  publisher_uid: string | null;
+  followers: number | null;
+  triple_requirement: "required" | "optional" | "not_mentioned" | "unknown";
+}
+
 interface DiscoveryStatus {
   job: DiscoveryJob | null;
   queue_job?: DiscoveryJob | null;
@@ -43,6 +52,7 @@ interface DiscoveryStatus {
   };
   bv_count?: number;
   pending_selection?: number;
+  candidates?: Candidate[];
   filter?: { id?: string; settings?: FilterSettings; matched?: number; total?: number; unknown_metadata?: number };
   resume_available: boolean;
   stop_message?: string;
@@ -50,8 +60,10 @@ interface DiscoveryStatus {
 
 const phases: Record<string, string> = {
   search: "搜索视频", scan_videos: "扫描视频", resolve_sources: "解析活动入口", verify_candidates: "核验候选活动",
-  import: "正在导入活动",
+  publisher_stats: "读取发布者资料", import: "正在导入活动",
 };
+
+const tripleLabels = { required: "是", optional: "否（可选）", not_mentioned: "未提及", unknown: "未知" };
 
 function activeJob(status: DiscoveryStatus) {
   return status.queue_job?.state === "running" ? status.queue_job : status.job;
@@ -114,7 +126,7 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
       message = "上次检索因程序重启中断。";
     } else {
       badge = status.resume_available ? "本轮已结束" : "检索完成";
-      message = `已找到 ${summary.eligible || 0} 条可参与活动。${status.pending_selection ? "可直接加入，或先筛选。" : ""}`;
+      message = `已找到 ${summary.eligible || 0} 条可参与活动。`;
     }
     if (status.resume_available) message += "进度已保存，使用相同关键词和排序可继续。";
   }
@@ -122,13 +134,7 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
   setText("discovery-status", message);
   const queue = status.queue;
   const queuePanel = element("discovery-queue");
-  const importButton = element<HTMLButtonElement>("discovery-import");
   if (queuePanel) queuePanel.hidden = !queue?.total;
-  if (importButton) {
-    importButton.hidden = !status.pending_selection || !!running;
-    importButton.disabled = submitting;
-    importButton.textContent = `不筛选，加入全部 ${status.pending_selection || 0} 条`;
-  }
   if (queue?.total) {
     const skipped = queue.existing + queue.expired + queue.skipped;
     setText("discovery-queue-status", `已入库 ${queue.imported} 条 · 跳过 ${skipped} 条 · 可选择 ${status.pending_selection || 0} 条${queue.message ? `。${queue.message}` : ""}`);
@@ -141,12 +147,17 @@ export function bindDiscovery() {
   const mode = element<HTMLSelectElement>("discovery-mode");
   const stop = element<HTMLButtonElement>("discovery-stop");
   const importButton = element<HTMLButtonElement>("discovery-import");
+  const selectedButton = element<HTMLButtonElement>("discovery-import-selected");
+  const selectionPanel = element("discovery-selection");
+  const candidateBody = element<HTMLTableSectionElement>("discovery-candidates");
+  const selectAll = element<HTMLInputElement>("discovery-select-all");
   const filterPanel = element<HTMLDetailsElement>("discovery-filters");
   const filterForm = element<HTMLFormElement>("discovery-filter-form");
   const filterFields = element<HTMLFieldSetElement>("discovery-filter-fields");
   const previewButton = element<HTMLButtonElement>("discovery-preview");
   const filteredImport = element<HTMLButtonElement>("discovery-import-filtered");
-  if (!form || !input || !mode || !stop || !importButton || !filterPanel || !filterForm || !filterFields || !previewButton || !filteredImport) return;
+  if (!form || !input || !mode || !stop || !importButton || !selectedButton || !selectionPanel || !candidateBody ||
+      !selectAll || !filterPanel || !filterForm || !filterFields || !previewButton || !filteredImport) return;
   let snapshot: DiscoveryStatus = { job: null, keywords: ["转发抽奖"], summary: {}, resume_available: false };
   let submitting = false;
   let reading = false;
@@ -154,6 +165,8 @@ export function bindDiscovery() {
   let initialized = false;
   let shownImportCount = 0;
   let shownFilterId: string | undefined;
+  let shownCandidates = "";
+  const selected = new Set<string>();
 
   const keywords = () => [...new Set(input.value.split(/[,，\n]/).map((word) => word.trim()).filter(Boolean))];
   const filterSettings = (): FilterSettings => ({
@@ -167,6 +180,47 @@ export function bindDiscovery() {
     const current = filterSettings();
     return !!saved && (Object.keys(current) as (keyof FilterSettings)[]).every(key => current[key] === saved[key]);
   };
+  const renderSelection = () => {
+    const candidates = snapshot.candidates || [];
+    const blocked = input.disabled;
+    const signature = JSON.stringify(candidates);
+    selectionPanel.hidden = !candidates.length;
+    if (signature !== shownCandidates) {
+      shownCandidates = signature;
+      const pending = new Set(candidates.map((row) => row.dynamic_id));
+      selected.forEach((id) => { if (!pending.has(id)) selected.delete(id); });
+      candidateBody.replaceChildren(...candidates.map((candidate) => {
+        const row = document.createElement("tr");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = candidate.dynamic_id;
+        checkbox.setAttribute("aria-label", `选择 ${candidate.prize || candidate.publisher || candidate.dynamic_id}`);
+        row.insertCell().append(checkbox);
+        const link = document.createElement("a");
+        link.href = `https://www.bilibili.com/opus/${encodeURIComponent(candidate.dynamic_id)}`;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = candidate.prize || "查看活动";
+        row.insertCell().append(link);
+        row.insertCell().textContent = candidate.publisher || "未知";
+        row.insertCell().textContent = candidate.publisher_uid || "—";
+        row.insertCell().textContent = candidate.followers?.toLocaleString() ?? "未知";
+        row.insertCell().textContent = tripleLabels[candidate.triple_requirement] || "未知";
+        return row;
+      }));
+    }
+    candidateBody.querySelectorAll<HTMLInputElement>("input").forEach((checkbox) => {
+      checkbox.checked = selected.has(checkbox.value);
+      checkbox.disabled = blocked;
+    });
+    selectAll.disabled = blocked || !candidates.length;
+    selectAll.checked = candidates.length > 0 && selected.size === candidates.length;
+    selectAll.indeterminate = selected.size > 0 && !selectAll.checked;
+    selectedButton.disabled = blocked || !selected.size;
+    selectedButton.textContent = selected.size ? `导入所选 ${selected.size} 条` : "导入所选";
+    importButton.disabled = blocked || !candidates.length;
+    importButton.textContent = `导入全部 ${candidates.length} 条`;
+  };
   const render = () => {
     const sameSearch = mode.value === (snapshot.mode || "standard") &&
       JSON.stringify(keywords()) === JSON.stringify(snapshot.keywords);
@@ -174,6 +228,7 @@ export function bindDiscovery() {
     const start = element<HTMLButtonElement>("discovery-start");
     if (start && !start.disabled && !sameSearch) start.textContent = "开始检索";
     mode.disabled = input.disabled;
+    renderSelection();
     filterPanel.hidden = !snapshot.pending_selection;
     filterFields.disabled = input.disabled;
     previewButton.disabled = input.disabled;
@@ -183,10 +238,11 @@ export function bindDiscovery() {
       ? `匹配 ${snapshot.filter?.matched || 0} / ${snapshot.filter?.total || 0} 条 · 发布者资料未知 ${snapshot.filter?.unknown_metadata || 0} 条`
       : issue || "调整条件后预览匹配数量，再确认加入。");
     setText("discovery-help", mode.value === "comprehensive_page"
-      ? "每轮搜索 1 个关键词，检查综合排序第一页，最多 36 个视频。每轮最多 180 次请求。"
-      : "最多 3 个关键词，用逗号分隔。每轮最多 180 次请求，未完成时可继续上次进度。");
+      ? "搜索 1 个关键词，检查综合排序第一页，最多 36 个视频。"
+      : "最多 3 个关键词，用逗号分隔。按发布时间检索，最多检查 36 个视频。");
   };
   const apply = (value: DiscoveryStatus) => {
+    if (value.job?.job_id !== snapshot.job?.job_id) selected.clear();
     const imported = value.queue?.imported || 0;
     if (imported && (value.job?.job_id !== snapshot.job?.job_id || imported > shownImportCount)) {
       loadActivities().catch(() => {});
@@ -264,8 +320,24 @@ export function bindDiscovery() {
     submit("/api/discovery/stop", { job_id: job.job_id });
   });
   importButton.addEventListener("click", () => {
-    if (submitting || activeJob(snapshot)?.state === "running" || !snapshot.job || !snapshot.pending_selection || !requireSetup("control_discover")) return;
+    if (importButton.disabled || !snapshot.job || !requireSetup("control_discover")) return;
     submit("/api/discovery/import", { job_id: snapshot.job.job_id, selection: "all" });
+  });
+  selectedButton.addEventListener("click", () => {
+    if (selectedButton.disabled || !snapshot.job || !requireSetup("control_discover")) return;
+    submit("/api/discovery/import", { job_id: snapshot.job.job_id, selection: "selected", selected_ids: [...selected] });
+  });
+  selectAll.addEventListener("change", () => {
+    selected.clear();
+    if (selectAll.checked) snapshot.candidates?.forEach((row) => selected.add(row.dynamic_id));
+    renderSelection();
+  });
+  candidateBody.addEventListener("change", (event) => {
+    const checkbox = event.target;
+    if (!(checkbox instanceof HTMLInputElement)) return;
+    if (checkbox.checked) selected.add(checkbox.value);
+    else selected.delete(checkbox.value);
+    renderSelection();
   });
   filterForm.addEventListener("input", render);
   filterForm.addEventListener("submit", (event) => {
@@ -278,13 +350,14 @@ export function bindDiscovery() {
     submit("/api/discovery/import", { job_id: snapshot.job.job_id, selection: "filtered", filter_id: snapshot.filter?.id });
   });
   bindCoinBalance();
+  bindSourceViews();
   refresh();
   window.setInterval(refresh, 3000);
   window.addEventListener("pageshow", () => refresh());
 }
 
 function bindCoinBalance() {
-  const toggle = element<HTMLInputElement>("discovery-coins-live");
+  const toggle = element<HTMLInputElement>("account-coin-live");
   if (!toggle) return;
   let busy = false;
   let live = false;
@@ -297,9 +370,9 @@ function bindCoinBalance() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh_after_coin: setting }),
       });
       live = balance.refresh_after_coin;
-      setText("discovery-coins", balance.balance === null ? "—" : `${balance.estimated ? "约 " : ""}${balance.balance}`);
+      setText("account-coin-balance", balance.balance === null ? "—" : `${balance.estimated ? "约 " : ""}${balance.balance}`);
       const time = balance.checked_at ? new Date(balance.checked_at * 1000).toLocaleString() : "尚未取得余额";
-      setText("discovery-coin-note", `${time} · 默认每 12 小时联网校准`);
+      setText("account-coin-note", `${time} · 默认每 12 小时联网校准`);
     } catch {
       if (setting !== undefined) showToast("暂时无法保存硬币刷新设置", "error");
     } finally {
@@ -312,4 +385,64 @@ function bindCoinBalance() {
   window.addEventListener("binggo:coin-balance-check", () => update());
   update();
   window.setInterval(() => update(), 60_000);
+}
+
+function bindSourceViews() {
+  const buttons = document.querySelectorAll<HTMLButtonElement>("[data-source-view]");
+  const body = element<HTMLTableSectionElement>("discovery-video-items");
+  const table = element("discovery-video-table");
+  const pagination = element("discovery-video-pages");
+  const prev = element<HTMLButtonElement>("discovery-video-prev");
+  const next = element<HTMLButtonElement>("discovery-video-next");
+  if (!body || !table || !pagination || !prev || !next) return;
+  const pageSize = 50;
+  let offset = 0;
+  let total = 0;
+  let loading = false;
+  const load = async (start: number) => {
+    if (loading) return;
+    loading = true;
+    prev.disabled = next.disabled = true;
+    setText("discovery-video-status", "正在读取 BV 记录…");
+    try {
+      const result = await fetchJSON<{ total: number; items: { bvid: string; first_seen: string; last_seen: string }[] }>(
+        `/api/discovery/videos?offset=${start}&limit=${pageSize}`,
+      );
+      offset = start;
+      total = result.total;
+      body.replaceChildren(...result.items.map((item) => {
+        const row = document.createElement("tr");
+        const link = document.createElement("a");
+        link.href = `https://www.bilibili.com/video/${encodeURIComponent(item.bvid)}`;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = item.bvid;
+        row.insertCell().append(link);
+        row.insertCell().textContent = new Date(item.first_seen).toLocaleString();
+        row.insertCell().textContent = new Date(item.last_seen).toLocaleString();
+        return row;
+      }));
+      table.hidden = !result.items.length;
+      pagination.hidden = total <= pageSize;
+      setText("discovery-video-status", result.items.length
+        ? `共 ${total} 条 · 第 ${offset + 1}–${offset + result.items.length} 条` : "暂无已收录的视频。");
+    } catch {
+      setText("discovery-video-status", "暂时无法读取 BV 记录，点击「BV 记录」重试。");
+    } finally {
+      loading = false;
+      prev.disabled = offset === 0;
+      next.disabled = offset + pageSize >= total;
+    }
+  };
+  buttons.forEach((button) => button.addEventListener("click", () => {
+    buttons.forEach((item) => {
+      const active = item === button;
+      item.setAttribute("aria-pressed", String(active));
+      const panel = element(item.getAttribute("aria-controls") || "");
+      if (panel) panel.hidden = !active;
+    });
+    if (button.dataset.sourceView === "videos") void load(offset);
+  }));
+  prev.addEventListener("click", () => load(offset - pageSize));
+  next.addEventListener("click", () => load(offset + pageSize));
 }

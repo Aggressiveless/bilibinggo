@@ -144,6 +144,26 @@ def test_search_budget_stop_is_not_reported_as_complete_empty_page():
     assert not result["scan_completed"] and result["has_more"]
 
 
+def test_browser_collects_followers_once_per_eligible_publisher(monkeypatch):
+    monkeypatch.setattr(d, "inspect_dynamic", lambda client, identifier, **kw: {
+        "dynamic_id": identifier, "kind": "dynamic", "url": d.opus_link(identifier),
+        "publisher_uid": "42", "status": "open",
+    })
+    calls = []
+
+    def followers(client, uid):
+        calls.append(uid)
+        return 0
+
+    monkeypatch.setattr(d, "read_follower_count", followers)
+    client = PageClient()
+    result = broad.discover_page(client, ["抽奖"], video_limit=1, collect_followers=True)
+    assert [row["followers"] for row in result["open"]] == [0, 0]
+    result = broad.discover_page(PageClient(client.cache), ["抽奖"], video_limit=1, collect_followers=True)
+    assert [row["followers"] for row in result["open"]] == [0, 0]
+    assert calls == ["42"]
+
+
 def test_video_comment_candidates_are_not_counted_as_importable_dynamics():
     class CommentClient(PageClient):
         def read(self, url, params, **kwargs):

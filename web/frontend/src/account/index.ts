@@ -331,6 +331,7 @@ export function bindAtAlertActions(account) {
 export function renderAccountViews(account) {
   state.account = account;
   const loggedIn = Boolean(account.logged_in);
+  const coins = document.getElementById("account-coins");
 
   if (sidebarLoginBtn) sidebarLoginBtn.hidden = loggedIn;
   if (sidebarLogoutBtn) sidebarLogoutBtn.hidden = !loggedIn;
@@ -355,6 +356,10 @@ export function renderAccountViews(account) {
         </div>
       </div>`;
     if (accountHero) {
+      if (coins) {
+        coins.hidden = true;
+        accountHero.after(coins);
+      }
       accountHero.classList.remove("is-ready", "is-warn", "is-offline");
       accountHero.classList.add(`is-${tone}`);
       accountHero.innerHTML = emptyHtml;
@@ -420,6 +425,10 @@ export function renderAccountViews(account) {
     accountHero.classList.remove("is-ready", "is-warn", "is-offline");
     accountHero.classList.add(`is-${tone}`);
     accountHero.innerHTML = heroHtml;
+    if (coins) {
+      accountHero.querySelector(".account-hero-footer")?.before(coins);
+      coins.hidden = false;
+    }
   }
   bindAtAlertActions(account);
 

@@ -21,7 +21,8 @@ def record_request(method, url):
     value = _current.get()
     if value is None:
         return
-    if value["platform_read_requests"] + value["platform_write_requests"] >= value["max_requests"]:
+    limit = value["max_requests"]
+    if limit is not None and value["platform_read_requests"] + value["platform_write_requests"] >= limit:
         raise RuntimeError(f"控制任务已达到{value['max_requests']}次平台请求预算")
     if method != "GET" and value["read_only"]:
         raise RuntimeError("只读控制任务禁止平台写请求")

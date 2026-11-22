@@ -4,14 +4,14 @@ from __future__ import annotations
 import time
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.control_store import ControlError
 from web.api_errors import AppError, ErrorCode
 from web.control_service import get_control_service
-from web.discovery_filters import pending_candidates
-from web.discovery_queue import queue_summary
+from web.discovery_filters import pending_candidates, triple_requirement
+from web.discovery_queue import queue_summary, verified_candidates
 from web.coin_balance import coin_balance
 
 
@@ -47,8 +47,9 @@ class DiscoveryFilterRequest(DiscoveryStopRequest):
 
 
 class DiscoveryImportRequest(DiscoveryStopRequest):
-    selection: Literal["all", "filtered"]
+    selection: Literal["all", "filtered", "selected"]
     filter_id: str | None = Field(default=None, max_length=64)
+    selected_ids: list[str] = Field(default_factory=list, max_length=400)
 
 
 class CoinBalanceSettings(BaseModel):
@@ -79,10 +80,22 @@ def discovery_status(service, job=None):
     preview = service.store.get("discovery_filter", str(job["job_id"])) or {}
     can_select = job["state"] == "success" and summary.get("completion_reason") in {"search_complete", "target_reached"}
     pending = pending_candidates(service, job["job_id"], report) if can_select else {}
+    selectable = []
+    for identifier, row in pending.items():
+        details = row.get("raw") or {}
+        selectable.append({
+            "dynamic_id": identifier,
+            "prize": details.get("prize") or "",
+            "publisher": details.get("publisher") or "",
+            "publisher_uid": row.get("author_mid"),
+            "followers": details.get("followers"),
+            "triple_requirement": triple_requirement(row),
+        })
     return {"job": job, "keywords": report.get("keywords") or job.get("keywords") or ["转发抽奖"],
             "mode": job.get("discovery_mode", "standard"),
             "summary": summary, "bv_count": bv_count, "stop_message": raw.get("stopped", ""),
             "pending_selection": len(pending),
+            "candidates": selectable,
             "filter": {key: val for key, val in preview.items() if key != "dynamic_ids"},
             "queue": queue_summary(service, job["job_id"], report),
             "queue_job": secondary,
@@ -95,6 +108,11 @@ def install_discovery(app):
     @router.get("/current")
     def current():
         return discovery_status(get_control_service())
+
+    @router.get("/videos")
+    def videos(offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)):
+        count, rows = get_control_service().store.list_discovery_videos(limit=limit, offset=offset)
+        return {"total": count, "items": rows}
 
     @router.get("/coins")
     def current_coin_balance():
@@ -111,10 +129,8 @@ def install_discovery(app):
         service = get_control_service()
         try:
             with service.lock:
-                params = {"keywords": request.keywords, "mode": request.mode,
-                          "video_limit": 36, "request_budget": 180, "resume": True}
-                if request.mode == "comprehensive_page":
-                    params["candidate_limit"] = 0
+                params = {"keywords": request.keywords, "mode": request.mode, "video_limit": 36,
+                          "request_budget": None, "candidate_limit": 0, "resume": True, "collect_followers": True}
                 job = service.start("control_discover", params, require_llm=True, source="ui")
                 return discovery_status(service, job)
         except ControlError as exc:
@@ -159,6 +175,10 @@ def install_discovery(app):
                     if not request.filter_id or preview.get("id") != request.filter_id:
                         raise AppError(ErrorCode.VALIDATION_ERROR, "请先预览当前筛选条件")
                     selected_ids = [identifier for identifier in preview["dynamic_ids"] if identifier in pending]
+                elif request.selection == "selected":
+                    if not request.selected_ids or not set(request.selected_ids).issubset(verified_candidates(report)):
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "请选择当前报告中的候选活动")
+                    selected_ids = [identifier for identifier in dict.fromkeys(request.selected_ids) if identifier in pending]
                 if not selected_ids:
                     return discovery_status(service, job)
                 queued = service.start("control_import", {"discovery_job_id": request.job_id, "queue_verified": True,

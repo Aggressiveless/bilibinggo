@@ -301,6 +301,17 @@
               <p class="caption">加载账号信息中…</p>
             </article>
 
+            <div class="account-coins" id="account-coins" hidden>
+              <div class="account-coin-amount">
+                <span class="account-stat-label">剩余硬币</span>
+                <strong id="account-coin-balance">—</strong>
+              </div>
+              <div class="account-coin-settings">
+                <p id="account-coin-note" class="caption"></p>
+                <label><input type="checkbox" id="account-coin-live" disabled /> 确认投币后刷新余额</label>
+              </div>
+            </div>
+
             <div class="stats-grid" id="stats-grid"></div>
 
             <article class="panel quick-actions">
@@ -312,72 +323,6 @@
                 <button class="btn btn-secondary btn-pill" data-action="refresh_all">一键更新活动链接</button>
                 <button class="btn btn-ghost btn-pill" data-section-jump="activities">查看活动列表</button>
               </div>
-            </article>
-
-            <article class="panel discovery-panel" id="discovery-panel" aria-labelledby="discovery-heading">
-              <div class="discovery-head">
-                <div>
-                  <h2 class="section-title" id="discovery-heading">主动检索抽奖</h2>
-                  <p class="section-desc">搜索视频与相关动态，核验活动规则、奖品和有效时间。</p>
-                </div>
-                <span class="discovery-badge" id="discovery-badge">待开始</span>
-              </div>
-              <form id="discovery-form" class="discovery-controls">
-                <div class="discovery-keywords">
-                  <label class="field-label" for="discovery-keywords">搜索关键词</label>
-                  <input id="discovery-keywords" class="form-input" value="转发抽奖" maxlength="242" required aria-describedby="discovery-help" />
-                </div>
-                <div class="discovery-mode">
-                  <label class="field-label" for="discovery-mode">视频排序</label>
-                  <select id="discovery-mode" class="form-input" aria-describedby="discovery-help">
-                    <option value="standard">最新发布</option>
-                    <option value="comprehensive_page">综合排序</option>
-                  </select>
-                </div>
-                <div class="action-row">
-                  <button type="submit" class="btn btn-primary btn-pill" id="discovery-start" disabled>开始检索</button>
-                  <button type="button" class="btn btn-secondary btn-pill" id="discovery-stop" disabled>停止检索</button>
-                </div>
-              </form>
-              <p class="caption" id="discovery-help">最多 3 个关键词，用逗号分隔。每轮最多 180 次请求，未完成时可继续上次进度。</p>
-              <div class="discovery-metrics" aria-label="检索统计">
-                <div><strong id="discovery-videos">0</strong><span>已扫描视频</span></div>
-                <div><strong id="discovery-remaining">0</strong><span>待核验候选</span></div>
-                <div><strong id="discovery-eligible">0</strong><span>可参与活动</span></div>
-                <div><strong id="discovery-requests">0</strong><span>本轮请求</span></div>
-                <div><strong id="discovery-bv-count">0</strong><span>累计收录 BV</span></div>
-                <div><strong id="discovery-coins">—</strong><span>剩余硬币</span></div>
-              </div>
-              <div class="discovery-coin-settings">
-                <p id="discovery-coin-note" class="caption">联网校准间隔为 12 小时。</p>
-                <label><input type="checkbox" id="discovery-coins-live" disabled /> 确认投币后刷新余额</label>
-              </div>
-              <p class="discovery-status" id="discovery-status" role="status" aria-live="polite">正在读取检索状态…</p>
-              <div class="action-row discovery-queue" id="discovery-queue" hidden>
-                <p class="discovery-status" id="discovery-queue-status" role="status"></p>
-                <button type="button" class="btn btn-secondary btn-pill" id="discovery-import">不筛选，加入全部</button>
-              </div>
-              <details class="discovery-filters" id="discovery-filters" hidden>
-                <summary>进一步筛选活动</summary>
-                <form id="discovery-filter-form">
-                  <fieldset id="discovery-filter-fields" class="discovery-filter-fields">
-                    <label>投币要求<select class="form-input" name="coins">
-                      <option value="all">全部</option>
-                      <option value="exclude_required">排除明确要求投币</option>
-                      <option value="required">仅明确要求投币</option>
-                      <option value="not_required">仅明确无需投币</option>
-                    </select></label>
-                    <label>发布者最低粉丝数<input class="form-input" type="number" name="min_followers" value="0" min="0" max="100000000" required /></label>
-                    <label>发布者最少注册天数<input class="form-input" type="number" name="min_account_days" value="0" min="0" max="20000" required /></label>
-                    <label class="discovery-filter-unknown"><input type="checkbox" name="include_unknown" /> 保留发布者资料未知的活动</label>
-                  </fieldset>
-                  <div class="action-row">
-                    <button type="submit" class="btn btn-secondary btn-pill" id="discovery-preview">预览筛选</button>
-                    <button type="button" class="btn btn-primary btn-pill" id="discovery-import-filtered" disabled>加入筛选结果</button>
-                  </div>
-                </form>
-                <p class="discovery-status" id="discovery-filter-result" role="status"></p>
-              </details>
             </article>
 
             <article class="panel participate-settings">
@@ -533,8 +478,109 @@
           </div>
         </section>
 
-        <section class="view-section" id="section-sources" data-title="数据源" data-subtitle="UP 合集与监控用户动态双通道增量发现活动，历史记录全部保留。">
-          <div class="sources-stack">
+        <section class="view-section" id="section-sources" data-title="数据源" data-subtitle="检索并导入抽奖活动，管理监控来源和已收录视频。">
+          <nav class="source-subnav" aria-label="数据源子页面">
+            <button type="button" class="btn btn-secondary btn-pill" data-source-view="discovery" aria-controls="discovery-panel" aria-pressed="true">主动检索</button>
+            <button type="button" class="btn btn-secondary btn-pill" data-source-view="feeds" aria-controls="source-feeds" aria-pressed="false">监控与合集</button>
+            <button type="button" class="btn btn-secondary btn-pill" data-source-view="videos" aria-controls="discovery-videos-panel" aria-pressed="false">BV 记录</button>
+          </nav>
+          <article class="panel discovery-panel" id="discovery-panel" aria-labelledby="discovery-heading">
+            <div class="discovery-head">
+              <div>
+                <h2 class="section-title" id="discovery-heading">主动检索抽奖</h2>
+                <p class="section-desc">搜索视频与相关动态，核验活动规则、奖品和有效时间。</p>
+              </div>
+              <span class="discovery-badge" id="discovery-badge">待开始</span>
+            </div>
+            <form id="discovery-form" class="discovery-controls">
+              <div class="discovery-keywords">
+                <label class="field-label" for="discovery-keywords">搜索关键词</label>
+                <input id="discovery-keywords" class="form-input" value="转发抽奖" maxlength="242" required aria-describedby="discovery-help" />
+              </div>
+              <div class="discovery-mode">
+                <label class="field-label" for="discovery-mode">视频排序</label>
+                <select id="discovery-mode" class="form-input" aria-describedby="discovery-help">
+                  <option value="standard">最新发布</option>
+                  <option value="comprehensive_page">综合排序</option>
+                </select>
+              </div>
+              <div class="action-row">
+                <button type="submit" class="btn btn-primary btn-pill" id="discovery-start" disabled>开始检索</button>
+                <button type="button" class="btn btn-secondary btn-pill" id="discovery-stop" disabled>停止检索</button>
+              </div>
+            </form>
+            <p class="caption" id="discovery-help">最多 3 个关键词，用逗号分隔。检索会运行到候选核验完成。</p>
+            <div class="discovery-metrics" aria-label="检索统计">
+              <div><strong id="discovery-videos">0</strong><span>已扫描视频</span></div>
+              <div><strong id="discovery-remaining">0</strong><span>待核验候选</span></div>
+              <div><strong id="discovery-eligible">0</strong><span>可参与活动</span></div>
+              <div><strong id="discovery-requests">0</strong><span>本次请求</span></div>
+              <div><strong id="discovery-bv-count">0</strong><span>累计收录 BV</span></div>
+            </div>
+            <p class="discovery-status" id="discovery-status" role="status" aria-live="polite">正在读取检索状态…</p>
+            <div class="discovery-queue" id="discovery-queue" hidden>
+              <p class="discovery-status" id="discovery-queue-status" role="status"></p>
+              <div id="discovery-selection" hidden>
+                <div class="source-table-scroll">
+                  <table class="source-table" aria-label="可导入活动">
+                    <thead>
+                      <tr>
+                        <th scope="col"><input type="checkbox" id="discovery-select-all" aria-label="全选可导入活动" /></th>
+                        <th scope="col">活动</th>
+                        <th scope="col">发布者</th>
+                        <th scope="col">UID</th>
+                        <th scope="col">粉丝数</th>
+                        <th scope="col">必须三连</th>
+                      </tr>
+                    </thead>
+                    <tbody id="discovery-candidates"></tbody>
+                  </table>
+                </div>
+                <div class="action-row discovery-import-actions">
+                  <button type="button" class="btn btn-primary btn-pill" id="discovery-import-selected" disabled>导入所选</button>
+                  <button type="button" class="btn btn-secondary btn-pill" id="discovery-import">导入全部</button>
+                </div>
+              </div>
+            </div>
+            <details class="discovery-filters" id="discovery-filters" hidden>
+              <summary>进一步筛选活动</summary>
+              <form id="discovery-filter-form">
+                <fieldset id="discovery-filter-fields" class="discovery-filter-fields">
+                  <label>投币要求<select class="form-input" name="coins">
+                    <option value="all">全部</option>
+                    <option value="exclude_required">排除明确要求投币</option>
+                    <option value="required">仅明确要求投币</option>
+                    <option value="not_required">仅明确无需投币</option>
+                  </select></label>
+                  <label>发布者最低粉丝数<input class="form-input" type="number" name="min_followers" value="0" min="0" max="100000000" required /></label>
+                  <label>发布者最少注册天数<input class="form-input" type="number" name="min_account_days" value="0" min="0" max="20000" required /></label>
+                  <label class="discovery-filter-unknown"><input type="checkbox" name="include_unknown" /> 保留发布者资料未知的活动</label>
+                </fieldset>
+                <div class="action-row">
+                  <button type="submit" class="btn btn-secondary btn-pill" id="discovery-preview">预览筛选</button>
+                  <button type="button" class="btn btn-primary btn-pill" id="discovery-import-filtered" disabled>加入筛选结果</button>
+                </div>
+              </form>
+              <p class="discovery-status" id="discovery-filter-result" role="status"></p>
+            </details>
+          </article>
+
+          <article class="panel" id="discovery-videos-panel" aria-labelledby="discovery-videos-heading" hidden>
+            <h2 class="section-title" id="discovery-videos-heading">BV 记录</h2>
+            <p class="section-desc" id="discovery-video-status" role="status"></p>
+            <div class="source-table-scroll" id="discovery-video-table" hidden>
+              <table class="source-table" aria-label="已收录视频">
+                <thead><tr><th scope="col">BV 号</th><th scope="col">首次收录</th><th scope="col">最近收录</th></tr></thead>
+                <tbody id="discovery-video-items"></tbody>
+              </table>
+            </div>
+            <div class="action-row" id="discovery-video-pages" hidden>
+              <button type="button" class="btn btn-secondary btn-pill" id="discovery-video-prev" disabled>上一页</button>
+              <button type="button" class="btn btn-secondary btn-pill" id="discovery-video-next" disabled>下一页</button>
+            </div>
+          </article>
+
+          <div class="sources-stack" id="source-feeds" hidden>
             <article class="panel watch-panel" id="watch-panel">
               <div class="watch-panel-head">
                 <div class="watch-panel-intro">

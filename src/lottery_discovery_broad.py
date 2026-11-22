@@ -68,7 +68,7 @@ def _fair_order(tasks):
 
 def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_page=True,
                   candidate_limit=9, known_ids=None, joined_ids=None, author_dynamic_limit=2,
-                  resume=True, on_progress=None, on_video_page=None):
+                  resume=True, on_progress=None, on_video_page=None, collect_followers=False):
     now = int(time.time()) if now is None else now
     known_ids, joined_ids = set(known_ids or []), set(joined_ids or [])
     cache = getattr(client, "cache", {})
@@ -89,6 +89,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
     stopped, completion = "", "search_complete"
     added_open = 0
     started = time.monotonic()
+    follower_counts = state.setdefault("follower_counts", {}) if collect_followers else {}
 
     def scan_completed():
         return state["search_index"] == len(keywords) and state["scan_index"] == len(state["videos"])
@@ -98,6 +99,9 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
         for original in state["rows"]:
             row = dict(original)
             identifier = row.get("dynamic_id")
+            uid = row.get("publisher_uid")
+            if uid in follower_counts:
+                row["followers"] = follower_counts[uid]
             if identifier in joined_ids:
                 row.update(status="joined", reason="本地已有该账号的成功参与记录")
             elif identifier in known_ids:
@@ -254,6 +258,20 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             if candidate_limit and added_open >= candidate_limit:
                 completion = "target_reached"
                 break
+        state["done"] = False
+        if collect_followers:
+            publishers = list(dict.fromkeys(row["publisher_uid"] for row in current_rows()
+                if row["status"] == "open" and row.get("kind") == "dynamic"
+                and str(row.get("publisher_uid") or "").isdigit()))
+            for index, uid in enumerate(publishers, 1):
+                if uid in follower_counts:
+                    continue
+                state["phase"] = "publisher_stats"
+                emit(f"读取发布者粉丝数 {index}/{len(publishers)}")
+                try:
+                    follower_counts[uid] = d.read_follower_count(client, uid)
+                except (httpx.HTTPError, RuntimeError, ValueError):
+                    follower_counts[uid] = None
         state["done"] = state["verify_index"] == len(state["tasks"])
     except d.DiscoveryStopped as exc:
         stopped = str(exc)
@@ -267,6 +285,8 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
     # when a single video led to both. The video is only the discovery source.
     # A completed snapshot must expire even when polled repeatedly.
     state["last_used_at"] = time.time()
+    if not state["done"]:
+        state["expires_at"] = state["last_used_at"] + SESSION_TTL_SECONDS
     state["phase"] = "finished" if state["done"] else state["phase"]
     emit(f"本轮结束：视频 {state['scan_index']}/{len(state['videos'])}，剩余候选 {len(state['tasks']) - state['verify_index']}，进度已保存")
     result = {status: [r for r in rows if r["status"] == status] for status in ("open", "review", "closed", "joined")}

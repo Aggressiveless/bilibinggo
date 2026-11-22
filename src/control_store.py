@@ -78,6 +78,16 @@ class ControlStore:
         with self.connect() as db:
             return db.execute("SELECT count(*) FROM discovery_videos").fetchone()[0]
 
+    def list_discovery_videos(self, *, limit: int, offset: int) -> tuple[int, list[dict]]:
+        with self.connect() as db:
+            db.execute("BEGIN")
+            total = db.execute("SELECT count(*) FROM discovery_videos").fetchone()[0]
+            rows = db.execute(
+                "SELECT bvid, first_seen, last_seen FROM discovery_videos "
+                "ORDER BY last_seen DESC, bvid LIMIT ? OFFSET ?", (limit, offset),
+            ).fetchall()
+        return total, [dict(row) for row in rows]
+
     def claim(self, key: str, parameters: dict) -> dict | None:
         fingerprint = digest(parameters)
         with self.connect() as db:

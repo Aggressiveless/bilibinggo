@@ -28,10 +28,17 @@
 .discovery-metrics strong { font-size: 23px; font-variant-numeric: tabular-nums; }
 .discovery-metrics span { font-size: 13px; color: var(--foreground-muted); }
 .discovery-status { margin: 0; color: var(--foreground-muted); font-size: 14px; overflow-wrap: anywhere; }
-.discovery-queue { align-items: center; flex-wrap: wrap; margin-top: 12px; }
-.discovery-queue[hidden] { display: none; }
-.discovery-coin-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-bottom: 14px; color: var(--foreground-muted); font-size: 13px; }
-.discovery-coin-settings p { margin: 0; }
+.discovery-queue { margin-top: 16px; }
+.discovery-import-actions { flex-wrap: wrap; }
+.source-subnav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.source-subnav [aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-hover); }
+.source-table-scroll { overflow-x: auto; margin-top: 14px; }
+.source-table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 14px; }
+.source-table th, .source-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-soft); }
+.source-table th { color: var(--foreground-muted); font-size: 13px; white-space: nowrap; }
+.source-table a { color: var(--accent-hover); overflow-wrap: anywhere; }
+.source-table input, .account-coins input { accent-color: var(--accent); }
+#source-feeds[hidden], #discovery-video-pages[hidden], .account-coins[hidden] { display: none; }
 .discovery-filters { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
 .discovery-filters summary { cursor: pointer; }
 .discovery-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 0; border: 0; margin: 14px 0; }
@@ -1360,6 +1367,10 @@ html.sidebar-init-collapsed .system-btn {
   transition: transform var(--sidebar-duration) var(--sidebar-ease);
 }
 
+#theme-toggle svg[hidden] {
+  display: none;
+}
+
 .system-btn-text {
   font-size: 13px;
   font-weight: 500;
@@ -2615,6 +2626,21 @@ html.sidebar-init-collapsed .system-btn {
   justify-content: space-between;
   gap: 12px 16px;
 }
+
+.account-coins {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  margin-top: 12px;
+  color: var(--foreground-muted);
+  font-size: 13px;
+}
+
+.account-coin-amount { display: flex; align-items: baseline; gap: 8px; }
+.account-coin-amount strong { color: var(--foreground); font-size: 18px; font-variant-numeric: tabular-nums; }
+.account-coin-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.account-coin-settings p { margin: 0; }
 
 .account-hero-footer .setup-checklist {
   margin: 0;

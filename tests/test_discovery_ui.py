@@ -37,9 +37,9 @@ def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, 
     entered = threading.Event()
 
     def discover(active_service, job_id, params, event, progress):
-        assert active_service is service and params["request_budget"] == 180 and params["resume"]
+        assert active_service is service and params["request_budget"] is None and params["resume"]
         assert params["mode"] == mode and params["video_limit"] == 36
-        assert params.get("candidate_limit", 9) == (0 if mode == "comprehensive_page" else 9)
+        assert params["candidate_limit"] == 0 and params["collect_followers"]
         progress(step=2, total=36, message="扫描视频", result_patch={"videos_checked": 2})
         entered.set()
         assert event.wait(5), "Stop did not reach the worker"
@@ -125,7 +125,7 @@ def test_completed_search_keeps_bvs_and_imports_only_confirmed_matches(browser_c
         opened.append({"status": "open", "dynamic_id": identifier, "url": f"https://www.bilibili.com/opus/{identifier}",
                        "deadline": time.time() + (-60 if i == 2 else 3600)})
 
-    opened[0]["rule_text"] = "视频一键三连参与"
+    opened[0].update(rule_text="视频一键三连参与", publisher="发布者", publisher_uid="12345", followers=2345)
     opened[1]["rule_text"] = "只需关注并转发，无需投币"
 
     def search(*args, **kwargs):
@@ -160,7 +160,13 @@ def test_completed_search_keeps_bvs_and_imports_only_confirmed_matches(browser_c
     job_id = start["job"]["job_id"]
     summary = finished_status()
     assert summary["queue"]["imported"] == 0 and summary["pending_selection"] == 2
-    assert summary["bv_count"] == 3 and "candidates" not in summary
+    assert summary["bv_count"] == 3
+    assert summary["candidates"][0] == {"dynamic_id": ids[0], "prize": "", "publisher": "发布者",
+        "publisher_uid": "12345", "followers": 2345, "triple_requirement": "required"}
+    assert [row["dynamic_id"] for row in summary["candidates"]] == ids[:2]
+    videos = client.get("/api/discovery/videos?offset=1&limit=1").json()
+    assert videos["total"] == 3 and videos["items"][0]["bvid"] == "BV11a1111112"
+    assert videos["items"][0]["first_seen"] == videos["items"][0]["last_seen"]
     assert not known_activity_ids()
 
     assert client.post("/api/discovery/import", json={"job_id": job_id}).status_code == 400
@@ -180,7 +186,9 @@ def test_completed_search_keeps_bvs_and_imports_only_confirmed_matches(browser_c
     assert attempted == [ids[1], ids[1]]
     assert client.post("/api/discovery/import", json=selected).status_code == 200
     assert not runner.is_running()
-    assert client.post("/api/discovery/import", json={"job_id": job_id, "selection": "all"}).status_code == 200
+    manual = {"job_id": job_id, "selection": "selected", "selected_ids": [ids[0]]}
+    assert client.post("/api/discovery/import", json={**manual, "selected_ids": ["999"]}).status_code == 400
+    assert client.post("/api/discovery/import", json=manual).status_code == 200
     summary = finished_status()
     assert summary["queue"]["imported"] == 2 and summary["pending_selection"] == 0
     assert known_activity_ids() == set(ids[:2]) and summary["bv_count"] == 3
@@ -227,3 +235,41 @@ def test_stop_interrupts_rate_wait_without_sending_another_request(isolated_home
     assert finished.wait(2), "Rate wait did not stop promptly"
     thread.join()
     assert not errors
+
+
+def test_browser_search_crosses_180_requests_in_one_job(browser_control, monkeypatch):
+    import httpx
+
+    from src.bilibili_client import BilibiliClient
+    from src.control_telemetry import record_request
+    client, service, runner = browser_control
+    monkeypatch.setattr(service, "account", lambda: {"credentials_present": True})
+    monkeypatch.setattr("src.llm_settings.is_llm_ready", lambda: True)
+
+    def platform_get(self, url, **kwargs):
+        record_request("GET", url)
+        return httpx.Response(200, json={"code": 0})
+
+    def search(discovery_client, *args, **kwargs):
+        monkeypatch.setattr(type(discovery_client), "_wait_for_request", lambda *a: None)
+        for _ in range(181):
+            discovery_client._http_get("https://api.bilibili.com/example")
+        with pytest.raises(RuntimeError, match="禁止平台写"):
+            record_request("POST", "https://api.bilibili.com/example")
+        return dict(open=[], review=[], closed=[], joined=[], errors=[], stopped="", requests=181,
+                    session_id="test", resumed=False, scan_completed=True, has_more=False, verification_remaining=0,
+                    sources_remaining=0, videos_checked=1, search_video_count=1, completion_reason="search_complete",
+                    cache_hits=0, llm_requests=0, llm_cache_hits=0, min_interval_seconds=2, elapsed_seconds=0)
+
+    monkeypatch.setattr(BilibiliClient, "_http_get", platform_get)
+    monkeypatch.setattr("src.lottery_discovery_broad.discover_page", search)
+    result = client.post("/api/discovery/start", json={}).json()
+    deadline = time.monotonic() + 5
+    while runner.is_running() and time.monotonic() < deadline:
+        threading.Event().wait(.02)
+    status = client.get("/api/discovery/current").json()
+    assert status["job"]["job_id"] == result["job"]["job_id"]
+    assert status["job"]["state"] == "success"
+    assert status["summary"]["completion_reason"] == "search_complete"
+    assert status["summary"]["requests_used"] == 181
+    assert status["summary"]["network_counts"]["platform_read_requests"] == 181

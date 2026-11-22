@@ -15,7 +15,12 @@ def run_control_action(action, params, *, on_progress, cancel_event):
     from src.control_telemetry import network_span
     workflow = params.get("workflow") or {}
     read_only = action in {"control_discover", "control_import", "control_discovery_filter", "control_network", "control_llm_test"} or action == "control_workflow" and "execute" not in workflow.get("stages", [])
-    budget = (params.get("request_budget", 180) if action == "control_discover" else workflow.get("request_budget", 110))
+    if action == "control_discover":
+        budget = params.get("request_budget", 180)
+    elif action == "control_import" and params.get("queue_verified"):
+        budget = None
+    else:
+        budget = workflow.get("request_budget", 110)
     with network_span(read_only=read_only, max_requests=budget) as counts:
         result = _run_control_action(action, params, on_progress=on_progress, cancel_event=cancel_event)
         result["result"]["network_counts"] = {key: value for key, value in counts.items() if key.startswith("platform_")}
@@ -33,7 +38,7 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
     elif action == "control_import":
         if params.get("queue_verified"):
             from web.discovery_queue import enqueue_verified
-            with discovery_client(service, cancel_event, budget=110) as client:
+            with discovery_client(service, cancel_event, budget=None) as client:
                 try:
                     result = enqueue_verified(service, params["discovery_job_id"], client, cancel_event, on_progress, params.get("selected_ids"))
                 finally:
@@ -168,7 +173,8 @@ def discover(service, job_id, params, event, progress=None):
             report = find(client, words, video_limit=params.get("video_limit", 36), now=int(time.time()),
                           comprehensive_page=comprehensive, joined_ids=joined, known_ids=known_activity_ids(), on_progress=publish,
                           candidate_limit=params.get("candidate_limit", 9), author_dynamic_limit=params.get("author_dynamic_limit", 2),
-                          resume=params.get("resume", True), on_video_page=service.store.remember_discovery_videos)
+                          resume=params.get("resume", True), on_video_page=service.store.remember_discovery_videos,
+                          collect_followers=params.get("collect_followers", False))
             rows = discovery_candidates([row for category in ("open", "review", "closed", "joined") for row in report[category]])
             value = {"job_id": job_id, "candidates": rows, "errors": [{"message": str(v)} for v in report["errors"][:100]],
                      "stopped": bool(report["stopped"]), "requests_used": report["requests"], "raw": report, "keywords": words,

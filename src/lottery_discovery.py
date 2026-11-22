@@ -108,7 +108,7 @@ def _retry_after(value: str, now: float) -> float:
 class DiscoveryClient(BilibiliClient):
     """Bound network requests, including the signing-key request."""
 
-    def __init__(self, cache_path: Path, *, budget: int, min_interval_seconds: float = 2.0) -> None:
+    def __init__(self, cache_path: Path, *, budget: int | None, min_interval_seconds: float = 2.0) -> None:
         super().__init__(timeout=12.0, warmup=False)
         self._client.follow_redirects = False
         self.cache_path = cache_path
@@ -137,7 +137,7 @@ class DiscoveryClient(BilibiliClient):
         until = self.cache.get("paused_until", 0)
         if until > now:
             raise DiscoveryStopped(f"B站读取暂停至 {datetime.fromtimestamp(until, CST).isoformat()}")
-        if self.request_count >= self.budget:
+        if self.budget is not None and self.request_count >= self.budget:
             raise DiscoveryStopped("已达到本轮 B 站请求预算")
         self._wait_for_request(max(0.0, self._next_request_at - time.monotonic()))
         self._next_request_at = time.monotonic() + self.min_interval_seconds
@@ -189,6 +189,13 @@ class DiscoveryClient(BilibiliClient):
         }
         self.entries[key] = {"expires": time.time() + 86400, "value": fields}
         return fields
+
+
+def read_follower_count(client, uid: str) -> int | None:
+    profile = f"https://space.bilibili.com/{uid}"
+    payload = client.read(FOLLOWER_URL, {"vmid": uid}, referer=profile, ttl=3600)
+    count = (payload.get("data") or {}).get("follower")
+    return count if api_code(payload) == 0 and type(count) is int and count >= 0 else None
 
 
 def _date_from_quote(quote: str, published: int, now: int) -> int | None:
@@ -555,11 +562,7 @@ def discover(
         if uid not in followers:
             followers[uid] = None
             try:
-                profile = f"https://space.bilibili.com/{uid}"
-                stats = client.read(FOLLOWER_URL, {"vmid": uid}, referer=profile, ttl=3600)
-                count = (stats.get("data") or {}).get("follower")
-                if api_code(stats) == 0 and isinstance(count, int) and count >= 0:
-                    followers[uid] = count
+                followers[uid] = read_follower_count(client, uid)
             except DiscoveryStopped as exc:
                 # Followers are optional metadata, not a reason to discard verified
                 # candidates or report the core discovery as unfinished.

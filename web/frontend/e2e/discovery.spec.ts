@@ -23,6 +23,8 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
     await route.fulfill({ json: snapshot });
   });
   await gotoOverview(page);
+  await expect(page.locator("#discovery-panel")).toBeHidden();
+  await page.locator('[data-section="sources"]').click();
   await expect(page.locator("#discovery-stop")).toBeDisabled();
   await page.getByLabel("视频排序").selectOption("comprehensive_page");
   await page.locator("#discovery-start").click();
@@ -37,6 +39,7 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
   await expect(page.locator("#discovery-badge")).toHaveText("已停止");
   await expect(page.locator("#discovery-panel a[href*='/opus/']")).toHaveCount(0);
   await page.reload();
+  await page.locator('[data-section="sources"]').click();
   await expect(page.locator("#discovery-start")).toHaveText("继续检索");
   await expect(page.getByLabel("视频排序")).toHaveValue("comprehensive_page");
   await page.getByLabel("视频排序").selectOption("standard");
@@ -55,14 +58,17 @@ test("request budget shows a pause, and stopping remains available after reload"
     candidates: [], resume_available: true };
   await page.route("**/api/discovery/current", (route) => route.fulfill({ json: snapshot }));
   await gotoOverview(page);
+  await page.locator('[data-section="sources"]').click();
   await expect(page.locator("#discovery-badge")).toHaveText("本轮额度已用完");
   await expect(page.locator("#discovery-remaining")).toHaveText("133");
   await expect(page.locator("#discovery-start")).toHaveText("继续检索");
   snapshot = { ...snapshot, job: { job_id: 45, state: "running", cancel_requested: false }, summary: {} };
   await page.reload();
+  await page.locator('[data-section="sources"]').click();
   await expect(page.locator("#discovery-stop")).toBeEnabled();
   snapshot = { ...snapshot, job: { ...snapshot.job, cancel_requested: true } };
   await page.reload();
+  await page.locator('[data-section="sources"]').click();
   await expect(page.locator("#discovery-stop")).toHaveText("正在停止…");
   await expect(page.locator("#discovery-stop")).toBeDisabled();
   await expect(page.locator("#discovery-start")).toBeDisabled();
