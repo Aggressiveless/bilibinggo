@@ -272,6 +272,7 @@ export const RESERVE_STEP_LABELS = ["关注", "预约"];
 export const COMMENT_OPTIONAL_PATTERNS = [/关注UP主/i, /关注 up/i, /7\s*天/i, /code=12078/i];
 
 export const LOGIN_REQUIRED_ACTIONS = new Set([
+  "control_discover",
   "refresh_all",
   "refresh_source",
   "refresh_watch",
@@ -281,6 +282,7 @@ export const LOGIN_REQUIRED_ACTIONS = new Set([
 ]);
 
 export const LLM_REQUIRED_ACTIONS = new Set([
+  "control_discover",
   "refresh_all",
   "refresh_source",
   "refresh_watch",

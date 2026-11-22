@@ -146,6 +146,8 @@ app.openapi = custom_openapi  # type: ignore[method-assign]
 
 from web.control_routes import install_control
 install_control(app)
+from web.discovery_routes import install_discovery
+install_discovery(app)
 
 
 @app.get("/api/watch-users", tags=["stable"])

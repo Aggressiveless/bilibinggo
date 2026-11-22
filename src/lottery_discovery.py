@@ -108,11 +108,14 @@ def _retry_after(value: str, now: float) -> float:
 class DiscoveryClient(BilibiliClient):
     """Bound network requests, including the signing-key request."""
 
-    def __init__(self, cache_path: Path, *, budget: int) -> None:
+    def __init__(self, cache_path: Path, *, budget: int, min_interval_seconds: float = 2.0) -> None:
         super().__init__(timeout=12.0, warmup=False)
         self._client.follow_redirects = False
         self.cache_path = cache_path
         self.budget = budget
+        self.min_interval_seconds = max(2.0, float(min_interval_seconds))
+        self.started_at = time.monotonic()
+        self.request_start_offsets: list[float] = []
         self.request_count = 0
         self.cache_hits = 0
         self.llm_requests = 0
@@ -136,8 +139,9 @@ class DiscoveryClient(BilibiliClient):
             raise DiscoveryStopped(f"B站读取暂停至 {datetime.fromtimestamp(until, CST).isoformat()}")
         if self.request_count >= self.budget:
             raise DiscoveryStopped("已达到本轮 B 站请求预算")
-        time.sleep(max(0.0, self._next_request_at - time.monotonic()))
-        self._next_request_at = time.monotonic() + 2.0
+        self._wait_for_request(max(0.0, self._next_request_at - time.monotonic()))
+        self._next_request_at = time.monotonic() + self.min_interval_seconds
+        self.request_start_offsets.append(round(time.monotonic() - self.started_at, 3))
         self.request_count += 1
         response = super()._http_get(url, params=params, headers=headers)
         try:
@@ -152,6 +156,9 @@ class DiscoveryClient(BilibiliClient):
             self.save()
             raise DiscoveryStopped(f"B站返回限流或访问限制（HTTP {response.status_code}，业务码 {code}），暂停本轮")
         return response
+
+    def _wait_for_request(self, seconds: float) -> None:
+        time.sleep(seconds)
 
     def read(self, url: str, params: dict, *, referer: str, ttl: int, wbi: bool = False) -> dict:
         key = json.dumps([url, params], sort_keys=True, ensure_ascii=False)
@@ -250,6 +257,43 @@ def _owner_comments(data: dict, owner: str) -> list[str]:
         if isinstance(row, dict) and str((row.get("member") or {}).get("mid") or row.get("mid")) == owner
     ]
     return list(dict.fromkeys(message for message in messages if message))[:3]
+
+
+def inspect_dynamic(client, dynamic_id: str, *, now: int, item: dict | None = None) -> dict | None:
+    """Read and assess one target, shared by breadth-first discovery and resumption."""
+    url = opus_link(dynamic_id)
+    if item is None:
+        response = client.read(DYNAMIC_DETAIL_URL, {"id": dynamic_id}, referer=url, ttl=600)
+        item = (response.get("data") or {}).get("item") if api_code(response) == 0 else None
+        if not item:
+            response = client.read(OPUS_DETAIL_URL, {"id": dynamic_id, "features": OPUS_DETAIL_FEATURES}, referer=url, ttl=600)
+            item = (response.get("data") or {}).get("item") if api_code(response) == 0 else None
+    if not item:
+        return None
+    item = _normalize_dynamic_item(item)
+    if is_upower_dynamic(item) or (item.get("modules") or {}).get("module_paywall"):
+        return None
+    response = client.read(LOTTERY_NOTICE_URL, {"business_id": dynamic_id, "business_type": 1}, referer=url, ttl=300)
+    notice = (response.get("data") or {}) if api_code(response) == 0 else {}
+    notice = notice if notice.get("lottery_id") else None
+    text = _extract_from_detail_item({k: v for k, v in item.items() if k != "orig"})[:4800]
+    if not text and not notice:
+        response = client.read(OPUS_DETAIL_URL, {"id": dynamic_id, "features": OPUS_DETAIL_FEATURES}, referer=url, ttl=600)
+        opus = (response.get("data") or {}).get("item") if api_code(response) == 0 else None
+        if opus:
+            item = merge_opus_content(item, opus)
+            if is_upower_dynamic(item) or (item.get("modules") or {}).get("module_paywall"):
+                return None
+            text = _extract_from_detail_item({k: v for k, v in item.items() if k != "orig"})[:4800]
+    if not notice and not LOTTERY_RE.search(text):
+        return None
+    fields = client.extract(text) if text and not notice else {}
+    author = (item.get("modules") or {}).get("module_author") or {}
+    prizes = "、".join(str(notice[k]) for k in ("first_prize_cmt", "second_prize_cmt", "third_prize_cmt") if notice and notice.get(k))
+    return {"kind": "dynamic", "url": url, "dynamic_id": dynamic_id,
+            "publisher": author.get("name") or "", "publisher_uid": str(author.get("mid") or (notice or {}).get("sender_uid") or ""),
+            "prize": prizes or fields.get("prize", ""), "rule_text": text[:1800], "official_notice": notice,
+            **assess_candidate(fields, now=now, published=extract_feed_pub_ts(item) or 0, notice=notice)}
 
 
 def discover(

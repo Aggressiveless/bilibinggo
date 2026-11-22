@@ -5761,7 +5761,7 @@
     {
       "name": "binggo_discovery_start",
       "group": "discovery",
-      "description": "按关键词和预算搜索候选，解析指向作者主页的活动指示；不参与。",
+      "description": "先扫描所选整页视频，再全局去重解析入口并核验；作者主页搜索“抽奖”只取最近1–2条原创动态，支持保存进度后续查。",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -5805,12 +5805,30 @@
           "video_limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 36
+            "maximum": 36,
+            "default": 36
           },
           "request_budget": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 110
+            "maximum": 300,
+            "default": 180
+          },
+          "min_interval_seconds": {
+            "type": "number",
+            "minimum": 2,
+            "maximum": 10,
+            "default": 2
+          },
+          "author_dynamic_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2,
+            "default": 2
+          },
+          "resume": {
+            "type": "boolean",
+            "default": true
           }
         },
         "required": [
@@ -6275,7 +6293,7 @@
                   "requests_used": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 110
+                    "maximum": 300
                   },
                   "next_cursor": {
                     "anyOf": [
@@ -6288,6 +6306,27 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "session_id": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "resumed": {
+                    "type": "boolean"
+                  },
+                  "scan_completed": {
+                    "type": "boolean"
+                  },
+                  "has_more": {
+                    "type": "boolean"
+                  },
+                  "verification_remaining": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "sources_remaining": {
+                    "type": "integer",
+                    "minimum": 0
                   }
                 },
                 "required": [
@@ -9709,7 +9748,7 @@
               "request_budget": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 110
+                "maximum": 300
               },
               "max_platform_actions_per_day": {
                 "type": "integer",

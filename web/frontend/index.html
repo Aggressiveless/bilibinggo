@@ -314,6 +314,35 @@
               </div>
             </article>
 
+            <article class="panel discovery-panel" id="discovery-panel" aria-labelledby="discovery-heading">
+              <div class="discovery-head">
+                <div>
+                  <h2 class="section-title" id="discovery-heading">主动检索抽奖</h2>
+                  <p class="section-desc">搜索视频与相关动态，核验活动规则、奖品和有效时间。</p>
+                </div>
+                <span class="discovery-badge" id="discovery-badge">待开始</span>
+              </div>
+              <form id="discovery-form" class="discovery-controls">
+                <div class="discovery-keywords">
+                  <label class="field-label" for="discovery-keywords">搜索关键词</label>
+                  <input id="discovery-keywords" class="form-input" value="转发抽奖" maxlength="242" required aria-describedby="discovery-help" />
+                </div>
+                <div class="action-row">
+                  <button type="submit" class="btn btn-primary btn-pill" id="discovery-start" disabled>开始检索</button>
+                  <button type="button" class="btn btn-secondary btn-pill" id="discovery-stop" disabled>停止检索</button>
+                </div>
+              </form>
+              <p class="caption" id="discovery-help">最多 3 个关键词，用逗号分隔。每轮最多 180 次请求，未完成时可继续上次进度。</p>
+              <div class="discovery-metrics" aria-label="检索统计">
+                <div><strong id="discovery-videos">0</strong><span>已扫描视频</span></div>
+                <div><strong id="discovery-remaining">0</strong><span>待核验候选</span></div>
+                <div><strong id="discovery-eligible">0</strong><span>可参与活动</span></div>
+                <div><strong id="discovery-requests">0</strong><span>本轮请求</span></div>
+              </div>
+              <p class="discovery-status" id="discovery-status" role="status" aria-live="polite">正在读取检索状态…</p>
+              <ul class="discovery-results" id="discovery-results" aria-label="找到的可参与活动" hidden></ul>
+            </article>
+
             <article class="panel participate-settings">
               <div class="participate-settings-head">
                 <div>

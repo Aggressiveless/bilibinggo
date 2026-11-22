@@ -120,7 +120,7 @@ class ControlService:
         if expected != value:
             raise ControlError("REVISION_CONFLICT", "配置已变化，请重新读取后修改")
 
-    def start(self, action, params=None, *, require_account=True, require_llm=False):
+    def start(self, action, params=None, *, require_account=True, require_llm=False, source="mcp"):
         from web.job_runner import runner
         if require_account and not self.account()["credentials_present"]:
             raise ControlError("AUTH_REQUIRED", "应用尚未保存登录，请扫码登录")
@@ -130,10 +130,13 @@ class ControlService:
                 raise ControlError("LLM_NOT_READY", "请先在应用中完成LLM配置与连接测试")
         if runner.is_running():
             raise ControlError("JOB_BUSY", "已有网页、调度或MCP任务正在运行", retryable=True)
-        job = self.store.new_job(action, BOOT_ID)
+        metadata = {"source": source}
+        if action == "control_discover":
+            metadata["keywords"] = (params or {}).get("keywords", [])
+        job = self.store.new_job(action, BOOT_ID, metadata=metadata)
         job_id = job["job_id"]
         values = {**(params or {}), "_control_job_id": job_id}
-        native_id = runner.try_start(action, values, source="mcp")
+        native_id = runner.try_start(action, values, source=source)
         if native_id is None:
             self.store.update_job(job_id, state="error", result={"code": "JOB_BUSY"})
             raise ControlError("JOB_BUSY", "任务槽被其他操作占用", job_id=job_id, retryable=True)
@@ -268,7 +271,9 @@ class ControlService:
                 raise ControlError("NOT_FOUND", "该任务没有发现报告")
             offset, size = int(args.get("cursor") or 0), args.get("limit", 100)
             rows = value["candidates"]
-            return {**{k: value[k] for k in ("job_id", "errors", "stopped", "requests_used")}, "candidates": rows[offset:offset+size], "next_cursor": str(offset+size) if offset+size < len(rows) else None}
+            return {**{k: value[k] for k in ("job_id", "errors", "stopped", "requests_used")}, "candidates": rows[offset:offset+size],
+                    "next_cursor": str(offset+size) if offset+size < len(rows) else None,
+                    **{k: value[k] for k in ("session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining") if k in value}}
         if name == "discovery_import":
             return self.start("control_import", args, require_llm=True)
         if name == "participation_plan":

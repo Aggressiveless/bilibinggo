@@ -18,7 +18,7 @@ from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 
 
-async def check(profile_path, *, keyword, rounds=2, budget=60, import_limit=2):
+async def check(profile_path, *, keyword, rounds=2, budget=180, import_limit=2, videos=36):
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
     sys.path.insert(0, str(Path(profile["source_root"]) / "mcp"))
     from binggo_mcp.threaded_stdio import threaded_stdio
@@ -56,7 +56,8 @@ async def check(profile_path, *, keyword, rounds=2, budget=60, import_limit=2):
             return job
         for index in range(rounds):
             print(f"ROUND {index + 1}", flush=True)
-            job = await finish(await call("discovery_start", keywords=[keyword], mode="standard", video_limit=6, request_budget=budget, **writing()))
+            job = await finish(await call("discovery_start", keywords=[keyword], mode="comprehensive_page", video_limit=videos,
+                                         request_budget=budget, author_dynamic_limit=2, min_interval_seconds=2, resume=True, **writing()))
             found = await call("discovery_get", job_id=job["job_id"], limit=100)
             candidates = [value for value in found["candidates"] if value["eligible"]]
             assert not imported_ids.intersection(value["dynamic_id"] for value in candidates), "Already imported activities were selected again"
@@ -64,6 +65,9 @@ async def check(profile_path, *, keyword, rounds=2, budget=60, import_limit=2):
                      "eligible": [{"dynamic_id": value["dynamic_id"], "url": value["target_url"],
                                    "prize": value["raw"].get("prize"), "resolution": value["resolution"],
                                    "evidence_chain": value["evidence_chain"]} for value in candidates]}
+            if index:
+                assert found["resumed"], "Second round lost its durable cursor"
+                assert found["session_id"] == report["rounds"][0]["summary"]["session_id"]
             selected = candidates[:import_limit]
             if selected:
                 imported = await finish(await call("discovery_import", discovery_job_id=job["job_id"],
@@ -79,6 +83,7 @@ async def check(profile_path, *, keyword, rounds=2, budget=60, import_limit=2):
             report["rounds"].append(entry)
             print("ROUND_RESULT", json.dumps(entry, ensure_ascii=False), flush=True)
     assert report["imported"] > 0, "No new, verified activity was imported"
+    assert report["rounds"][-1]["summary"]["scan_completed"], "Did not scan the selected page"
     report.update(result="passed", elapsed_seconds=round(time.monotonic() - started, 1))
     return report
 
@@ -88,11 +93,12 @@ def main():
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--keyword", default="转发抽奖")
     parser.add_argument("--rounds", type=int, choices=range(1, 4), default=2)
-    parser.add_argument("--budget", type=int, choices=range(10, 111), default=60)
+    parser.add_argument("--budget", type=int, choices=range(10, 301), default=180)
+    parser.add_argument("--videos", type=int, choices=range(1, 37), default=36)
     parser.add_argument("--import-limit", type=int, choices=range(1, 4), default=2)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    report = asyncio.run(check(args.profile.resolve(), keyword=args.keyword, rounds=args.rounds, budget=args.budget, import_limit=args.import_limit))
+    report = asyncio.run(check(args.profile.resolve(), keyword=args.keyword, rounds=args.rounds, budget=args.budget, import_limit=args.import_limit, videos=args.videos))
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

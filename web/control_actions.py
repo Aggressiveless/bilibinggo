@@ -15,7 +15,8 @@ def run_control_action(action, params, *, on_progress, cancel_event):
     from src.control_telemetry import network_span
     workflow = params.get("workflow") or {}
     read_only = action in {"control_discover", "control_import", "control_network", "control_llm_test"} or action == "control_workflow" and "execute" not in workflow.get("stages", [])
-    with network_span(read_only=read_only, max_requests=workflow.get("request_budget", 110)) as counts:
+    budget = (params.get("request_budget", 180) if action == "control_discover" else workflow.get("request_budget", 110))
+    with network_span(read_only=read_only, max_requests=budget) as counts:
         result = _run_control_action(action, params, on_progress=on_progress, cancel_event=cancel_event)
         result["result"]["network_counts"] = {key: value for key, value in counts.items() if key.startswith("platform_")}
         return result
@@ -46,11 +47,21 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
         result = workflow(service, job_id, params["workflow"], on_progress, cancel_event)
     else:
         raise ControlError("NOT_FOUND", "未知控制任务")
-    check_cancel(cancel_event)
-    message = (f"检索完成：找到 {result['eligible']} 条可导入活动，检查 {result.get('videos_checked', 0)} 个视频"
-               if action == "control_discover" else "控制任务完成")
+    cancelled = False
+    if action == "control_discover":
+        cancelled = result.get("completion_reason") == "cancelled" or bool(cancel_event and cancel_event.is_set())
+        prefix = ("已停止检索，进度已保存" if cancelled else {
+            "request_budget": "本轮请求额度已用完，检索暂停，进度已保存",
+            "platform_paused": "平台限制，检索暂停，进度已保存",
+            "target_reached": "本轮检索已结束，可继续检索",
+            "error": "检索中断，进度已保存",
+        }.get(result.get("completion_reason"), "检索完成"))
+        message = f"{prefix}：找到 {result['eligible']} 条可导入活动，检查 {result.get('videos_checked', 0)} 个视频"
+    else:
+        check_cancel(cancel_event)
+        message = "控制任务完成"
     on_progress(step=1, total=1, message=message)
-    return {"ok": True, "message": message, "log": message, "result": redact_obj(result)}
+    return {"ok": not cancelled, "cancelled": cancelled, "message": message, "log": message, "result": redact_obj(result)}
 
 
 def discovery_candidates(rows):
@@ -77,8 +88,18 @@ def discovery_candidates(rows):
 
 
 def discover(service, job_id, params, event, progress=None):
-    from src.lottery_discovery import DiscoveryClient, DiscoveryStopped, discover as find, expand_keywords
+    from src.lottery_discovery import DiscoveryClient, DiscoveryStopped, expand_keywords
+    from src.lottery_discovery_broad import discover_page as find
     class CancellableClient(DiscoveryClient):
+        def _wait_for_request(self, seconds):
+            if event is None:
+                return super()._wait_for_request(seconds)
+            if event.wait(seconds):
+                raise DiscoveryStopped("用户取消")
+        def extract(self, *args, **kwargs):
+            if event is not None and event.is_set():
+                raise DiscoveryStopped("用户取消")
+            return super().extract(*args, **kwargs)
         def read(self, *args, **kwargs):
             if event is not None and event.is_set():
                 raise DiscoveryStopped("用户取消")
@@ -91,29 +112,37 @@ def discover(service, job_id, params, event, progress=None):
     comprehensive = params.get("mode") == "comprehensive_page"
     def publish(snapshot):
         value = {"job_id": job_id, "candidates": discovery_candidates(snapshot["rows"]),
-                 "errors": snapshot["errors"], "stopped": False, "requests_used": snapshot["requests"], "keywords": words}
+                 "errors": [{"message": str(v)} for v in snapshot["errors"][:100]], "stopped": False, "requests_used": snapshot["requests"], "keywords": words,
+                 **{k: snapshot[k] for k in ("session_id", "resumed", "scan_completed", "verification_remaining")}}
         service.store.put("discovery", str(job_id), redact_obj(value))
         if progress:
-            progress(step=snapshot["videos_checked"], total=max(1, min(params.get("video_limit", 6), snapshot["search_video_count"])),
+            progress(step=snapshot["videos_checked"], total=max(1, min(params.get("video_limit", 36), snapshot["search_video_count"])),
                      message=f"{snapshot['message']} · 请求 {snapshot['requests']}，可导入 {snapshot['eligible']}",
                      result_patch={"discovery_job_id": job_id, "eligible": snapshot["eligible"], "requests_used": snapshot["requests"],
-                                   "videos_checked": snapshot["videos_checked"], "phase": snapshot["phase"]})
+                                   "videos_checked": snapshot["videos_checked"], "phase": snapshot["phase"],
+                                   **{k: snapshot[k] for k in ("session_id", "resumed", "scan_completed", "verification_remaining")}})
     from src.participation_store import load_participations
     from src.activity_store import known_activity_ids
     joined = {str(k) for k, v in load_participations().items() if v.user_status == "已参加"}
-    with CancellableClient(service.home / "data/lottery-discovery-cache.json", budget=params.get("request_budget", 96 if comprehensive else 60)) as client:
+    with CancellableClient(service.home / "data/lottery-discovery-cache.json", budget=params.get("request_budget", 180),
+                           min_interval_seconds=params.get("min_interval_seconds", 2.0)) as client:
         try:
-            report = find(client, words, video_limit=params.get("video_limit", 36 if comprehensive else 6), now=int(time.time()),
+            report = find(client, words, video_limit=params.get("video_limit", 36), now=int(time.time()),
                           comprehensive_page=comprehensive, joined_ids=joined, known_ids=known_activity_ids(), on_progress=publish,
-                          candidate_limit=params.get("candidate_limit", 9 if comprehensive else 3))
+                          candidate_limit=params.get("candidate_limit", 9), author_dynamic_limit=params.get("author_dynamic_limit", 2),
+                          resume=params.get("resume", True))
         finally:
             client.save()
     rows = discovery_candidates([row for category in ("open", "review", "closed", "joined") for row in report[category]])
-    value = {"job_id": job_id, "candidates": rows, "errors": report["errors"], "stopped": bool(report["stopped"]), "requests_used": report["requests"], "raw": report, "keywords": words}
+    value = {"job_id": job_id, "candidates": rows, "errors": [{"message": str(v)} for v in report["errors"][:100]],
+             "stopped": bool(report["stopped"]), "requests_used": report["requests"], "raw": report, "keywords": words,
+             **{k: report[k] for k in ("session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining")}}
     service.store.put("discovery", str(job_id), redact_obj(value))
     return {"discovery_job_id": job_id, "candidates": len(rows), "eligible": sum(v["eligible"] for v in rows),
-            "requests_used": report["requests"], "partial": bool(value["stopped"] or value["errors"]), "errors": value["errors"],
-            **{k: report[k] for k in ("videos_checked", "completion_reason", "cache_hits", "llm_requests", "llm_cache_hits")}}
+            "requests_used": report["requests"], "partial": bool(value["stopped"] or value["errors"] or report["has_more"]), "errors": value["errors"],
+            **{k: report[k] for k in ("videos_checked", "search_video_count", "completion_reason", "cache_hits", "llm_requests", "llm_cache_hits",
+                                     "session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining",
+                                     "min_interval_seconds", "elapsed_seconds")}}
 
 
 def import_candidates(service, params):
@@ -222,7 +251,7 @@ def workflow(service, job_id, config, progress, event):
     if "discover" in stages:
         reserve = min(config["request_budget"] // 3, 8 * config["max_activities_per_run"])
         summary["discovery"] = discover(service, job_id, {"keywords": config.get("keywords") or ["转发抽奖"],
-            "request_budget": config["request_budget"] - reserve, "video_limit": 6, "mode": "standard",
+            "request_budget": config["request_budget"] - reserve, "video_limit": 36, "mode": "standard",
             "candidate_limit": config["max_activities_per_run"]}, event, progress)
         report = service.store.get("discovery", str(job_id))
         chosen = [v["candidate_id"] for v in report["candidates"] if v["eligible"]][:config["max_activities_per_run"]]
