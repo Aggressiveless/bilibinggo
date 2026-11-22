@@ -117,6 +117,8 @@ def test_interact_lottery_succeeds_when_favorite_unavailable_skipped() -> None:
     ("lottery_type", "description", "expects_favorite"),
     [
         ("转发抽奖", "关注＆转发＆点赞＆评论此条动态，11月25日抽奖", False),
+        ("转发抽奖", "关&转&赞&评本动态，11月25日抽", False),
+        ("转发抽奖", "关注@东方补者 和@COLG玩家社区，转发评论点赞本条动态，11月25日抽", False),
         ("转发抽奖", "转发 + 点赞 + 评论 + 关注，参与抽奖", False),
         ("转发抽奖", "关注＆转发＆点赞＆评论此条动态，并收藏", True),
         ("转发抽奖", "欢迎参加抽奖", True),
@@ -151,3 +153,79 @@ def test_favorite_step_respects_forward_lottery_rules(
     assert participation_succeeded(actions, lottery_type=lottery_type) is not expects_favorite
     if not expects_favorite:
         assert ActionResult("favorite", True, FAVORITE_NOT_REQUIRED) in actions
+
+
+def test_null_favorite_is_an_unavailable_entry():
+    item = {"modules": {"module_stat": {"forward": {}, "comment": {}, "favorite": None}}}
+    with patch("src.lottery_actions.fetch_opus_detail_item", return_value=item):
+        assert favorite_supported(item, client=Mock(), dynamic_id="123") is False
+
+
+@pytest.mark.parametrize("modules", [
+    {"module_stat": {"favorite": {"status": True}}},
+    [{"module_type": "MODULE_TYPE_STAT", "module_stat": {"favorite": {"status": True}}}],
+])
+def test_favorite_status_reads_both_platform_module_shapes(modules):
+    from src.lottery_actions import _opus_favorite_status
+    client = Mock()
+    client.get_json.return_value = {"code": 0, "data": {"item": {"modules": modules}}}
+    assert _opus_favorite_status(client, dynamic_id="123", referer="test") is True
+
+
+def test_favorite_missing_state_stays_unknown():
+    from src.lottery_actions import _opus_favorite_status
+    client = Mock()
+    client.get_json.return_value = {"code": 0, "data": {"item": {"modules": {"module_stat": {"favorite": None}}}}}
+    assert _opus_favorite_status(client, dynamic_id="123", referer="test") is None
+
+
+def test_unverified_favorite_never_returns_a_bare_zero(monkeypatch):
+    from src.lottery_actions import favorite_dynamic
+    client = Mock()
+    client.post_json.return_value = {"code": 0, "message": "0"}
+    monkeypatch.setattr("src.lottery_actions.is_favorited", lambda *a, **k: False)
+    monkeypatch.setattr("src.lottery_actions.time.sleep", lambda _: None)
+    result = favorite_dynamic(client, dynamic_id="123", csrf="test", referer="test")
+    assert not result.ok and "尚未确认" in result.detail
+    assert client.post_json.call_count == 1
+
+
+def test_required_favorite_without_entry_remains_failed(monkeypatch):
+    from src.lottery_actions import DynamicContext
+    context = DynamicContext("123", 2, "test", "123", 17, True, False, False, True, True, True,
+                             favorite_required=True)
+    monkeypatch.setattr("src.lottery_actions.build_dynamic_context", lambda *a, **k: context)
+    monkeypatch.setattr("src.lottery_actions.require_login", lambda: ("csrf", 1))
+    monkeypatch.setattr("src.lottery_actions.time.sleep", lambda _: None)
+    actions, _ = execute_full_participation(Mock(), dynamic_id="123", lottery_type="转发抽奖")
+    assert not participation_succeeded(actions, lottery_type="转发抽奖")
+    assert "明确要求收藏" in next(a for a in actions if a.action == "favorite").detail
+
+
+def test_frozen_plan_cannot_add_a_previously_skipped_write(monkeypatch):
+    from src.lottery_actions import DynamicContext
+    from src.control_store import ControlError
+    context = DynamicContext("123", 2, "test", "123", 17, False, False, False, True, True, True)
+    monkeypatch.setattr("src.lottery_actions.build_dynamic_context", lambda *a, **k: context)
+    client = Mock()
+    with pytest.raises(ControlError, match="原计划之外"):
+        execute_full_participation(client, dynamic_id="123", allowed_actions=set())
+    client.post_json.assert_not_called()
+    client.post_form.assert_not_called()
+
+
+def test_retry_reuses_successful_posts_from_failed_overall_attempt(isolated_home, monkeypatch):
+    from src.lottery_actions import build_dynamic_context
+    from src.participation_log import append_action_record, ParticipationActionRecord
+    append_action_record(ParticipationActionRecord(1, "123", "转发抽奖", "failed", "收藏失败", "test text",
+        [{"action": "favorite", "ok": False, "detail": "0"},
+         {"action": "repost", "ok": True, "detail": "test text"},
+         {"action": "comment", "ok": True, "detail": "test text"}], {}))
+    item = {"modules": {"module_stat": {}, "module_dynamic": {"desc": {"text": "关&转&赞&评本动态"}}}}
+    for name, value in {"fetch_dynamic_detail": item, "is_following": True,
+                        "is_reposted": False, "has_comment": False}.items():
+        monkeypatch.setattr("src.lottery_actions." + name, Mock(return_value=value))
+    context = build_dynamic_context(Mock(), dynamic_id="123", sender_uid=2, action_text="test text", lottery_type="转发抽奖")
+    assert context.reposted and context.commented and not context.favorite_available
+    verified = build_dynamic_context(Mock(), dynamic_id="123", sender_uid=2, action_text="test text", lottery_type="转发抽奖", reuse_local_receipts=False)
+    assert not verified.reposted and not verified.commented

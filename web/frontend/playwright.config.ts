@@ -24,7 +24,7 @@ export default defineConfig({
     command: "python scripts/run_e2e_server.py",
     cwd: repoRoot,
     url: baseURL,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: process.env.BINGGO_OFFLINE !== "1" && !process.env.CI,
     timeout: 120_000,
     stdout: "pipe",
     stderr: "pipe",

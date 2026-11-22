@@ -6,6 +6,12 @@ from src.lottery_enricher import ENRICH_SKIP_REASON, EnrichSkippedError, enrich_
 from src.pipeline.refresh_all_pipeline import run_new_links_pipeline
 
 
+@pytest.fixture(autouse=True)
+def no_platform_warmup(monkeypatch):
+    # This module tests mocked parsing/persistence, not the HTTP client.
+    monkeypatch.setattr("src.bilibili_client.BilibiliClient._warmup", lambda self: None)
+
+
 def test_enrich_forward_skips_when_parse_not_lottery(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.lottery_enricher.fetch_dynamic_content_with_retry",

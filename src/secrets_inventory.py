@@ -17,6 +17,7 @@ SECRET_FILENAMES: frozenset[str] = frozenset(
     {
         "cookies.txt",
         "llm.env",
+        "control-access.json",
     }
 )
 
@@ -45,6 +46,10 @@ REDACT_SECRET_KEY_NAMES: frozenset[str] = frozenset(
         "authorization",
         "api_key",
         "api-key",
+        "llm_api_key",
+        "bili_cookie",
+        "sessdata",
+        "bili_jct",
     }
 )
 
@@ -63,7 +68,7 @@ SANITIZE_SECRET_KEY_SUBSTR: frozenset[str] = frozenset(
 
 def secret_file_paths() -> list[Path]:
     """运行态密钥文件绝对路径（动态解析，尊重 BINGGO_HOME）。"""
-    return [app_paths.cookie_file(), app_paths.llm_env_file()]
+    return [app_paths.cookie_file(), app_paths.llm_env_file(), app_paths.config_dir() / "control-access.json"]
 
 
 def secret_filenames_csv() -> str:

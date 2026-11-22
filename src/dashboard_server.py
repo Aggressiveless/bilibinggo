@@ -34,6 +34,15 @@ def assert_loopback_host(host: str = DASHBOARD_HOST) -> None:
 DASHBOARD_PORT = get_dashboard_port()
 DASHBOARD_URL = get_dashboard_url()
 
+_active_server = None
+
+
+def request_shutdown() -> bool:
+    if _active_server is None:
+        return False
+    _active_server.should_exit = True
+    return True
+
 
 def _ensure_stdio() -> None:
     """无控制台子进程（如 Windows CREATE_NO_WINDOW）下 stdout/stderr 可能为 None。"""
@@ -44,16 +53,22 @@ def _ensure_stdio() -> None:
 
 
 def run_dashboard_server(*, log_level: str = "info") -> None:
+    global _active_server
     import uvicorn
 
     assert_loopback_host(DASHBOARD_HOST)
     _ensure_stdio()
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    uvicorn.run(
+    config = uvicorn.Config(
         "web.app:app",
         host=DASHBOARD_HOST,
         port=get_dashboard_port(),
         reload=False,
         log_level=log_level,
     )
+    _active_server = uvicorn.Server(config)
+    try:
+        _active_server.run()
+    finally:
+        _active_server = None

@@ -1,3 +1,4 @@
-# Binggo MCP — private local extension (does not modify the main app)
-mcp>=1.28.0
-httpx>=0.27.0
+# Binggo MCP v2 adapter; application control lives in the shared backend.
+mcp==2.3.0
+httpx==0.28.1
+jsonschema==4.26.0

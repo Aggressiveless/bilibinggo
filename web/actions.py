@@ -83,12 +83,20 @@ def _payload_joined_success(payload: dict[str, Any]) -> bool:
     return all(item.ok for item in actions)
 
 
+class ParticipationFailed(RuntimeError):
+    """Keep completed steps available to both the UI and control clients."""
+
+    def __init__(self, payload: dict[str, Any]):
+        super().__init__(str(payload.get("message") or "参与失败"))
+        self.participation_result = payload
+
+
 def _require_participate_success(payload: dict[str, Any]) -> None:
     status = str(payload.get("status") or "")
     if status == "skipped":
         raise RuntimeError(str(payload.get("message") or "该活动不可参与"))
     if status != "joined" or not _payload_joined_success(payload):
-        raise RuntimeError(str(payload.get("message") or "参与失败"))
+        raise ParticipationFailed(payload)
 
 
 def _normalize_participate_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -333,6 +341,10 @@ def run_action(
     progress = on_progress or _noop_progress
     log_lines: list[str] = []
     _raise_if_cancelled(cancel_event)
+
+    if action.startswith("control_"):
+        from web.control_actions import run_control_action
+        return run_control_action(action, params, on_progress=progress, cancel_event=cancel_event)
 
     if action == "login":
         qrcode_refresh_count = 0
@@ -985,8 +997,6 @@ def run_action(
                     try:
                         results.append(future.result())
                     except Exception as exc:
-                        if cancel_event is not None:
-                            cancel_event.set()
                         with progress_lock:
                             task_states[dynamic_id] = f"失败：{exc}"
                         _mark_other_tasks_stopped(dynamic_id, reason="已停止（其他活动失败）")

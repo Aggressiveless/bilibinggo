@@ -110,6 +110,8 @@ class BilibiliClient:
         params: dict | None = None,
         headers: dict | None = None,
     ) -> httpx.Response:
+        from src.control_telemetry import record_request
+        record_request("GET", url)
         acquire_bilibili_request_slot()
         with self._http_lock:
             return self._client.get(url, params=params or {}, headers=headers)
@@ -123,6 +125,8 @@ class BilibiliClient:
         params: dict | None = None,
         headers: dict | None = None,
     ) -> httpx.Response:
+        from src.control_telemetry import record_request
+        record_request("POST", url)
         acquire_bilibili_request_slot()
         with self._http_lock:
             return self._client.post(

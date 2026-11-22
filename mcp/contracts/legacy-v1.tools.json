@@ -1,0 +1,595 @@
+[
+  {
+    "name": "account_get",
+    "description": "读取账号卡片摘要（对应网页侧栏/概览账号区）。\n\n返回登录态、昵称、网络异常提示等。默认附带 extras。\n写操作前建议先调用；未登录时引导 account_login，不要臆造已登录。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "include_extras": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "summary_get",
+    "description": "读取概览统计与数据源/监控摘要（对应网页概览）。\n\n含活动统计、源状态摘要，以及当前 job 快照。适合开场了解全局状态。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "settings_get",
+    "description": "读取参与文案等设置（对应网页参与文案面板）。\n\n含模式、当前文案、默认文案字段。改文案前先读此工具了解当前 mode。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "llm_settings_get",
+    "description": "读取 LLM 配置摘要（对应网页 LLM 面板）。\n\n密钥已脱敏，仅有是否配置、是否测试通过、模型名等。禁止向用户索要或回显明文 Key。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "runtime_get",
+    "description": "读取运行时/项目信息（对应网页 bilibinggo 项目信息区）。\n\n含版本、数据目录、runtime 标签等。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "watch_users_list",
+    "description": "读取监控用户名单与同步状态（对应网页监控名单/同步卡片）。\n\n添加或删除用户前先读此列表；更新动态用 job_refresh_watch。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "activities_list",
+    "description": "读取活动列表（对应网页活动表；筛选参数与网页 query 一致）。\n\n单条参与前用本工具拿到 dynamic_id，再调 job_participate。\npage/page_size 用于分页；q 为搜索关键字。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "draw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "draw_window": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "q": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "order": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page": {
+          "type": "integer"
+        },
+        "page_size": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "triple_targets_get",
+    "description": "读取三连参与目标预览（对应活动页三连目标条）。\n\n调用 job_participate_triple 前可用本工具确认将参与哪些目标。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "draw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "draw_window": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "q": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "order": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "job_get",
+    "description": "读取当前 Job 状态/进度/结果（对应顶部进度条与结果横幅）。\n\n登录流程中串行轮询本工具查看 login_phase 与 state。\n其它 job_* 工具会等到终态才返回，一般不必中途轮询；若需看日志用 job_logs_get。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "job_logs_get",
+    "description": "读取任务日志摘要（对应网页任务日志坞）。\n\n可选 job_id；默认最近日志。limit 默认 200。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "auto_status_get",
+    "description": "读取定时点击调度器状态（对应定时点击坞）。\n\n启动/停止调度前先读相位、倒计时、fatal 原因等。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "account_login_qrcode",
+    "description": "获取当前登录二维码 PNG（对应扫码弹窗中的图）。\n\n须已在登录流程中（通常先 account_login）。返回图片 + 简短 job 元数据。\n二维码刷新后再次调用本工具取新图并展示给用户。码尚未生成时会报错。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "account_login",
+    "description": "扫码登录（对应侧栏「扫码登录」/重新扫码）。\n\n二维码就绪后返回 PNG 图片；登录 Job 仍在服务端继续。\n必须把图片展示给用户扫码，然后串行轮询 job_get 直至 success/error。\n换码用 account_login_qrcode；放弃用 account_login_cancel。\n已登录时勿盲目调用，除非用户明确要求重登。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "account_login_cancel",
+    "description": "关闭扫码/取消进行中的登录（对应扫码弹窗 ×）。\n\n仅当当前 Job 为 login 时有效。这不是通用「取消任务」按钮，不能取消抽奖/更新类 Job。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "account_refresh",
+    "description": "刷新账号（对应侧栏「刷新账号」）。\n\n仅重新拉取账号接口，不是重新扫码。网络异常恢复后可用；Cookie 失效应走 account_login。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "include_extras": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "account_logout",
+    "description": "退出登录（对应侧栏「退出登录」）。\n\n清除本机登录态；响应不含 Cookie。退出后需登录的写操作会失败，应再走 account_login。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "account_ack_at_unread",
+    "description": "确认 @ 未读提示（对应账号区「知道了」）。\n\ncurrent 为当前未读数（与网页一致）。用于消除「@我的未读增加」提示。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "current": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "current"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "job_refresh_watch",
+    "description": "更新监控用户动态（对应网页「更新监控用户动态」）。\n\n会阻塞直到任务终态再返回。需已登录；日常同步监控源用此工具。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "job_refresh_status",
+    "description": "刷新任务状态（对应网页「刷新任务状态」）。\n\n会阻塞直到任务终态再返回。用于刷新活动开奖/参与状态等。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "job_refresh_all",
+    "description": "一键更新活动链接（对应网页「一键更新」）。\n\n会阻塞直到终态；耗时可能很长，且更易触发风控。仅在用户明确要求一键全量更新时使用；\n日常优先 job_refresh_source 单源更新。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "job_refresh_source",
+    "description": "更新此源/UP 合集（对应网页各源「更新此源」）。\n\n参数 source_id 须为有效数据源 ID。会阻塞直到终态。推荐的日常更新方式。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "job_participate",
+    "description": "单条参与抽奖（对应活动行「参与」按钮）。\n\n参数 dynamic_id 来自 activities_list。会阻塞直到终态。需已登录且 LLM 等前置满足网页同等要求。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "dynamic_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dynamic_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "job_participate_triple",
+    "description": "三连参与（对应活动页顶部三连参与）。\n\n会阻塞直到终态。调用前可用 triple_targets_get 预览目标；需用户意图明确。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "auto_start",
+    "description": "启动定时点击调度（对应定时点击坞「启动调度」）。\n\n先 auto_status_get 再启动。调度与 Job 互斥策略与网页一致（撞车即停等），不要并行点其它 Job。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "auto_stop",
+    "description": "停止定时点击调度（对应定时点击坞「停止调度」）。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "participate_text_save",
+    "description": "保存参与文案或兜底文案（对应「保存文案」）。\n\ntext 为要保存的内容。mode=custom 写参与文案；mode=random_comment 写兜底文案；\nmode 省略时自动读取当前设置模式。需已登录。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "participate_text_reset",
+    "description": "恢复默认参与文案（对应「恢复默认」）。\n\n按当前模式写入服务端默认文案。需已登录。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "participate_text_mode_set",
+    "description": "切换参与文案模式（对应网页模式切换）。\n\nmode 只能是 custom（自定义文案）或 random_comment（随机借用评论）。需已登录。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "llm_settings_save",
+    "description": "保存 LLM 配置（对应网页「保存配置」）。\n\n请求可含 Key，但响应仍脱敏。api_key 留空表示不修改已有 Key（与网页一致）。需已登录。\n不要在对话中回显用户提供的明文 Key。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string"
+        },
+        "base_url": {
+          "type": "string"
+        },
+        "model_name": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "llm_settings_test",
+    "description": "测试 LLM 连接（对应网页「测试连接」）。\n\n可与保存使用相同表单字段；留空 Key 时使用已保存配置。需已登录。不要回显明文 Key。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string"
+        },
+        "base_url": {
+          "type": "string"
+        },
+        "model_name": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "updates_check",
+    "description": "检查更新（对应网页「检查更新」）。\n\n查询 GitHub Releases；返回是否有新版本等结构化结果。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "diagnostics_export",
+    "description": "导出诊断包（对应网页「导出诊断包」）。\n\n返回 filename 与 text。text 可能含敏感信息，不要在对话中完整粘贴或回显密钥。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "watch_user_add",
+    "description": "添加监控用户（对应监控名单「添加用户」）。\n\nmid 为 B 站用户 MID（数字）。需已登录。添加前可用 watch_users_list 避免重复。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mid": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mid"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "watch_user_remove",
+    "description": "删除监控用户（对应名单中的移除）。\n\nmid 为要移除的用户 MID。需已登录。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mid": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mid"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

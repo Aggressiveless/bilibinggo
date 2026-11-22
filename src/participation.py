@@ -10,6 +10,7 @@ from src.lottery_actions import (
     ACTION_INTERVAL_SEC,
     DEFAULT_PARTICIPATE_TEXT,
     FAVORITE_NOT_REQUIRED,
+    ACTION_LABELS,
     ActionResult,
     execute_full_participation,
     follow_user,
@@ -87,6 +88,8 @@ def _context_snapshot(context: Any | None, *, extra: dict[str, Any] | None = Non
             "followed": getattr(context, "followed", None),
             "favorited": getattr(context, "favorited", None),
             "favorite_available": getattr(context, "favorite_available", None),
+            "favorite_required": getattr(context, "favorite_required", None),
+            "favorite_skip_reason": getattr(context, "favorite_skip_reason", ""),
             "reposted": getattr(context, "reposted", None),
             "commented": getattr(context, "commented", None),
             "comment_rid": getattr(context, "comment_rid", None),
@@ -172,6 +175,7 @@ def participate_five_action_lottery(
     dry_run: bool = False,
     persist: bool = True,
     on_step: Callable[[int, int, str, str], None] | None = None,
+    allowed_actions: set[str] | None = None,
 ) -> ParticipateResult:
     text, text_meta = _resolve_action_text(client, dynamic_id=dynamic_id, action_text=action_text)
     notice: dict | None = None
@@ -233,6 +237,7 @@ def participate_five_action_lottery(
             action_text=text,
             dry_run=dry_run,
             on_step=on_step,
+            **({"allowed_actions": allowed_actions} if allowed_actions is not None else {}),
         )
     except RuntimeError as exc:
         message = str(exc).strip() or "参与失败"
@@ -265,7 +270,10 @@ def participate_five_action_lottery(
     else:
         status = "failed"
         failed = [item for item in actions if not item.ok]
-        message = failed[-1].detail if failed else "部分操作失败"
+        message = "；".join(
+            f"{ACTION_LABELS.get(item.action, item.action)}失败：{item.detail if item.detail not in ('', '0') else '平台未确认操作结果'}"
+            for item in failed
+        ) or "部分操作失败"
 
     snapshot = _context_snapshot(
         context,
@@ -522,6 +530,7 @@ def participate_activity(
     dry_run: bool = False,
     persist: bool = True,
     on_step: Callable[[int, int, str, str], None] | None = None,
+    allowed_actions: set[str] | None = None,
 ) -> ParticipateResult:
     if not is_valid_dynamic_id(dynamic_id):
         raise ValueError("dynamic_id 无效")
@@ -548,6 +557,7 @@ def participate_activity(
             dry_run=dry_run,
             persist=persist,
             on_step=on_step,
+            **({"allowed_actions": allowed_actions} if allowed_actions is not None else {}),
         )
     if lottery_type == "转发抽奖":
         return participate_five_action_lottery(
@@ -558,6 +568,7 @@ def participate_activity(
             dry_run=dry_run,
             persist=persist,
             on_step=on_step,
+            **({"allowed_actions": allowed_actions} if allowed_actions is not None else {}),
         )
     if lottery_type == "预约抽奖":
         return participate_reserve_lottery(

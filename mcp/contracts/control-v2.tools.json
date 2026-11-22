@@ -1,8 +1,8 @@
 {
   "schema_dialect": "https://json-schema.org/draft/2020-12/schema",
   "catalog_format": "binggo-mcp-design-catalog/1",
-  "design_version": "2.0.0-draft.1",
-  "status": "design-only-not-implemented",
+  "design_version": "2.0.0",
+  "status": "implemented-host-activation-pending",
   "created_on": "2026-11-22",
   "server_name": "binggo",
   "tool_count": 53,
@@ -334,13 +334,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:instance-registry:list"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_instance_get",
@@ -619,15 +623,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "GET /api/control/v2/identity"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "runtime_get"
       ],
-      "x-notes": "旧 runtime API 可提供只读降级，不能据此宣称新鉴权已存在。"
+      "x-notes": "旧 runtime API 可提供只读降级，不能据此宣称新鉴权已存在。",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "GET /api/control/v2/identity"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_instance_get"
+      }
     },
     {
       "name": "binggo_capabilities_get",
@@ -858,13 +866,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "GET /api/control/v2/capabilities"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_capabilities_get"
+      }
     },
     {
       "name": "binggo_app_start",
@@ -1169,13 +1181,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:supervisor:start"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_app_stop",
@@ -1491,13 +1507,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:supervisor:stop"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_app_restart",
@@ -1813,13 +1833,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:supervisor:restart"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_health_get",
@@ -2054,13 +2078,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "GET /api/control/v2/health"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_health_get"
+      }
     },
     {
       "name": "binggo_account_get",
@@ -2305,15 +2333,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "GET /api/control/v2/account"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "account_get"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "GET /api/control/v2/account"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_account_get"
+      }
     },
     {
       "name": "binggo_account_refresh",
@@ -2559,15 +2591,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "POST /api/control/v2/account/refresh"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "account_refresh"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "POST /api/control/v2/account/refresh"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_account_refresh"
+      }
     },
     {
       "name": "binggo_login_start",
@@ -2879,15 +2915,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing-backend-needs-identity-and-contract",
-        "binding": "POST /api/jobs action=login"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "account_login"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "existing-backend-needs-identity-and-contract",
+        "binding": "POST /api/jobs action=login"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_login_start"
+      }
     },
     {
       "name": "binggo_login_qrcode",
@@ -3151,15 +3191,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "GET /api/control/v2/login/{job_id}/qrcode"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "account_login_qrcode"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "GET /api/control/v2/login/{job_id}/qrcode"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_login_qrcode"
+      }
     },
     {
       "name": "binggo_account_logout",
@@ -3367,15 +3411,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing-backend-needs-identity-and-contract",
-        "binding": "POST /api/logout"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "account_logout"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "existing-backend-needs-identity-and-contract",
+        "binding": "POST /api/logout"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_account_logout"
+      }
     },
     {
       "name": "binggo_account_ack_notice",
@@ -3583,15 +3631,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing-backend-needs-identity-and-contract",
-        "binding": "POST /api/account/ack-at-unread"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "account_ack_at_unread"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "existing-backend-needs-identity-and-contract",
+        "binding": "POST /api/account/ack-at-unread"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_account_ack_notice"
+      }
     },
     {
       "name": "binggo_summary_get",
@@ -3781,15 +3833,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing",
-        "binding": "GET /api/summary"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "summary_get"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "existing",
+        "binding": "GET /api/summary"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_summary_get"
+      }
     },
     {
       "name": "binggo_sources_list",
@@ -4006,13 +4062,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "GET /api/control/v2/sources"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_sources_list"
+      }
     },
     {
       "name": "binggo_activities_list",
@@ -4361,16 +4421,20 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing-normalization-required",
-        "binding": "GET /api/activities"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "activities_list",
         "triple_targets_get"
       ],
-      "x-notes": "triple_targets_get兼容包装使用既有triple-targets预览路径；不参与、不生成平台动作。排序值须经实际API枚举校验。"
+      "x-notes": "triple_targets_get兼容包装使用既有triple-targets预览路径；不参与、不生成平台动作。排序值须经实际API枚举校验。",
+      "x-plannedBackend": {
+        "status": "existing-normalization-required",
+        "binding": "GET /api/activities"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_activities_list"
+      }
     },
     {
       "name": "binggo_activity_get",
@@ -4639,13 +4703,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "GET /api/control/v2/activities/{dynamic_id}"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_activity_get"
+      }
     },
     {
       "name": "binggo_watch_users_list",
@@ -4862,15 +4930,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing-normalization-required",
-        "binding": "GET /api/watch-users"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "watch_users_list"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "existing-normalization-required",
+        "binding": "GET /api/watch-users"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_watch_users_list"
+      }
     },
     {
       "name": "binggo_watch_user_add",
@@ -5077,15 +5149,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing-backend-needs-identity-and-contract",
-        "binding": "POST /api/watch-users"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "watch_user_add"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "existing-backend-needs-identity-and-contract",
+        "binding": "POST /api/watch-users"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_watch_user_add"
+      }
     },
     {
       "name": "binggo_watch_user_remove",
@@ -5292,15 +5368,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing-backend-needs-identity-and-contract",
-        "binding": "DELETE /api/watch-users/{mid}"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "watch_user_remove"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "existing-backend-needs-identity-and-contract",
+        "binding": "DELETE /api/watch-users/{mid}"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_watch_user_remove"
+      }
     },
     {
       "name": "binggo_refresh_start",
@@ -5661,18 +5741,22 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing-backend-needs-identity-and-contract",
-        "binding": "POST /api/jobs action=refresh_{scope}"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "job_refresh_all",
         "job_refresh_source",
         "job_refresh_watch",
         "job_refresh_status"
       ],
-      "x-notes": "scope=source必须带source_id；其他scope拒绝source_id。"
+      "x-notes": "scope=source必须带source_id；其他scope拒绝source_id。",
+      "x-plannedBackend": {
+        "status": "existing-backend-needs-identity-and-contract",
+        "binding": "POST /api/jobs action=refresh_{scope}"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_refresh_start"
+      }
     },
     {
       "name": "binggo_discovery_start",
@@ -6039,13 +6123,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "默认standard=6视频/24请求；comprehensive_page=1关键词/36视频/96请求，不允许扩词。",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "POST /api/control/v2/discovery/runs"
       },
-      "x-legacyAliases": [],
-      "x-notes": "默认standard=6视频/24请求；comprehensive_page=1关键词/36视频/96请求，不允许扩词。"
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_discovery_start"
+      }
     },
     {
       "name": "binggo_discovery_get",
@@ -6403,13 +6491,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "GET /api/control/v2/discovery/runs/{job_id}"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_discovery_get"
+      }
     },
     {
       "name": "binggo_discovery_import",
@@ -6738,13 +6830,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "POST /api/control/v2/discovery/import"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_discovery_import"
+      }
     },
     {
       "name": "binggo_participation_plan",
@@ -7117,13 +7213,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "POST /api/control/v2/participation/plans"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_participation_plan"
+      }
     },
     {
       "name": "binggo_participation_execute",
@@ -7440,16 +7540,20 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "POST /api/control/v2/participation/execute"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "job_participate",
         "job_participate_triple"
       ],
-      "x-notes": "兼容包装先生成计划；triple冻结最多3个目标。真实写超时不自动重试。"
+      "x-notes": "兼容包装先生成计划；triple冻结最多3个目标。真实写超时不自动重试。",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "POST /api/control/v2/participation/execute"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_participation_execute"
+      }
     },
     {
       "name": "binggo_participation_verify",
@@ -7754,13 +7858,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "POST /api/control/v2/participation/verify"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_participation_verify"
+      }
     },
     {
       "name": "binggo_job_get",
@@ -8065,15 +8173,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "GET /api/control/v2/jobs/{job_id}"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "job_get"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "GET /api/control/v2/jobs/{job_id}"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_job_get"
+      }
     },
     {
       "name": "binggo_jobs_list",
@@ -8421,13 +8533,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "GET /api/control/v2/jobs"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_jobs_list"
+      }
     },
     {
       "name": "binggo_job_wait",
@@ -8737,13 +8853,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "GET /api/control/v2/jobs/{job_id}"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_job_wait"
+      }
     },
     {
       "name": "binggo_job_cancel",
@@ -9060,15 +9180,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "POST /api/control/v2/jobs/{job_id}/cancel"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "account_login_cancel"
       ],
-      "x-notes": "旧版能力仅支持login；兼容别名只能取消其绑定的登录任务。"
+      "x-notes": "旧版能力仅支持login；兼容别名只能取消其绑定的登录任务。",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "POST /api/control/v2/jobs/{job_id}/cancel"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_job_cancel"
+      }
     },
     {
       "name": "binggo_job_events",
@@ -9298,13 +9422,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "GET /api/control/v2/jobs/{job_id}/events"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_job_events"
+      }
     },
     {
       "name": "binggo_automation_status",
@@ -9494,15 +9622,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "GET /api/control/v2/automation"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "auto_status_get"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "GET /api/control/v2/automation"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_automation_status"
+      }
     },
     {
       "name": "binggo_automation_configure",
@@ -9817,13 +9949,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "包含execute阶段时另需platform:write；运行窗口和停止策略由服务端策略裁剪。",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "PUT /api/control/v2/automation"
       },
-      "x-legacyAliases": [],
-      "x-notes": "包含execute阶段时另需platform:write；运行窗口和停止策略由服务端策略裁剪。"
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_automation_configure"
+      }
     },
     {
       "name": "binggo_automation_start",
@@ -10031,15 +10167,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "POST /api/control/v2/automation/start"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "auto_start"
       ],
-      "x-notes": "动态权限取决于工作流：平台读取与写入分别要求对应scope。"
+      "x-notes": "动态权限取决于工作流：平台读取与写入分别要求对应scope。",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "POST /api/control/v2/automation/start"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_automation_start"
+      }
     },
     {
       "name": "binggo_automation_stop",
@@ -10241,15 +10381,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing-backend-needs-identity-and-contract",
-        "binding": "POST /api/auto/stop"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "auto_stop"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "existing-backend-needs-identity-and-contract",
+        "binding": "POST /api/auto/stop"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_automation_stop"
+      }
     },
     {
       "name": "binggo_settings_get",
@@ -10439,15 +10583,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "GET /api/control/v2/settings"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "settings_get"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "GET /api/control/v2/settings"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_settings_get"
+      }
     },
     {
       "name": "binggo_settings_update",
@@ -10686,17 +10834,21 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "PATCH /api/control/v2/settings"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "participate_text_save",
         "participate_text_reset",
         "participate_text_mode_set"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "PATCH /api/control/v2/settings"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_settings_update"
+      }
     },
     {
       "name": "binggo_llm_get",
@@ -10886,15 +11038,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "GET /api/control/v2/llm"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "llm_settings_get"
       ],
-      "x-notes": "现有GET /api/settings/llm会读取账号；新控制接口避免隐式平台请求。"
+      "x-notes": "现有GET /api/settings/llm会读取账号；新控制接口避免隐式平台请求。",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "GET /api/control/v2/llm"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_llm_get"
+      }
     },
     {
       "name": "binggo_llm_update",
@@ -11117,15 +11273,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "PATCH /api/control/v2/llm"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "llm_settings_save"
       ],
-      "x-notes": "原始api_key/base_url参数不作为新MCP入口；本机UI负责登记provider和凭证引用。"
+      "x-notes": "原始api_key/base_url参数不作为新MCP入口；本机UI负责登记provider和凭证引用。",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "PATCH /api/control/v2/llm"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_llm_update"
+      }
     },
     {
       "name": "binggo_llm_test",
@@ -11436,15 +11596,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "POST /api/control/v2/llm/test"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "llm_settings_test"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "POST /api/control/v2/llm/test"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_llm_test"
+      }
     },
     {
       "name": "binggo_network_diagnose",
@@ -11773,13 +11937,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "POST /api/control/v2/diagnostics/network"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_network_diagnose"
+      }
     },
     {
       "name": "binggo_logs_query",
@@ -12021,15 +12189,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "GET /api/control/v2/diagnostics/logs"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "job_logs_get"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "GET /api/control/v2/diagnostics/logs"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_logs_query"
+      }
     },
     {
       "name": "binggo_diagnostics_export",
@@ -12278,15 +12450,19 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "new",
-        "binding": "POST /api/control/v2/diagnostics/export"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "diagnostics_export"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "new",
+        "binding": "POST /api/control/v2/diagnostics/export"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_diagnostics_export"
+      }
     },
     {
       "name": "binggo_updates_check",
@@ -12477,15 +12653,19 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
-        "status": "existing-normalization-required",
-        "binding": "POST /api/updates/check"
-      },
+      "x-runtimeAvailability": "implemented",
       "x-legacyAliases": [
         "updates_check"
       ],
-      "x-notes": ""
+      "x-notes": "",
+      "x-plannedBackend": {
+        "status": "existing-normalization-required",
+        "binding": "POST /api/updates/check"
+      },
+      "x-backend": {
+        "status": "implemented",
+        "binding": "POST /api/control/v2/tools/binggo_updates_check"
+      }
     },
     {
       "name": "binggo_test_suites_list",
@@ -12702,13 +12882,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:test-runner:suites"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_test_run",
@@ -12745,7 +12929,8 @@
               "frontend-unit",
               "frontend-e2e",
               "package-smoke",
-              "live-participation"
+              "live-participation",
+              "full-regression"
             ]
           },
           "mode": {
@@ -13095,13 +13280,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "offline阻断外网；live_read另需platform:read；live_write必须有platform:write、冻结plan_id且上限1活动。",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:test-runner:start"
       },
-      "x-legacyAliases": [],
-      "x-notes": "offline阻断外网；live_read另需platform:read；live_write必须有platform:write、冻结plan_id且上限1活动。"
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_test_get",
@@ -13469,13 +13658,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:test-runner:get"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_artifact_get",
@@ -13758,13 +13951,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:artifact-registry:read"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_build_start",
@@ -14099,13 +14296,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:build-runner:start"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_build_get",
@@ -14395,13 +14596,17 @@
       ],
       "x-idempotency": "no platform mutations",
       "x-execution": "bounded-request",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:build-runner:get"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_release_activate",
@@ -14718,13 +14923,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:supervisor:activate"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     },
     {
       "name": "binggo_release_rollback",
@@ -15041,13 +15250,17 @@
       ],
       "x-idempotency": "required; durable scope=(instance_id, caller_id, operation, key); different arguments conflict",
       "x-execution": "submit-and-return-job-id",
-      "x-runtimeAvailability": "planned-not-registered",
-      "x-backend": {
+      "x-runtimeAvailability": "implemented",
+      "x-legacyAliases": [],
+      "x-notes": "",
+      "x-plannedBackend": {
         "status": "new",
         "binding": "local:supervisor:rollback"
       },
-      "x-legacyAliases": [],
-      "x-notes": ""
+      "x-backend": {
+        "status": "implemented",
+        "binding": "local:registered-runtime"
+      }
     }
   ]
 }

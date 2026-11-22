@@ -9,8 +9,11 @@ os.environ['BINGGO_PORTABLE'] = '1'
 
 from src import dashboard_server
 
-dashboard_server.PACKAGED_DASHBOARD_PORT = 8182
-dashboard_server.DEV_DASHBOARD_PORT = 8182
+repair_port = int(os.environ.get('BINGGO_CONTROL_PORT', '8182'))
+if not 1024 <= repair_port <= 65535:
+    raise RuntimeError('Invalid BINGGO_CONTROL_PORT')
+dashboard_server.PACKAGED_DASHBOARD_PORT = repair_port
+dashboard_server.DEV_DASHBOARD_PORT = repair_port
 dashboard_server.DASHBOARD_PORT = dashboard_server.get_dashboard_port()
 dashboard_server.DASHBOARD_URL = dashboard_server.get_dashboard_url()
 

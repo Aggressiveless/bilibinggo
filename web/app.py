@@ -144,6 +144,9 @@ def custom_openapi() -> dict[str, Any]:
 
 app.openapi = custom_openapi  # type: ignore[method-assign]
 
+from web.control_routes import install_control
+install_control(app)
+
 
 @app.get("/api/watch-users", tags=["stable"])
 def api_watch_users() -> dict[str, Any]:

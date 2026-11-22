@@ -50,6 +50,21 @@ def test_final_log_replaces_progress_appends(isolated_home: Path) -> None:
     assert row["state"] == "success"
 
 
+def test_failed_participation_keeps_step_details(isolated_home: Path) -> None:
+    from web.actions import ParticipationFailed
+    runner = JobRunner()
+    payload = {"status": "failed", "message": "收藏失败：平台未确认操作结果", "lottery_type": "转发抽奖",
+               "actions": [{"action": "like", "ok": True, "detail": "已点赞"},
+                           {"action": "favorite", "ok": False, "detail": "平台未确认操作结果"}]}
+    with patch("web.job_runner.run_action", side_effect=ParticipationFailed(payload)):
+        job_id = runner.try_start("participate", {"dynamic_id": "123"})
+        _wait_until(runner, lambda s: s.state == "error")
+    status = runner.get_status()
+    assert status.result == payload
+    assert "✓ 点赞" in status.log and "✗ 收藏" in status.log
+    assert get_job(job_id)["result"] == payload
+
+
 def test_login_success_preserves_login_phase(isolated_home: Path) -> None:
     _ = isolated_home
     runner = JobRunner()

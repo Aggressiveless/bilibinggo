@@ -43,6 +43,6 @@ def test_run_dashboard_server_restores_none_stdio(monkeypatch):
         captured["stdout_ok"] = dashboard_server.sys.stdout is not None
         captured["stderr_ok"] = dashboard_server.sys.stderr is not None
 
-    monkeypatch.setattr("uvicorn.run", fake_uvicorn_run)
+    monkeypatch.setattr("uvicorn.Server.run", fake_uvicorn_run)
     dashboard_server.run_dashboard_server()
     assert captured == {"stdout_ok": True, "stderr_ok": True}

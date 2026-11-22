@@ -23,7 +23,7 @@ from src.log_context import job_log_context
 from src.log_span import log_event
 from web.actions import run_action
 from web.event_hub import event_hub
-from web.user_messages import JOB_ACTION_LABELS, friendly_error, sanitize_log
+from web.user_messages import JOB_ACTION_LABELS, format_participation_log, friendly_error, sanitize_log
 
 logger = get_logger("job")
 
@@ -31,6 +31,8 @@ logger = get_logger("job")
 def _publish_job_event(event: str, data: dict[str, Any]) -> None:
     try:
         event_hub.publish(event, data)
+        from web.control_service import persist_runner_event
+        persist_runner_event(event, data)
     except Exception:
         logger.exception("发布任务事件失败 event=%s", event)
 
@@ -652,7 +654,7 @@ class JobRunner:
                     )
                     return
                 logger.exception("任务失败 job_id=%s action=%s", job_id, action)
-                result = None
+                result = getattr(exc, "participation_result", None)
                 if action == "login":
                     current = self.get_status()
                     result = dict(current.result or {})
@@ -661,7 +663,7 @@ class JobRunner:
                     job_id,
                     state="error",
                     message=friendly_error(exc),
-                    log=sanitize_log(traceback.format_exc()) or friendly_error(exc),
+                    log=(format_participation_log(result) if result else sanitize_log(traceback.format_exc())) or friendly_error(exc),
                     result=result,
                     error_kind="internal",
                     started_mono=started_mono,

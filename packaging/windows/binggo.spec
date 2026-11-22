@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 block_cipher = None
 root = Path(SPECPATH).resolve().parents[1]
@@ -14,7 +14,10 @@ datas = [
     (str(root / "config" / "cookies.txt.example"), "config"),
     (str(root / "config" / "llm.env.example"), "config"),
     (str(root / "config" / "sources.yaml"), "config"),
+    (str(root / "mcp" / "contracts" / "control-v2.tools.json"), "mcp/contracts"),
 ]
+datas += collect_data_files("jsonschema_specifications")
+datas += collect_data_files("tzdata")
 
 hiddenimports = [
     "uvicorn",
@@ -55,6 +58,7 @@ hiddenimports = [
 ]
 hiddenimports += collect_submodules("src")
 hiddenimports += collect_submodules("web")
+hiddenimports += ["tzdata"]
 
 a = Analysis(
     [str(root / "binggo_repair_launcher.py")],

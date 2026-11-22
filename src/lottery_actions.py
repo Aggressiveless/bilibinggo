@@ -45,8 +45,9 @@ ACTION_LABELS: dict[ActionName, str] = {
 PARTICIPATION_STEPS: tuple[ActionName, ...] = ("like", "follow", "favorite", "repost", "comment")
 FAVORITE_NOT_REQUIRED = "活动未要求收藏，跳过"
 _RULE_ACTIONS = frozenset({"关注", "转发", "点赞", "评论"})
-_RULE_ACTION = r"(关注|转发|点赞|评论)"
+_RULE_ACTION = r"(关注|转发|点赞|评论|关|转|赞|评)"
 _RULE_CHAIN = re.compile(r"[^\S\n]*[+＋&＆、][^\S\n]*".join([_RULE_ACTION] * 4))
+_RULE_ALIASES = {"关": "关注", "转": "转发", "赞": "点赞", "评": "评论"}
 
 
 @dataclass
@@ -70,6 +71,7 @@ class DynamicContext:
     reposted: bool
     commented: bool
     favorite_skip_reason: str = ""
+    favorite_required: bool = False
 
 
 def _api_code(payload: dict) -> int:
@@ -83,7 +85,8 @@ def _api_code(payload: dict) -> int:
 
 
 def _api_message(payload: dict) -> str:
-    return str(payload.get("message") or payload.get("msg") or "").strip()
+    message = str(payload.get("message") or payload.get("msg") or "").strip()
+    return "" if message.lower() in {"0", "ok", "success"} else message
 
 
 def _default_fav_folder_id(client: BilibiliClient, *, uid: int, referer: str) -> str:
@@ -127,7 +130,7 @@ def _extract_module_stat(item: dict) -> dict:
 
 def _module_stat_confirms_no_favorite(stat: dict) -> bool:
     """同时有转发与评论统计但无 favorite，对应 B 站页面上无收藏按钮的动态。"""
-    if not stat or "favorite" in stat:
+    if not stat or isinstance(stat.get("favorite"), dict):
         return False
     has_forward = any(key in stat for key in ("forward", "repost", "share"))
     has_comment = "comment" in stat
@@ -142,14 +145,14 @@ def favorite_supported(
 ) -> bool:
     """动态是否支持收藏。不确定时默认尝试收藏，避免 dynamic/detail 缺字段导致误判。"""
     stat = _extract_module_stat(item)
-    if stat and "favorite" in stat:
+    if isinstance(stat.get("favorite"), dict):
         return True
     if stat and _module_stat_confirms_no_favorite(stat):
         if client is not None and dynamic_id:
             opus_item = fetch_opus_detail_item(client, dynamic_id)
             if opus_item:
                 opus_stat = _extract_module_stat(opus_item)
-                if opus_stat and "favorite" in opus_stat:
+                if isinstance(opus_stat.get("favorite"), dict):
                     return True
         return False
     return True
@@ -166,10 +169,31 @@ def _forward_rules_omit_favorite(item: dict) -> bool:
     description = _extract_desc_text(dynamic)
     if "收藏" in description:
         return False
-    return any(
-        set(match.groups()) == _RULE_ACTIONS
+    return all(action in description for action in _RULE_ACTIONS) or any(
+        {_RULE_ALIASES.get(value, value) for value in match.groups()} == _RULE_ACTIONS
         for match in _RULE_CHAIN.finditer(description)
     )
+
+
+def _rules_require_favorite(item: dict) -> bool:
+    modules = item.get("modules") or {}
+    dynamic = (modules.get("module_dynamic") or {}) if isinstance(modules, dict) else {}
+    return "收藏" in _extract_desc_text(dynamic)
+
+
+def _prior_successful_posts(dynamic_id: str, action_text: str) -> set[str]:
+    # Failed overall participation can still have successfully published posts.
+    # Account-scoped receipts prevent a retry of an unrelated step from posting twice.
+    from src.participation_log import load_action_entries_for_uid
+    completed: set[str] = set()
+    for entry in load_action_entries_for_uid():
+        if str(entry.get("dynamic_id")) != dynamic_id:
+            continue
+        for action in entry.get("actions") or []:
+            if action.get("ok") and (action.get("action") == "repost" or
+                                     action.get("action") == "comment" and entry.get("action_text") == action_text):
+                completed.add(action["action"])
+    return completed
 
 
 def build_dynamic_context(
@@ -179,6 +203,7 @@ def build_dynamic_context(
     action_text: str,
     sender_uid: int | None = None,
     lottery_type: str | None = None,
+    reuse_local_receipts: bool = True,
 ) -> DynamicContext:
     item = fetch_dynamic_detail(client, dynamic_id)
     if not item:
@@ -200,6 +225,9 @@ def build_dynamic_context(
     if lottery_type == "转发抽奖" and _forward_rules_omit_favorite(item):
         favorite_skip_reason = FAVORITE_NOT_REQUIRED
     favorite_available = not favorite_skip_reason and favorite_supported(item, client=client, dynamic_id=dynamic_id)
+    favorite_required = _rules_require_favorite(item)
+    if not favorite_available and not favorite_required and not favorite_skip_reason:
+        favorite_skip_reason = "无收藏入口，跳过"
     favorited = (
         is_favorited(client, dynamic_id=dynamic_id, referer=referer)
         if favorite_available
@@ -213,6 +241,10 @@ def build_dynamic_context(
         action_text=action_text,
         referer=referer,
     )
+    if reuse_local_receipts and (not reposted or not commented):
+        completed = _prior_successful_posts(dynamic_id, action_text)
+        reposted = reposted or "repost" in completed
+        commented = commented or "comment" in completed
 
     return DynamicContext(
         dynamic_id=dynamic_id,
@@ -227,6 +259,7 @@ def build_dynamic_context(
         reposted=reposted,
         commented=commented,
         favorite_skip_reason=favorite_skip_reason,
+        favorite_required=favorite_required,
     )
 
 
@@ -256,11 +289,14 @@ def _opus_favorite_status(client: BilibiliClient, *, dynamic_id: str, referer: s
     if _api_code(payload) != 0:
         return None
     item = (payload.get("data") or {}).get("item") or {}
-    for module in item.get("modules") or []:
-        if module.get("module_type") != "MODULE_TYPE_STAT":
-            continue
-        favorite = (module.get("module_stat") or {}).get("favorite") or {}
-        return bool(favorite.get("status"))
+    favorite = _extract_module_stat(item).get("favorite")
+    if not isinstance(favorite, dict) or "status" not in favorite:
+        return None
+    status = favorite["status"]
+    if status in (True, 1, "1", "true"):
+        return True
+    if status in (False, 0, "0", "false"):
+        return False
     return None
 
 
@@ -414,7 +450,7 @@ def favorite_dynamic(
                 return ActionResult("favorite", True, "")
             if attempt < 3:
                 time.sleep(0.6 + attempt * 0.4)
-        return ActionResult("favorite", False, message or "收藏状态未更新")
+        return ActionResult("favorite", False, "收藏请求已受理，但平台尚未确认收藏状态；请核验后再重试")
     if code in (65006, 75008):
         return ActionResult("favorite", True, message or "已收藏")
     return ActionResult("favorite", False, f"code={code} {message}".strip())
@@ -503,6 +539,7 @@ def execute_full_participation(
     action_text: str = DEFAULT_PARTICIPATE_TEXT,
     dry_run: bool = False,
     on_step: Callable[[int, int, str, ActionName], None] | None = None,
+    allowed_actions: set[str] | None = None,
 ) -> tuple[list[ActionResult], DynamicContext]:
     text = (action_text or DEFAULT_PARTICIPATE_TEXT).strip() or DEFAULT_PARTICIPATE_TEXT
     context = build_dynamic_context(
@@ -514,6 +551,15 @@ def execute_full_participation(
     )
 
     total_steps = len(PARTICIPATION_STEPS)
+    if allowed_actions is not None and not dry_run:
+        pending = {name for name, needed in {
+            "like": not context.liked, "follow": not context.followed,
+            "favorite": context.favorite_available and not context.favorited,
+            "repost": not context.reposted, "comment": not context.commented,
+        }.items() if needed}
+        if pending - allowed_actions:
+            from src.control_store import ControlError
+            raise ControlError("PLAN_STALE", "活动状态变化，需要原计划之外的操作；请重新生成计划")
 
     def report_step(step_index: int, action_name: ActionName, detail: str = "") -> None:
         if not on_step:
@@ -565,7 +611,10 @@ def execute_full_participation(
 
     report_step(3, "favorite")
     if not context.favorite_available:
-        actions.append(ActionResult("favorite", True, context.favorite_skip_reason or "无收藏入口，跳过"))
+        if context.favorite_required:
+            actions.append(ActionResult("favorite", False, "活动明确要求收藏，但平台未提供收藏入口"))
+        else:
+            actions.append(ActionResult("favorite", True, context.favorite_skip_reason or "无收藏入口，跳过"))
     elif context.favorited:
         actions.append(ActionResult("favorite", True, "已收藏，跳过"))
     else:

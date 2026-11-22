@@ -53,6 +53,7 @@ def test_extract_feed_pub_ts_from_module_dict() -> None:
 
 
 def test_watch_users_crud(isolated_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.bilibili_client.BilibiliClient._warmup", lambda self: None)
     watch_path = isolated_home / "config" / "watch_users.json"
     candidates_path = isolated_home / "config" / "missing_candidates.json"
     monkeypatch.setattr("src.watch_users.WATCH_USERS_PATH", watch_path)

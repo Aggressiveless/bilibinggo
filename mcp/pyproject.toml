@@ -1,16 +1,17 @@
 [project]
 name = "binggo-mcp"
-version = "0.1.0"
-description = "Private local MCP server for Binggo dashboard (stdio → http://127.0.0.1:8787)"
+version = "2.0.0"
+description = "Authenticated local Binggo control, automation and test server"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "mcp>=1.28.0",
-  "httpx>=0.27.0",
+  "mcp==2.3.0",
+  "httpx==0.28.1",
+  "jsonschema==4.26.0",
 ]
 
 [project.scripts]
-binggo-mcp = "binggo_mcp.server:main"
+binggo-mcp = "binggo_mcp.server_v2:main"
 
 [build-system]
 requires = ["setuptools>=68"]

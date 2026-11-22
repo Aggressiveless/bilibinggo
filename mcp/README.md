@@ -1,95 +1,39 @@
-# Binggo MCP（私人本地扩展）
+# Binggo MCP v2
 
-> **2026-11-22：** 本文介绍现有 v1 实现（固定开发端口 8787）。针对当前 Windows 修复版 8182 的应用控制、自动化与测试升级设计见 [MCP v2 设计](../docs/plans/11-mcp-control-automation.md) 和 [工具契约](contracts/control-v2.tools.json)。v2 目前是待实施设计，尚未注册为可用工具。
+本地 stdio 适配器通过鉴权的 Control API 操作现有 Binggo，复用应用保存的登录与 LLM 配置。标准工具 53 个（含 4 个可选开发工具），覆盖应用启停、账号、活动、主动发现、参与计划与核验、任务、调度、设置、诊断、隔离测试、构建与回滚。
 
-将本机已运行的 Binggo 控制台能力，通过 **MCP stdio** 暴露给任意 Agent。  
-**不修改**主项目 `src/` / `web/` 业务代码；只 HTTP 调用 `http://127.0.0.1:8787`。
+## 安装与连接
 
-规范见仓库：`docs/plans/10-mcp.md`、`docs/plans/10-mcp-impl.md`。
+应用使用 `requirements.txt`，适配器使用独立环境与 `mcp/requirements-lock.txt`。本机已准备好 `D:/A_Bonus/work/binggo-mcp-venv`。不要把应用 HTTP 页面地址当 MCP 服务地址。
 
-## 前置
-
-1. 控制台已启动且监听 **8787**（开发：`python scripts/run_dashboard.py`）
-2. 安装本扩展依赖（任选其一）：
-
-```bash
-pip install -r mcp/requirements.txt
-# 或
-pip install -e mcp/
-```
-
-## 启动
-
-在仓库根目录：
-
-```bash
-python -m binggo_mcp
-```
-
-若未 `pip install -e mcp/`，需把 `mcp` 目录加入 `PYTHONPATH`：
-
-```bash
-# Windows PowerShell
-$env:PYTHONPATH = "mcp"
-python -m binggo_mcp
-```
-
-## 挂到任意 MCP 客户端（通用示例）
-
-与能正常识别的 stdio 服务对齐时，**务必带 `"type": "stdio"`**（Cursor 等客户端把它当必填；缺了可能直接不加载）。
-
-推荐（绝对路径，少踩 PATH / 相对路径坑）：
-
-```json
-{
-  "mcpServers": {
-    "binggo": {
-      "type": "stdio",
-      "command": "C:/Users/15745/miniconda3/python.exe",
-      "args": ["-m", "binggo_mcp"],
-      "cwd": "D:/Code_list/Code_Python/bilibili_binggo",
-      "env": {
-        "PYTHONPATH": "D:/Code_list/Code_Python/bilibili_binggo/mcp"
-      }
-    }
-  }
-}
-```
-
-说明：
-
-| 项 | 注意 |
-|----|------|
-| `type` | 写成 `"stdio"`，与 `codegraph` 一致 |
-| `command` | 用**绝对路径**的 python（Agent 启动时 PATH 往往不是你终端里的 conda） |
-| `PYTHONPATH` | 用 `.../mcp` 的**绝对路径**；`"mcp"` 相对路径在部分客户端会解析失败 |
-| 已 `pip install -e mcp/` | 可去掉 `env.PYTHONPATH`，但仍建议绝对路径 python |
-
-改完后：打开客户端的 MCP / Tools 面板看 `binggo` 是否变绿；Cursor 可 **Reload Window** 或开关一次该 MCP。
-
-若仍失败，在终端手动跑同一条命令排查：
+用 `scripts/install_mcp_control.py` 生成本机 profile 与通用宿主配置。所有本机路径保留在 profile 中；不复制 Cookie、LLM key 或令牌。
 
 ```powershell
-cd D:\Code_list\Code_Python\bilibili_binggo
-$env:PYTHONPATH = "D:\Code_list\Code_Python\bilibili_binggo\mcp"
-C:\Users\15745\miniconda3\python.exe -m binggo_mcp
+python scripts/install_mcp_control.py --home D:/A_Bonus/Binggo-RepostFix/user-data --runtime D:/A_Bonus/work/binggo-mcp-venv/Scripts/python.exe --app-python D:/A_Bonus/work/venv/Scripts/python.exe --work D:/A_Bonus/work --application D:/A_Bonus/Binggo-RepostFix/Binggo-RepostFix.exe
 ```
 
-应挂起等待输入（stdio 正常）；若立刻 `ModuleNotFoundError`，说明包路径仍不对。
+在有权写入宿主配置的普通 PowerShell 中连接 Codex：
 
-## Agent 说明
+```powershell
+& D:/A_Bonus/Binggo-RepostFix-source/scripts/register_codex_mcp.ps1
+```
 
-| 规则 | 说明 |
-|------|------|
-| 基址 | 固定 `http://127.0.0.1:8787` |
-| 串行 | 全部 tool 同一进程内全局锁，不能并发 |
-| Job | 除登录外，启动后等到终态再返回 |
-| 登录 | `account_login` 在二维码就绪后返回 **PNG 图片**；再用 `job_get` 看是否成功 |
-| 取消 | 仅 `account_login_cancel`（关扫码）；无通用取消任务 |
-| 密钥 | 不回传 Cookie / 明文 API Key |
-| MCP instructions | `binggo_mcp/instructions.py` + 各 tool docstring |
-| Skill（本机 Agent） | 开放格式 SSOT：[`skills/binggo-mcp/`](skills/binggo-mcp/)；多 Agent 挂载见 [`skills/adapters/`](skills/adapters/) |
+随后重新加载 MCP 或重启宿主。生成配置、协议测试成功和当前聊天出现工具是三个独立状态。当前任务无权写入 `C:/Users/jingl/.codex/config.toml` 时，脚本应在普通 PowerShell 运行，不需要管理员权限。
 
-## 工具一览
+## 使用
 
-见 `docs/plans/10-mcp-impl.md` §2。重载 MCP 后可读到 instructions；挂上 Skill 后 Agent 按场景编排调用。
+先调用 `binggo_instances_list`、`binggo_instance_get`，后续明确携带 `instance_id`。变更传入当前 `expected_boot_id` 和新的 `idempotency_key`；同键重试返回原结果。长任务立即返回控制 `job_id`，通过 `binggo_job_get/wait/events` 追踪；等待上限 20 秒。
+
+参与流程为 plan → execute → verify。计划不代表已经参与；API 接受不代表平台核验通过。无须在已有用户授权内重复请求确认。收藏规则、账号、配置或应用身份改变后必须重新计划。未知的发帖结果不会自动重放；已成功转发/评论的本地回执可用于防止重试重复发帖，平台核验仍执行新读取。
+
+任务与网页共享 JobRunner 和互斥。离线套件使用独立数据根并阻断外网；`network-read` 只读真实平台，`live-participation` 只执行既有计划。开发模式可用登记构建和包级验收后切换/回滚程序，用户数据保持独立。
+
+## 验证
+
+```powershell
+D:/A_Bonus/work/binggo-mcp-venv/Scripts/python.exe scripts/check_mcp_control.py --profile D:/A_Bonus/work/binggo-control-profile.json --run-tests
+```
+
+`--mode legacy` 验证旧协议兼容；`--lifecycle` 会重启登记的应用，隔离测试时使用专门 profile。测试报告分别记录离线、真实读取、真实写入，不能互相替代。
+
+工具 schema：[control-v2.tools.json](contracts/control-v2.tools.json)。设计背景：[完整设计](../docs/plans/11-mcp-control-automation.md)。旧接口：[README-v1.md](README-v1.md)。适配器默认不公开旧工具，profile 设置 `expose_legacy=true` 才启用 34 个兼容名称。

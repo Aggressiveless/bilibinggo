@@ -4,6 +4,7 @@ from src.pipeline.refresh_all_pipeline import run_new_links_pipeline
 
 
 def test_enrich_progress_updates_every_item(monkeypatch) -> None:
+    monkeypatch.setattr("src.bilibili_client.BilibiliClient._warmup", lambda self: None)
     events: list[tuple[int, int, str]] = []
 
     def fake_classify(client, dynamic_id):

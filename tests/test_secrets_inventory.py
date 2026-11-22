@@ -12,7 +12,7 @@ from src.secrets_inventory import (
 
 
 def test_secret_filenames() -> None:
-    assert SECRET_FILENAMES == frozenset({"cookies.txt", "llm.env"})
+    assert SECRET_FILENAMES == frozenset({"cookies.txt", "llm.env", "control-access.json"})
     assert "cookies.txt" in secret_filenames_csv()
 
 
@@ -21,6 +21,7 @@ def test_secrets_inventory_paths_follow_home(monkeypatch, tmp_path) -> None:
     paths = secret_file_paths()
     assert paths[0] == tmp_path / "config" / "cookies.txt"
     assert paths[1] == tmp_path / "config" / "llm.env"
+    assert paths[2] == tmp_path / "config" / "control-access.json"
 
 
 def test_redact_vs_sanitize_matching() -> None:

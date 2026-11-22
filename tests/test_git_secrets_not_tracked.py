@@ -16,7 +16,7 @@ def test_secret_filenames_not_tracked() -> None:
     if not (ROOT / ".git").exists():
         pytest.skip("not a git checkout")
     result = subprocess.run(
-        ["git", "ls-files", "--", "config/cookies.txt", "config/llm.env"],
+        ["git", "ls-files", "--", *("config/" + name for name in sorted(SECRET_FILENAMES))],
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -25,4 +25,4 @@ def test_secret_filenames_not_tracked() -> None:
     tracked = {line.strip() for line in result.stdout.splitlines() if line.strip()}
     assert not tracked, f"敏感文件不应被 git 跟踪: {tracked}"
     # 清单与检查路径一致
-    assert SECRET_FILENAMES == frozenset({"cookies.txt", "llm.env"})
+    assert SECRET_FILENAMES == frozenset({"cookies.txt", "llm.env", "control-access.json"})

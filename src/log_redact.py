@@ -8,6 +8,7 @@ from typing import Any
 from src.secrets_inventory import is_redact_secret_key
 
 _PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(https?://)[^/@\s:]+:[^/@\s]+@", re.IGNORECASE), r"\1***@"),
     (re.compile(r"(SESSDATA=)[^\s;|&]+", re.IGNORECASE), r"\1***"),
     (re.compile(r"(bili_jct=)[^\s;|&]+", re.IGNORECASE), r"\1***"),
     (re.compile(r"(DedeUserID=)[^\s;|&]+", re.IGNORECASE), r"\1***"),
