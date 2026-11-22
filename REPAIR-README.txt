@@ -1,10 +1,10 @@
 Binggo 动态转发接口本地修复版
-版本：5.0.5+repostfix.1（基于官方 v5.0.5，非官方发布）
+版本：5.0.5+repostfix.2（基于官方 v5.0.5，非官方发布）
 
 Windows 使用步骤
 1. 将 Windows ZIP 完整解压到一个新文件夹，例如 D:\A_Bonus\Binggo-RepostFix。不要覆盖原 Binggo 安装目录，也不要只复制 EXE。
 2. 双击 Binggo-RepostFix.exe。浏览器应打开 http://127.0.0.1:8182。
-3. 在概览确认版本为 5.0.5+repostfix.1。原版使用 8181，两个页面请区分。
+3. 在概览确认版本为 5.0.5+repostfix.2。原版使用 8181，两个页面请区分。
 4. 此版使用程序旁的 user-data 文件夹，首次是空白数据，需要重新扫码登录。没有复制原版 Cookie、API Key 或活动库。
 5. 暂时不要启动定时调度或批量参与。选择一条你确实要参与的活动，点击一次参与。
    参与按钮仍会执行该活动的关注、点赞、转发、评论等原有动作。
@@ -19,6 +19,8 @@ Windows 使用步骤
 原版安装和 %APPDATA%\Binggo 未被本修复版覆盖。
 
 修复内容
+- 转发抽奖的外层文案明确列出关注、转发、点赞、评论且未要求收藏时，显示“活动未要求收藏，跳过”。
+- 无收藏入口时跳过收藏，明确要求收藏的活动继续校验收藏结果。
 - 从旧 dynamic_repost 接口迁移到 https://api.bilibili.com/x/dynamic/feed/create/dyn。
 - 使用 JSON dyn_req、web_repost_src，动态 ID 保持字符串；CSRF 放查询参数。
 - 沿用普通文本转发，不新增富文本 @ 用户解析能力。
