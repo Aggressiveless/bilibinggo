@@ -26,10 +26,13 @@ JOB_ACTION_LABELS: dict[str, str] = {
 
 _PATH_PATTERN = re.compile(r"[A-Za-z]:\\[^\s\"']+")
 _UNIX_PATH_PATTERN = re.compile(r"(?<!\w)/(?:[\w.-]+/)+[\w.-]+\.(?:py|json|txt|png)")
+_CONNECTION_REFUSED_MARKERS = ("[winerror 10061]", "[errno 111]", "connection refused")
 
 
 def friendly_network_error(message: str) -> str:
     lowered = message.lower()
+    if any(marker in lowered for marker in _CONNECTION_REFUSED_MARKERS):
+        return "连接 B 站时被拒绝，请检查 Binggo 使用的代理地址和端口"
     markers = (
         "handshake",
         "timed out",
@@ -95,6 +98,8 @@ def friendly_error(exc: BaseException) -> str:
         return msg or "登录失败，请重试"
 
     msg = str(exc).strip()
+    if any(marker in msg.lower() for marker in _CONNECTION_REFUSED_MARKERS):
+        return friendly_network_error(msg)
     if isinstance(exc, ValueError):
         if "缺少 dynamic_id" in msg or "活动 ID 无效" in msg:
             return "未找到活动信息，请刷新页面后重试"

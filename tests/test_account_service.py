@@ -21,6 +21,7 @@ def test_profile_from_network_error_uses_cookie_and_cache(monkeypatch) -> None:
     profile = _profile_from_network_error(RuntimeError("网络请求失败: handshake timed out"))
     assert profile["network_error"] is True
     assert profile["cookie_saved"] is True
+    assert profile["expired"] is False
     assert profile["mid"] == 999
     assert profile["uname"] == "cached_user"
     assert "B 站" in profile["message"]

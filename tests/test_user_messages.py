@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from web.user_messages import friendly_error, sanitize_log
+from httpx import ConnectError
+
+from web.user_messages import friendly_error, friendly_network_error, sanitize_log
 
 
 def test_sanitize_log_keeps_summary_when_traceback_present() -> None:
@@ -24,6 +26,12 @@ def test_sanitize_log_keeps_summary_when_traceback_present() -> None:
 def test_friendly_error_hides_traceback() -> None:
     exc = RuntimeError("Traceback (most recent call last):\n  File foo.py")
     assert "Traceback" not in friendly_error(exc)
+
+
+def test_connection_refused_explains_proxy_configuration() -> None:
+    message = "[WinError 10061] 由于目标计算机积极拒绝，无法连接。"
+    assert friendly_error(ConnectError(message)) == friendly_network_error(f"网络请求失败: {message}")
+    assert "代理地址和端口" in friendly_error(ConnectError(message))
 
 
 def test_friendly_error_invalid_dynamic_id() -> None:

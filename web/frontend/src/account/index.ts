@@ -34,7 +34,11 @@ export function requireSetup(action) {
   if (action === "login") return true;
   if (!LOGIN_REQUIRED_ACTIONS.has(action)) return true;
   if (!isLoggedIn()) {
-    showToast("请先扫码登录", "info", "登录后才能使用此功能");
+    if (state.account?.network_error && state.account?.cookie_saved) {
+      showToast("暂时无法连接 B 站", "info", state.account.message);
+    } else {
+      showToast("请先扫码登录", "info", "登录后才能使用此功能");
+    }
     return false;
   }
   if (!LLM_REQUIRED_ACTIONS.has(action)) return true;
@@ -51,11 +55,12 @@ export function requireSetup(action) {
 
 export function renderSetupChecklist() {
   const loggedIn = isLoggedIn();
+  const offline = state.account?.network_error && state.account?.cookie_saved;
   const llmOk = isLlmConfigured();
   const llmTested = isLlmTested();
   return `
     <div class="setup-checklist">
-      <span class="setup-pill ${loggedIn ? "ok" : "warn"}"><span class="setup-pill-dot" aria-hidden="true"></span>账号${loggedIn ? "已登录" : "未登录"}</span>
+      <span class="setup-pill ${loggedIn ? "ok" : "warn"}"><span class="setup-pill-dot" aria-hidden="true"></span>账号${loggedIn ? "已登录" : offline ? "待验证" : "未登录"}</span>
       <span class="setup-pill ${llmOk ? "ok" : "warn"}"><span class="setup-pill-dot" aria-hidden="true"></span>LLM${llmOk ? "已配置" : "未配置"}</span>
       <span class="setup-pill ${llmTested ? "ok" : "warn"}"><span class="setup-pill-dot" aria-hidden="true"></span>连接${llmTested ? "已通过" : "未测试"}</span>
     </div>`;

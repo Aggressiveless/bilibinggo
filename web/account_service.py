@@ -127,6 +127,7 @@ def _save_account_cache(profile: dict[str, Any]) -> None:
 
 def _profile_from_network_error(exc: RuntimeError) -> dict[str, Any]:
     profile = _empty_profile(friendly_network_error(str(exc)))
+    profile["expired"] = False
     profile["cookie_saved"] = True
     profile["network_error"] = True
     uid = get_login_uid()
