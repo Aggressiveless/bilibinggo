@@ -2,18 +2,20 @@
 from __future__ import annotations
 
 import time
+from typing import Literal
 
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.control_store import ControlError
-from web.api_errors import AppError
+from web.api_errors import AppError, ErrorCode
 from web.control_service import get_control_service
 
 
 class DiscoveryStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     keywords: list[str] = Field(default_factory=lambda: ["转发抽奖"], min_length=1, max_length=3)
+    mode: Literal["standard", "comprehensive_page"] = "standard"
 
     @field_validator("keywords")
     @classmethod
@@ -47,6 +49,7 @@ def discovery_status(service, job=None):
     summary["eligible"] = len(candidates)
     expires = raw.get("resume_expires_at", raw.get("checked_at", 0) + 1800)
     return {"job": job, "keywords": report.get("keywords") or job.get("keywords") or ["转发抽奖"],
+            "mode": job.get("discovery_mode", "standard"),
             "summary": summary, "candidates": candidates, "stop_message": raw.get("stopped", ""),
             "resume_available": bool(raw.get("has_more") and expires > time.time())}
 
@@ -60,11 +63,16 @@ def install_discovery(app):
 
     @router.post("/start")
     def start(request: DiscoveryStartRequest):
+        if request.mode == "comprehensive_page" and len(request.keywords) != 1:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "综合排序每轮检索一个关键词")
         service = get_control_service()
         try:
             with service.lock:
-                job = service.start("control_discover", {"keywords": request.keywords, "mode": "standard",
-                    "video_limit": 36, "request_budget": 180, "resume": True}, require_llm=True, source="ui")
+                params = {"keywords": request.keywords, "mode": request.mode,
+                          "video_limit": 36, "request_budget": 180, "resume": True}
+                if request.mode == "comprehensive_page":
+                    params["candidate_limit"] = 0
+                job = service.start("control_discover", params, require_llm=True, source="ui")
                 return discovery_status(service, job)
         except ControlError as exc:
             raise AppError(exc.code, str(exc)) from exc

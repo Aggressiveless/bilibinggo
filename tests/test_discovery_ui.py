@@ -29,7 +29,8 @@ def test_start_requires_saved_login_and_ready_model(browser_control, monkeypatch
     assert client.post("/api/discovery/start", json={}).json()["error"]["code"] == "LLM_NOT_READY"
 
 
-def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, monkeypatch):
+@pytest.mark.parametrize("mode", ["standard", "comprehensive_page"])
+def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, monkeypatch, mode):
     client, service, runner = browser_control
     monkeypatch.setattr(service, "account", lambda: {"credentials_present": True})
     monkeypatch.setattr("src.llm_settings.is_llm_ready", lambda: True)
@@ -37,6 +38,8 @@ def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, 
 
     def discover(active_service, job_id, params, event, progress):
         assert active_service is service and params["request_budget"] == 180 and params["resume"]
+        assert params["mode"] == mode and params["video_limit"] == 36
+        assert params.get("candidate_limit", 9) == (0 if mode == "comprehensive_page" else 9)
         progress(step=2, total=36, message="扫描视频", result_patch={"videos_checked": 2})
         entered.set()
         assert event.wait(5), "Stop did not reach the worker"
@@ -48,13 +51,17 @@ def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, 
                 "completion_reason": "cancelled", "partial": True, "has_more": True}
 
     monkeypatch.setattr("web.control_actions.discover", discover)
-    response = client.post("/api/discovery/start", json={"keywords": [" 抽奖 ", "抽奖"]})
+    body = {"keywords": [" 抽奖 ", "抽奖"]}
+    if mode == "comprehensive_page":
+        body["mode"] = mode
+    response = client.post("/api/discovery/start", json=body)
     assert response.status_code == 200
     job_id = response.json()["job"]["job_id"]
     try:
         assert entered.wait(3)
         status = client.get("/api/discovery/current").json()
         assert status["job"]["job_id"] == job_id and status["job"]["source"] == "ui"
+        assert status["mode"] == mode
         assert status["keywords"] == ["抽奖"] and status["summary"]["videos_checked"] == 2
         assert client.post("/api/discovery/start", json={}).status_code == 409
         assert client.post("/api/discovery/stop", json={"job_id": job_id}).status_code == 200
@@ -64,6 +71,7 @@ def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, 
         assert not runner.is_running()
         status = client.get("/api/discovery/current").json()
         assert status["job"]["state"] == "cancelled" and status["resume_available"]
+        assert status["mode"] == mode
         assert status["summary"]["requests_used"] == 5
         assert status["summary"]["verification_remaining"] == 3
         assert "已停止检索" in status["job"]["progress"]["message"]
@@ -82,7 +90,8 @@ def test_stop_cannot_cancel_unrelated_job_and_host_origin_are_checked(browser_co
 
 
 @pytest.mark.parametrize("body", [{"keywords": []}, {"keywords": [" "]}, {"keywords": ["a"] * 4},
-                                      {"keywords": ["a" * 81]}, {"request_budget": 0}, {"action": "participate"}])
+                                      {"keywords": ["a" * 81]}, {"request_budget": 0}, {"action": "participate"},
+                                      {"mode": "unknown"}, {"mode": "comprehensive_page", "keywords": ["a", "b"]}])
 def test_browser_cannot_submit_invalid_or_unrelated_actions(browser_control, body):
     client, _, _ = browser_control
     assert client.post("/api/discovery/start", json=body).status_code == 400

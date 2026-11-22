@@ -327,6 +327,13 @@
                   <label class="field-label" for="discovery-keywords">搜索关键词</label>
                   <input id="discovery-keywords" class="form-input" value="转发抽奖" maxlength="242" required aria-describedby="discovery-help" />
                 </div>
+                <div class="discovery-mode">
+                  <label class="field-label" for="discovery-mode">视频排序</label>
+                  <select id="discovery-mode" class="form-input" aria-describedby="discovery-help">
+                    <option value="standard">最新发布</option>
+                    <option value="comprehensive_page">综合排序</option>
+                  </select>
+                </div>
                 <div class="action-row">
                   <button type="submit" class="btn btn-primary btn-pill" id="discovery-start" disabled>开始检索</button>
                   <button type="button" class="btn btn-secondary btn-pill" id="discovery-stop" disabled>停止检索</button>

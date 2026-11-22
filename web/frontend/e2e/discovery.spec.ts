@@ -10,8 +10,8 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/start")) {
       starts += 1;
-      expect(route.request().postDataJSON()).toEqual({ keywords: ["转发抽奖"] });
-      snapshot = { ...snapshot, job: { job_id: starts, state: "running", cancel_requested: false,
+      expect(route.request().postDataJSON()).toEqual({ keywords: ["转发抽奖"], mode: "comprehensive_page" });
+      snapshot = { ...snapshot, mode: "comprehensive_page", job: { job_id: starts, state: "running", cancel_requested: false,
         progress: { message: "扫描视频 2/36" } }, summary: { videos_checked: 2, requests_used: 5, verification_remaining: 8 } };
     } else if (path.endsWith("/stop")) {
       stops += 1;
@@ -24,10 +24,12 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
   });
   await gotoOverview(page);
   await expect(page.locator("#discovery-stop")).toBeDisabled();
+  await page.getByLabel("视频排序").selectOption("comprehensive_page");
   await page.locator("#discovery-start").click();
   await expect(page.locator("#discovery-start")).toBeDisabled();
   await expect(page.locator("#discovery-stop")).toBeEnabled();
   await expect(page.locator("#discovery-keywords")).toBeDisabled();
+  await expect(page.getByLabel("视频排序")).toBeDisabled();
   await expect(page.locator("#discovery-videos")).toHaveText("2");
   await page.locator("#discovery-stop").click();
   await expect(page.locator("#discovery-start")).toHaveText("继续检索");
@@ -37,6 +39,10 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
   await expect(page.locator("#discovery-results a")).toHaveAttribute("href", "https://www.bilibili.com/opus/1234567890123456789");
   await page.reload();
   await expect(page.locator("#discovery-start")).toHaveText("继续检索");
+  await expect(page.getByLabel("视频排序")).toHaveValue("comprehensive_page");
+  await page.getByLabel("视频排序").selectOption("standard");
+  await expect(page.locator("#discovery-start")).toHaveText("开始检索");
+  await page.getByLabel("视频排序").selectOption("comprehensive_page");
   await page.locator("#discovery-start").click();
   await expect(page.locator("#discovery-stop")).toBeEnabled();
   expect(starts).toBe(2);

@@ -12,6 +12,7 @@ interface DiscoveryStatus {
     progress?: { message?: string };
   };
   keywords: string[];
+  mode?: "standard" | "comprehensive_page";
   summary: {
     videos_checked?: number;
     verification_remaining?: number;
@@ -85,7 +86,7 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
       badge = status.resume_available ? "本轮已结束" : "检索完成";
       message = `已找到 ${summary.eligible || 0} 条可参与活动。`;
     }
-    if (status.resume_available) message += "进度已保存，点击「继续检索」接着处理。";
+    if (status.resume_available) message += "进度已保存，使用相同关键词和排序可继续。";
   }
   setText("discovery-badge", badge);
   setText("discovery-status", message);
@@ -110,19 +111,35 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
 export function bindDiscovery() {
   const form = element<HTMLFormElement>("discovery-form");
   const input = element<HTMLInputElement>("discovery-keywords");
+  const mode = element<HTMLSelectElement>("discovery-mode");
   const stop = element<HTMLButtonElement>("discovery-stop");
-  if (!form || !input || !stop) return;
+  if (!form || !input || !mode || !stop) return;
   let snapshot: DiscoveryStatus = { job: null, keywords: ["转发抽奖"], summary: {}, candidates: [], resume_available: false };
   let submitting = false;
   let reading = false;
   let revision = 0;
   let initialized = false;
 
+  const keywords = () => [...new Set(input.value.split(/[,，\n]/).map((word) => word.trim()).filter(Boolean))];
+  const render = () => {
+    const sameSearch = mode.value === (snapshot.mode || "standard") &&
+      JSON.stringify(keywords()) === JSON.stringify(snapshot.keywords);
+    renderDiscovery(snapshot, submitting);
+    const start = element<HTMLButtonElement>("discovery-start");
+    if (start && !start.disabled && !sameSearch) start.textContent = "开始检索";
+    mode.disabled = input.disabled;
+    setText("discovery-help", mode.value === "comprehensive_page"
+      ? "每轮搜索 1 个关键词，检查综合排序第一页，最多 36 个视频。每轮最多 180 次请求。"
+      : "最多 3 个关键词，用逗号分隔。每轮最多 180 次请求，未完成时可继续上次进度。");
+  };
   const apply = (value: DiscoveryStatus) => {
     snapshot = value;
-    if (!initialized || value.job?.state === "running") input.value = value.keywords.join("，");
+    if (!initialized || value.job?.state === "running") {
+      input.value = value.keywords.join("，");
+      mode.value = value.mode || "standard";
+    }
     initialized = true;
-    renderDiscovery(value, submitting);
+    render();
   };
   const refresh = async () => {
     if (submitting || reading) return;
@@ -141,7 +158,7 @@ export function bindDiscovery() {
   const submit = async (path: string, body: object) => {
     submitting = true;
     revision += 1;
-    renderDiscovery(snapshot, true);
+    render();
     try {
       apply(await fetchJSON<DiscoveryStatus>(path, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -151,21 +168,28 @@ export function bindDiscovery() {
       notifyJobStartError(error, "control_discover");
     } finally {
       submitting = false;
-      renderDiscovery(snapshot);
+      render();
       refresh();
     }
   };
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     if (submitting || snapshot.job?.state === "running" || !requireSetup("control_discover")) return;
-    const words = [...new Set(input.value.split(/[,，\n]/).map((word) => word.trim()).filter(Boolean))];
+    const words = keywords();
     if (!words.length || words.length > 3 || words.some((word) => word.length > 80)) {
       showToast("请输入 1–3 个关键词，每个不超过 80 字", "info");
       input.focus();
       return;
     }
-    submit("/api/discovery/start", { keywords: words });
+    if (mode.value === "comprehensive_page" && words.length !== 1) {
+      showToast("综合排序每轮检索一个关键词", "info");
+      input.focus();
+      return;
+    }
+    submit("/api/discovery/start", { keywords: words, mode: mode.value });
   });
+  input.addEventListener("input", render);
+  mode.addEventListener("change", render);
   stop.addEventListener("click", () => {
     if (submitting || snapshot.job?.state !== "running" || snapshot.job.cancel_requested) return;
     submit("/api/discovery/stop", { job_id: snapshot.job.job_id });
