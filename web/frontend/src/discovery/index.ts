@@ -1,16 +1,20 @@
 import { fetchJSON } from "../api/client";
 import { requireSetup } from "../account/index";
-import { loadSummary } from "../activities/index";
+import { loadActivities, loadSummary } from "../activities/index";
 import { notifyJobStartError, startPolling } from "../jobs/index";
 import { showToast } from "../shell/toast";
 
+interface DiscoveryJob {
+  job_id: number;
+  state: string;
+  cancel_requested: boolean;
+  progress?: { message?: string };
+}
+
 interface DiscoveryStatus {
-  job: null | {
-    job_id: number;
-    state: string;
-    cancel_requested: boolean;
-    progress?: { message?: string };
-  };
+  job: DiscoveryJob | null;
+  queue_job?: DiscoveryJob | null;
+  queue?: { total: number; imported: number; existing: number; expired: number; skipped: number; remaining: number; message: string };
   keywords: string[];
   mode?: "standard" | "comprehensive_page";
   summary: {
@@ -28,7 +32,12 @@ interface DiscoveryStatus {
 
 const phases: Record<string, string> = {
   search: "搜索视频", scan_videos: "扫描视频", resolve_sources: "解析活动入口", verify_candidates: "核验候选活动",
+  import: "正在导入活动",
 };
+
+function activeJob(status: DiscoveryStatus) {
+  return status.queue_job?.state === "running" ? status.queue_job : status.job;
+}
 
 function element<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
@@ -40,19 +49,20 @@ function setText(id: string, text: string | number) {
 }
 
 export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
-  const job = status.job;
+  const job = activeJob(status);
   const running = job?.state === "running";
   const stopping = running && job.cancel_requested;
+  const importing = running && (job === status.queue_job || status.summary.phase === "import");
   const start = element<HTMLButtonElement>("discovery-start");
   const stop = element<HTMLButtonElement>("discovery-stop");
   const input = element<HTMLInputElement>("discovery-keywords");
   if (start) {
     start.disabled = running || submitting;
-    start.textContent = running ? "检索中…" : status.resume_available ? "继续检索" : "开始检索";
+    start.textContent = importing ? "导入中…" : running ? "检索中…" : status.resume_available ? "继续检索" : "开始检索";
   }
   if (stop) {
     stop.disabled = !running || stopping || submitting;
-    stop.textContent = stopping ? "正在停止…" : "停止检索";
+    stop.textContent = stopping ? "正在停止…" : importing ? "停止导入" : "停止检索";
   }
   if (input) input.disabled = running || submitting;
   const summary = status.summary;
@@ -63,8 +73,8 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
   let badge = "待开始";
   let message = "输入关键词后开始检索。";
   if (running) {
-    badge = stopping ? "正在停止" : phases[summary.phase || ""] || "检索中";
-    message = stopping ? "正在停止检索，等待当前请求返回并保存进度…" : job.progress?.message || "正在准备检索…";
+    badge = stopping ? "正在停止" : importing ? "正在导入活动" : phases[summary.phase || ""] || "检索中";
+    message = stopping ? "正在停止任务，等待当前请求返回并保存进度…" : job.progress?.message || "正在准备任务…";
   } else if (job) {
     const reason = summary.completion_reason;
     if (reason === "request_budget") {
@@ -90,6 +100,18 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
   }
   setText("discovery-badge", badge);
   setText("discovery-status", message);
+  const queue = status.queue;
+  const queuePanel = element("discovery-queue");
+  const importButton = element<HTMLButtonElement>("discovery-import");
+  if (queuePanel) queuePanel.hidden = !queue?.total;
+  if (importButton) {
+    importButton.hidden = !queue?.remaining || !!running;
+    importButton.disabled = submitting;
+  }
+  if (queue?.total) {
+    const skipped = queue.existing + queue.expired + queue.skipped;
+    setText("discovery-queue-status", `已入库 ${queue.imported} 条 · 跳过 ${skipped} 条 · 待导入 ${queue.remaining} 条${queue.message ? `。${queue.message}` : ""}`);
+  }
   const results = element<HTMLUListElement>("discovery-results");
   if (results) {
     results.replaceChildren();
@@ -113,12 +135,14 @@ export function bindDiscovery() {
   const input = element<HTMLInputElement>("discovery-keywords");
   const mode = element<HTMLSelectElement>("discovery-mode");
   const stop = element<HTMLButtonElement>("discovery-stop");
-  if (!form || !input || !mode || !stop) return;
+  const importButton = element<HTMLButtonElement>("discovery-import");
+  if (!form || !input || !mode || !stop || !importButton) return;
   let snapshot: DiscoveryStatus = { job: null, keywords: ["转发抽奖"], summary: {}, candidates: [], resume_available: false };
   let submitting = false;
   let reading = false;
   let revision = 0;
   let initialized = false;
+  let shownImportCount = 0;
 
   const keywords = () => [...new Set(input.value.split(/[,，\n]/).map((word) => word.trim()).filter(Boolean))];
   const render = () => {
@@ -133,6 +157,11 @@ export function bindDiscovery() {
       : "最多 3 个关键词，用逗号分隔。每轮最多 180 次请求，未完成时可继续上次进度。");
   };
   const apply = (value: DiscoveryStatus) => {
+    const imported = value.queue?.imported || 0;
+    if (imported && (value.job?.job_id !== snapshot.job?.job_id || imported > shownImportCount)) {
+      loadActivities().catch(() => {});
+    }
+    shownImportCount = imported;
     snapshot = value;
     if (!initialized || value.job?.state === "running") {
       input.value = value.keywords.join("，");
@@ -174,7 +203,7 @@ export function bindDiscovery() {
   };
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (submitting || snapshot.job?.state === "running" || !requireSetup("control_discover")) return;
+    if (submitting || activeJob(snapshot)?.state === "running" || !requireSetup("control_discover")) return;
     const words = keywords();
     if (!words.length || words.length > 3 || words.some((word) => word.length > 80)) {
       showToast("请输入 1–3 个关键词，每个不超过 80 字", "info");
@@ -191,8 +220,13 @@ export function bindDiscovery() {
   input.addEventListener("input", render);
   mode.addEventListener("change", render);
   stop.addEventListener("click", () => {
-    if (submitting || snapshot.job?.state !== "running" || snapshot.job.cancel_requested) return;
-    submit("/api/discovery/stop", { job_id: snapshot.job.job_id });
+    const job = activeJob(snapshot);
+    if (submitting || job?.state !== "running" || job.cancel_requested) return;
+    submit("/api/discovery/stop", { job_id: job.job_id });
+  });
+  importButton.addEventListener("click", () => {
+    if (submitting || activeJob(snapshot)?.state === "running" || !snapshot.job || !snapshot.queue?.remaining || !requireSetup("control_discover")) return;
+    submit("/api/discovery/import", { job_id: snapshot.job.job_id });
   });
   refresh();
   window.setInterval(refresh, 3000);

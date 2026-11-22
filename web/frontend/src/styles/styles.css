@@ -28,6 +28,8 @@
 .discovery-metrics strong { font-size: 23px; font-variant-numeric: tabular-nums; }
 .discovery-metrics span { font-size: 13px; color: var(--foreground-muted); }
 .discovery-status { margin: 0; color: var(--foreground-muted); font-size: 14px; overflow-wrap: anywhere; }
+.discovery-queue { align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.discovery-queue[hidden] { display: none; }
 .discovery-results { padding: 14px 0 0 20px; margin: 14px 0 0; border-top: 1px solid var(--border-soft); }
 .discovery-results li { margin: 8px 0; overflow-wrap: anywhere; }
 .discovery-results a { color: var(--link); }

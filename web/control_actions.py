@@ -31,7 +31,15 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
     if action == "control_discover":
         result = discover(service, job_id, params, cancel_event, on_progress)
     elif action == "control_import":
-        result = import_candidates(service, params)
+        if params.get("queue_verified"):
+            from web.discovery_queue import enqueue_verified
+            with discovery_client(service, cancel_event, budget=110) as client:
+                try:
+                    result = enqueue_verified(service, params["discovery_job_id"], client, cancel_event, on_progress)
+                finally:
+                    client.save()
+        else:
+            result = import_candidates(service, params)
     elif action == "control_participate":
         result = execute_plan(service, job_id, params["plan_id"], on_progress, cancel_event)
     elif action == "control_network":
@@ -57,6 +65,14 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
             "error": "检索中断，进度已保存",
         }.get(result.get("completion_reason"), "检索完成"))
         message = f"{prefix}：找到 {result['eligible']} 条可导入活动，检查 {result.get('videos_checked', 0)} 个视频"
+        if "queue" in result:
+            queue = result["queue"]
+            message += f"，已入库 {queue['imported']} 条"
+            if queue["remaining"]:
+                message += f"，剩余 {queue['remaining']} 条待导入"
+    elif action == "control_import" and params.get("queue_verified"):
+        cancelled = bool(cancel_event and cancel_event.is_set())
+        message = result["message"] or f"活动导入完成，本次报告已入库 {result['imported']} 条"
     else:
         check_cancel(cancel_event)
         message = "控制任务完成"
@@ -87,10 +103,12 @@ def discovery_candidates(rows):
     return values
 
 
-def discover(service, job_id, params, event, progress=None):
-    from src.lottery_discovery import DiscoveryClient, DiscoveryStopped, expand_keywords
-    from src.lottery_discovery_broad import discover_page as find
+def discovery_client(service, event, *, budget, min_interval_seconds=2.0):
+    from src.lottery_discovery import DiscoveryClient, DiscoveryStopped
+
     class CancellableClient(DiscoveryClient):
+        stop_reason = ""
+
         def _wait_for_request(self, seconds):
             if event is None:
                 return super()._wait_for_request(seconds)
@@ -105,9 +123,21 @@ def discover(service, job_id, params, event, progress=None):
                 raise DiscoveryStopped("用户取消")
             return super().read(*args, **kwargs)
         def _http_get(self, *args, **kwargs):
-            if event is not None and event.is_set():
-                raise DiscoveryStopped("用户取消")
-            return super()._http_get(*args, **kwargs)
+            try:
+                if event is not None and event.is_set():
+                    raise DiscoveryStopped("用户取消")
+                return super()._http_get(*args, **kwargs)
+            except DiscoveryStopped as exc:
+                self.stop_reason = str(exc)
+                raise
+
+    return CancellableClient(service.home / "data/lottery-discovery-cache.json", budget=budget,
+                             min_interval_seconds=min_interval_seconds)
+
+
+def discover(service, job_id, params, event, progress=None):
+    from src.lottery_discovery import expand_keywords
+    from src.lottery_discovery_broad import discover_page as find
     words = expand_keywords(params["keywords"]) if params.get("expand_keywords") else params["keywords"]
     comprehensive = params.get("mode") == "comprehensive_page"
     def publish(snapshot):
@@ -124,22 +154,32 @@ def discover(service, job_id, params, event, progress=None):
     from src.participation_store import load_participations
     from src.activity_store import known_activity_ids
     joined = {str(k) for k, v in load_participations().items() if v.user_status == "已参加"}
-    with CancellableClient(service.home / "data/lottery-discovery-cache.json", budget=params.get("request_budget", 180),
-                           min_interval_seconds=params.get("min_interval_seconds", 2.0)) as client:
+    queue = None
+    with discovery_client(service, event, budget=params.get("request_budget", 180),
+                          min_interval_seconds=params.get("min_interval_seconds", 2.0)) as client:
         try:
             report = find(client, words, video_limit=params.get("video_limit", 36), now=int(time.time()),
                           comprehensive_page=comprehensive, joined_ids=joined, known_ids=known_activity_ids(), on_progress=publish,
                           candidate_limit=params.get("candidate_limit", 9), author_dynamic_limit=params.get("author_dynamic_limit", 2),
                           resume=params.get("resume", True))
+            rows = discovery_candidates([row for category in ("open", "review", "closed", "joined") for row in report[category]])
+            value = {"job_id": job_id, "candidates": rows, "errors": [{"message": str(v)} for v in report["errors"][:100]],
+                     "stopped": bool(report["stopped"]), "requests_used": report["requests"], "raw": report, "keywords": words,
+                     **{k: report[k] for k in ("session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining")}}
+            service.store.put("discovery", str(job_id), redact_obj(value))
+            if params.get("auto_queue") and report["completion_reason"] in {"search_complete", "target_reached"}:
+                from web.discovery_queue import enqueue_verified
+
+                def publish_import(**kwargs):
+                    if progress:
+                        progress(**kwargs, result_patch={"phase": "import", "requests_used": client.request_count})
+
+                queue = enqueue_verified(service, job_id, client, event, publish_import)
         finally:
             client.save()
-    rows = discovery_candidates([row for category in ("open", "review", "closed", "joined") for row in report[category]])
-    value = {"job_id": job_id, "candidates": rows, "errors": [{"message": str(v)} for v in report["errors"][:100]],
-             "stopped": bool(report["stopped"]), "requests_used": report["requests"], "raw": report, "keywords": words,
-             **{k: report[k] for k in ("session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining")}}
-    service.store.put("discovery", str(job_id), redact_obj(value))
     return {"discovery_job_id": job_id, "candidates": len(rows), "eligible": sum(v["eligible"] for v in rows),
-            "requests_used": report["requests"], "partial": bool(value["stopped"] or value["errors"] or report["has_more"]), "errors": value["errors"],
+            "requests_used": client.request_count, "partial": bool(value["stopped"] or value["errors"] or report["has_more"] or (queue or {}).get("remaining")),
+            "errors": value["errors"], **({"queue": queue} if queue is not None else {}),
             **{k: report[k] for k in ("videos_checked", "search_video_count", "completion_reason", "cache_hits", "llm_requests", "llm_cache_hits",
                                      "session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining",
                                      "min_interval_seconds", "elapsed_seconds")}}

@@ -134,6 +134,8 @@ class ControlService:
         if action == "control_discover":
             metadata["keywords"] = (params or {}).get("keywords", [])
             metadata["discovery_mode"] = (params or {}).get("mode", "standard")
+        elif action == "control_import" and (params or {}).get("queue_verified"):
+            metadata["discovery_queue"] = params["discovery_job_id"]
         job = self.store.new_job(action, BOOT_ID, metadata=metadata)
         job_id = job["job_id"]
         values = {**(params or {}), "_control_job_id": job_id}

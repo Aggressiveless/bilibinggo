@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+from contextlib import nullcontext
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
@@ -68,6 +69,8 @@ def run_new_links_pipeline(
     *,
     workers: int = 4,
     on_progress: ProgressCallback | None = None,
+    client: BilibiliClient | None = None,
+    accept: Callable[[EnrichedActivity], bool] | None = None,
 ) -> PipelineResult:
     """Step 2～5：仅处理新链接（内存流转，末步落库）。"""
     dynamic_ids = _dedupe_new_dynamic_ids(raw_urls)
@@ -93,7 +96,7 @@ def run_new_links_pipeline(
     if on_progress:
         on_progress(0, total, f"正在分类 {total} 条新链接…")
 
-    with BilibiliClient() as shared_client:
+    with (nullcontext(client) if client is not None else BilibiliClient()) as shared_client:
         done = 0
         for dynamic_id in dynamic_ids:
             outcome = classify_new_link(shared_client, dynamic_id)
@@ -147,7 +150,7 @@ def run_new_links_pipeline(
             classify_notice_business_id=outcome.notice_business_id,
         )
 
-    with BilibiliClient() as enrich_client:
+    with (nullcontext(client) if client is not None else BilibiliClient()) as enrich_client:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = {
                 executor.submit(
@@ -180,8 +183,10 @@ def run_new_links_pipeline(
                     raise
                 if activity.skipped:
                     raise RuntimeError(f"活动 {activity.dynamic_id} 不应为 skipped")
-                row = apply_initial_status(activity.to_dict())
-                enriched_rows.append(row)
+                if accept is None or accept(activity):
+                    enriched_rows.append(apply_initial_status(activity.to_dict()))
+                else:
+                    skip_reasons["不再可参与"] = skip_reasons.get("不再可参与", 0) + 1
                 done += 1
                 if on_progress:
                     on_progress(done, enrich_total, "详情进度")

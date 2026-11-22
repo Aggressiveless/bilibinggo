@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from src.control_store import ControlError
 from web.api_errors import AppError, ErrorCode
 from web.control_service import get_control_service
+from web.discovery_queue import queue_summary
 
 
 class DiscoveryStartRequest(BaseModel):
@@ -48,9 +49,12 @@ def discovery_status(service, job=None):
     candidates = [row for row in report.get("candidates", []) if row.get("eligible")]
     summary["eligible"] = len(candidates)
     expires = raw.get("resume_expires_at", raw.get("checked_at", 0) + 1800)
+    queue_job = service.store.get("discovery_queue_job", str(job["job_id"]))
     return {"job": job, "keywords": report.get("keywords") or job.get("keywords") or ["转发抽奖"],
             "mode": job.get("discovery_mode", "standard"),
             "summary": summary, "candidates": candidates, "stop_message": raw.get("stopped", ""),
+            "queue": queue_summary(service, job["job_id"], report),
+            "queue_job": service.job(queue_job["id"]) if queue_job else None,
             "resume_available": bool(raw.get("has_more") and expires > time.time())}
 
 
@@ -69,10 +73,28 @@ def install_discovery(app):
         try:
             with service.lock:
                 params = {"keywords": request.keywords, "mode": request.mode,
-                          "video_limit": 36, "request_budget": 180, "resume": True}
+                          "video_limit": 36, "request_budget": 180, "resume": True, "auto_queue": True}
                 if request.mode == "comprehensive_page":
                     params["candidate_limit"] = 0
                 job = service.start("control_discover", params, require_llm=True, source="ui")
+                return discovery_status(service, job)
+        except ControlError as exc:
+            raise AppError(exc.code, str(exc)) from exc
+
+    @router.post("/import")
+    def import_remaining(request: DiscoveryStopRequest):
+        service = get_control_service()
+        try:
+            with service.lock:
+                job = service.job(request.job_id)
+                if job["action"] != "control_discover" or job["state"] == "running":
+                    raise AppError(ErrorCode.VALIDATION_ERROR, "请选择已结束的检索任务")
+                report = service.store.get("discovery", str(request.job_id))
+                if not report or not queue_summary(service, request.job_id, report)["remaining"]:
+                    return discovery_status(service, job)
+                queued = service.start("control_import", {"discovery_job_id": request.job_id, "queue_verified": True},
+                                       require_llm=True, source="ui")
+                service.store.put("discovery_queue_job", str(request.job_id), {"id": queued["job_id"]})
                 return discovery_status(service, job)
         except ControlError as exc:
             raise AppError(exc.code, str(exc)) from exc
@@ -83,11 +105,11 @@ def install_discovery(app):
         try:
             with service.lock:
                 job = service.job(request.job_id)
-                if job["action"] != "control_discover":
+                if job["action"] != "control_discover" and not (job["action"] == "control_import" and job.get("discovery_queue")):
                     raise ControlError("JOB_NOT_CANCELLABLE", "该任务不是检索任务")
                 if job["state"] == "running":
                     job = service.dispatch("job_cancel", {"job_id": request.job_id})
-                return discovery_status(service, job)
+                return discovery_status(service, service.job(job["discovery_queue"]) if job.get("discovery_queue") else job)
         except ControlError as exc:
             raise AppError(exc.code, str(exc)) from exc
 
