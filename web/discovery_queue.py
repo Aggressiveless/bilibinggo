@@ -34,11 +34,13 @@ def _still_open(activity):
             and (not activity.lottery_time or activity.lottery_time > time.time()))
 
 
-def enqueue_verified(service, job_id, client, cancel_event, on_progress):
+def enqueue_verified(service, job_id, client, cancel_event, on_progress, selected_ids=None):
     report = service.store.get("discovery", str(job_id))
     if not report:
         raise ControlError("NOT_FOUND", "检索报告不存在")
     candidates = verified_candidates(report)
+    if selected_ids is not None:
+        candidates = {identifier: candidates[identifier] for identifier in selected_ids if identifier in candidates}
     outcomes = (service.store.get("discovery_queue", str(job_id)) or {}).get("outcomes", {})
     known = known_activity_ids()
     joined = {str(key) for key, value in load_participations().items() if value.user_status == "已参加"}

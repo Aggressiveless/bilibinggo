@@ -110,7 +110,7 @@ def test_latest_discovery_is_restored_even_after_other_jobs(browser_control):
     assert not status["resume_available"] and status["summary"]["verification_remaining"] == 133
 
 
-def test_completed_browser_search_imports_and_can_resume_with_no_search(browser_control, monkeypatch):
+def test_completed_search_keeps_bvs_and_imports_only_confirmed_matches(browser_control, monkeypatch):
     from types import SimpleNamespace
 
     from src.activity_store import append_activities, known_activity_ids
@@ -125,7 +125,11 @@ def test_completed_browser_search_imports_and_can_resume_with_no_search(browser_
         opened.append({"status": "open", "dynamic_id": identifier, "url": f"https://www.bilibili.com/opus/{identifier}",
                        "deadline": time.time() + (-60 if i == 2 else 3600)})
 
+    opened[0]["rule_text"] = "视频一键三连参与"
+    opened[1]["rule_text"] = "只需关注并转发，无需投币"
+
     def search(*args, **kwargs):
+        kwargs["on_video_page"](["BV11a1111111", "BV11a1111112", "BV11a1111113"])
         return dict(open=opened, review=[], closed=[], joined=[], errors=[], stopped="", requests=0,
                     session_id="test", resumed=False, scan_completed=True, has_more=False, verification_remaining=0,
                     sources_remaining=0, videos_checked=3, search_video_count=3, completion_reason="search_complete",
@@ -136,7 +140,7 @@ def test_completed_browser_search_imports_and_can_resume_with_no_search(browser_
     def import_one(urls, *, workers, client, accept):
         did = urls[0].rsplit("/", 1)[-1]
         attempted.append(did)
-        if attempted == ids[:2]:
+        if attempted == [ids[1]]:
             raise DiscoveryStopped("已达到本轮 B 站请求预算")
         assert accept(SimpleNamespace(draw_status="active", platform_participated=False, reserve_reserved=False, lottery_time=None))
         assert not accept(SimpleNamespace(draw_status="ended", platform_participated=False, reserve_reserved=False, lottery_time=None))
@@ -155,18 +159,31 @@ def test_completed_browser_search_imports_and_can_resume_with_no_search(browser_
     start = client.post("/api/discovery/start", json={"keywords": ["抽奖"], "mode": "comprehensive_page"}).json()
     job_id = start["job"]["job_id"]
     summary = finished_status()
-    assert summary["queue"]["imported"] == 1 and summary["queue"]["remaining"] == 2
-    assert known_activity_ids() == {ids[0]}
+    assert summary["queue"]["imported"] == 0 and summary["pending_selection"] == 2
+    assert summary["bv_count"] == 3 and "candidates" not in summary
+    assert not known_activity_ids()
 
-    assert client.post("/api/discovery/import", json={"job_id": job_id}).status_code == 200
+    assert client.post("/api/discovery/import", json={"job_id": job_id}).status_code == 400
+    assert client.post("/api/discovery/filter", json={"job_id": job_id, "settings": {"coins": "not_required"}}).status_code == 200
+    summary = finished_status()
+    assert summary["filter"]["matched"] == 1 and summary["bv_count"] == 3
+    assert not known_activity_ids()
+    assert client.post("/api/discovery/import", json={"job_id": job_id, "selection": "filtered", "filter_id": "wrong"}).status_code == 400
+    selected = {"job_id": job_id, "selection": "filtered", "filter_id": summary["filter"]["id"]}
+    assert client.post("/api/discovery/import", json=selected).status_code == 200
+    assert finished_status()["queue"]["imported"] == 0
+    assert client.post("/api/discovery/import", json=selected).status_code == 200
     summary = finished_status()
     assert summary["queue_job"]["state"] == "success"
-    assert summary["queue"]["imported"] == 2 and summary["queue"]["expired"] == 1
-    assert summary["queue"]["remaining"] == 0
-    assert known_activity_ids() == set(ids[:2])
-    assert attempted == [ids[0], ids[1], ids[1]]
-    assert client.post("/api/discovery/import", json={"job_id": job_id}).status_code == 200
+    assert summary["queue"]["imported"] == 1 and summary["pending_selection"] == 1
+    assert known_activity_ids() == {ids[1]}
+    assert attempted == [ids[1], ids[1]]
+    assert client.post("/api/discovery/import", json=selected).status_code == 200
     assert not runner.is_running()
+    assert client.post("/api/discovery/import", json={"job_id": job_id, "selection": "all"}).status_code == 200
+    summary = finished_status()
+    assert summary["queue"]["imported"] == 2 and summary["pending_selection"] == 0
+    assert known_activity_ids() == set(ids[:2]) and summary["bv_count"] == 3
 
 
 def test_stop_interrupts_rate_wait_without_sending_another_request(isolated_home, monkeypatch):

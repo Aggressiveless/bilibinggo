@@ -16,6 +16,19 @@ AUTHOR_SEARCH_FEATURES = "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,f
 SESSION_TTL_SECONDS = 1800
 
 
+def restore_video_index(store, cache_path):
+    if store.get("discovery_meta", "video_index_restored"):
+        return
+    cache = d._read_cache(cache_path)
+    pages = [session.get("videos", []) for session in cache.get("broad_sessions", {}).values()]
+    for key, entry in cache.get("entries", {}).items():
+        if key.startswith(json.dumps([d.SEARCH_URL])[:-1] + ","):
+            pages.append(((entry.get("value") or {}).get("data") or {}).get("result") or [])
+    store.remember_discovery_videos(str(row["bvid"]) for page in pages for row in page
+                                    if d.BV_RE.fullmatch(str(row.get("bvid") or "")))
+    store.put("discovery_meta", "video_index_restored", {"done": True})
+
+
 def search_author_lotteries(client, uid: str, *, limit=2):
     """Use the same keyword-search endpoint as Bilibili's current space UI."""
     referer = f"https://space.bilibili.com/{uid}/search/dynamic?keyword=%E6%8A%BD%E5%A5%96"
@@ -55,7 +68,7 @@ def _fair_order(tasks):
 
 def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_page=True,
                   candidate_limit=9, known_ids=None, joined_ids=None, author_dynamic_limit=2,
-                  resume=True, on_progress=None):
+                  resume=True, on_progress=None, on_video_page=None):
     now = int(time.time()) if now is None else now
     known_ids, joined_ids = set(known_ids or []), set(joined_ids or [])
     cache = getattr(client, "cache", {})
@@ -68,6 +81,8 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
         "source_tasks": [], "tasks": [], "rows": [], "errors": [], "author_queries": {},
         "phase": "search", "done": False, "verified": 0}
     sessions[key] = state
+    if on_video_page and state["videos"]:
+        on_video_page(row["bvid"] for row in state["videos"])
     # Bound storage without dropping this run's cursor.
     for old in sorted([k for k in sessions if k != key], key=lambda k: sessions[k].get("expires_at", 0))[:-3]:
         del sessions[old]
@@ -126,7 +141,10 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             if d.api_code(response) != 0 or not isinstance(response.get("data"), dict):
                 raise RuntimeError(f"视频搜索未返回有效结果（业务码 {d.api_code(response)}）")
             seen = {row["bvid"] for row in state["videos"]}
-            for row in (response.get("data") or {}).get("result") or []:
+            page = (response.get("data") or {}).get("result") or []
+            if on_video_page:
+                on_video_page(str(row["bvid"]) for row in page if d.BV_RE.fullmatch(str(row.get("bvid") or "")))
+            for row in page:
                 identifier = str(row.get("bvid") or "")
                 if d.BV_RE.fullmatch(identifier) and identifier not in seen and len(state["videos"]) < video_limit:
                     state["videos"].append(row)

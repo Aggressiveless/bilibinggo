@@ -13,7 +13,7 @@ from src.forward_parser import _extract_desc_text
 from src.lottery_api import fetch_dynamic_detail, fetch_notice_for_interact, fetch_opus_detail_item
 from src.sources.common import opus_link
 
-ActionName = Literal["like", "follow", "favorite", "repost", "comment", "reserve"]
+ActionName = Literal["like", "follow", "favorite", "repost", "comment", "reserve", "coin"]
 
 DEFAULT_PARTICIPATE_TEXT = "好运连连！"
 
@@ -55,6 +55,7 @@ class ActionResult:
     action: ActionName
     ok: bool
     detail: str = ""
+    coins_used: int | None = None
 
 
 @dataclass

@@ -37,7 +37,8 @@ class ParticipationActionRecord:
 
 
 def serialize_actions(actions: list[ActionResult]) -> list[dict]:
-    return [{"action": item.action, "ok": item.ok, "detail": item.detail} for item in actions]
+    return [{"action": item.action, "ok": item.ok, "detail": item.detail,
+             **({"coins_used": item.coins_used} if item.coins_used is not None else {})} for item in actions]
 
 
 def load_action_entries_for_uid(uid: str | None = None) -> list[dict]:

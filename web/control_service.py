@@ -31,6 +31,8 @@ class ControlService:
         self.home = Path(home).resolve()
         self.instance_id = instance_identifier(home)
         self.store = ControlStore(self.home / "data/control")
+        from src.lottery_discovery_broad import restore_video_index
+        restore_video_index(self.store, self.home / "data/lottery-discovery-cache.json")
         self.lock = threading.RLock()
         self.access_path = self.home / "config/control-access.json"
         if not self.access_path.exists():
@@ -134,7 +136,7 @@ class ControlService:
         if action == "control_discover":
             metadata["keywords"] = (params or {}).get("keywords", [])
             metadata["discovery_mode"] = (params or {}).get("mode", "standard")
-        elif action == "control_import" and (params or {}).get("queue_verified"):
+        elif action == "control_discovery_filter" or (action == "control_import" and (params or {}).get("queue_verified")):
             metadata["discovery_queue"] = params["discovery_job_id"]
         job = self.store.new_job(action, BOOT_ID, metadata=metadata)
         job_id = job["job_id"]

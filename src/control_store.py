@@ -43,6 +43,9 @@ class ControlStore:
                 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,
                     job_id INTEGER NOT NULL, payload TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS control_events_job ON events(job_id,seq);
+                CREATE TABLE IF NOT EXISTS discovery_videos (
+                    bvid TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL
+                );
             """)
 
     def connect(self):
@@ -64,6 +67,16 @@ class ControlStore:
         with self.connect() as db:
             rows = db.execute("SELECT payload FROM records WHERE kind=? ORDER BY key", (kind,)).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def remember_discovery_videos(self, bvids) -> None:
+        now = utc_now()
+        with self.connect() as db:
+            db.executemany("INSERT INTO discovery_videos VALUES(?,?,?) ON CONFLICT(bvid) DO UPDATE SET last_seen=excluded.last_seen",
+                           [(bvid, now, now) for bvid in dict.fromkeys(bvids)])
+
+    def discovery_video_count(self) -> int:
+        with self.connect() as db:
+            return db.execute("SELECT count(*) FROM discovery_videos").fetchone()[0]
 
     def claim(self, key: str, parameters: dict) -> dict | None:
         fingerprint = digest(parameters)

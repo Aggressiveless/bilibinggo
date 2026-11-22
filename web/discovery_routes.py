@@ -10,7 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from src.control_store import ControlError
 from web.api_errors import AppError, ErrorCode
 from web.control_service import get_control_service
+from web.discovery_filters import pending_candidates
 from web.discovery_queue import queue_summary
+from web.coin_balance import coin_balance
 
 
 class DiscoveryStartRequest(BaseModel):
@@ -32,12 +34,35 @@ class DiscoveryStopRequest(BaseModel):
     job_id: int = Field(ge=1)
 
 
+class DiscoveryFilterSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    coins: Literal["all", "required", "exclude_required", "not_required"] = "all"
+    min_followers: int = Field(default=0, ge=0, le=100_000_000)
+    min_account_days: int = Field(default=0, ge=0, le=20_000)
+    include_unknown: bool = False
+
+
+class DiscoveryFilterRequest(DiscoveryStopRequest):
+    settings: DiscoveryFilterSettings
+
+
+class DiscoveryImportRequest(DiscoveryStopRequest):
+    selection: Literal["all", "filtered"]
+    filter_id: str | None = Field(default=None, max_length=64)
+
+
+class CoinBalanceSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    refresh_after_coin: bool
+
+
 def discovery_status(service, job=None):
+    bv_count = service.store.discovery_video_count()
     if job is None:
         job = next((service.job(row["job_id"]) for row in service.store.list_jobs(limit=1000)
                     if row["action"] == "control_discover"), None)
     if job is None:
-        return {"job": None, "keywords": ["转发抽奖"], "summary": {}, "candidates": [], "resume_available": False}
+        return {"job": None, "keywords": ["转发抽奖"], "summary": {}, "bv_count": bv_count, "resume_available": False}
     report = service.store.get("discovery", str(job["job_id"])) or {}
     raw = report.get("raw") or {}
     summary = {**{key: value for key, value in raw.items() if key in {
@@ -50,11 +75,17 @@ def discovery_status(service, job=None):
     summary["eligible"] = len(candidates)
     expires = raw.get("resume_expires_at", raw.get("checked_at", 0) + 1800)
     queue_job = service.store.get("discovery_queue_job", str(job["job_id"]))
+    secondary = service.job(queue_job["id"]) if queue_job else None
+    preview = service.store.get("discovery_filter", str(job["job_id"])) or {}
+    can_select = job["state"] == "success" and summary.get("completion_reason") in {"search_complete", "target_reached"}
+    pending = pending_candidates(service, job["job_id"], report) if can_select else {}
     return {"job": job, "keywords": report.get("keywords") or job.get("keywords") or ["转发抽奖"],
             "mode": job.get("discovery_mode", "standard"),
-            "summary": summary, "candidates": candidates, "stop_message": raw.get("stopped", ""),
+            "summary": summary, "bv_count": bv_count, "stop_message": raw.get("stopped", ""),
+            "pending_selection": len(pending),
+            "filter": {key: val for key, val in preview.items() if key != "dynamic_ids"},
             "queue": queue_summary(service, job["job_id"], report),
-            "queue_job": service.job(queue_job["id"]) if queue_job else None,
+            "queue_job": secondary,
             "resume_available": bool(raw.get("has_more") and expires > time.time())}
 
 
@@ -65,6 +96,14 @@ def install_discovery(app):
     def current():
         return discovery_status(get_control_service())
 
+    @router.get("/coins")
+    def current_coin_balance():
+        return coin_balance(get_control_service().store)
+
+    @router.post("/coins")
+    def set_coin_balance_settings(request: CoinBalanceSettings):
+        return coin_balance(get_control_service().store, refresh_after_coin=request.refresh_after_coin)
+
     @router.post("/start")
     def start(request: DiscoveryStartRequest):
         if request.mode == "comprehensive_page" and len(request.keywords) != 1:
@@ -73,7 +112,7 @@ def install_discovery(app):
         try:
             with service.lock:
                 params = {"keywords": request.keywords, "mode": request.mode,
-                          "video_limit": 36, "request_budget": 180, "resume": True, "auto_queue": True}
+                          "video_limit": 36, "request_budget": 180, "resume": True}
                 if request.mode == "comprehensive_page":
                     params["candidate_limit"] = 0
                 job = service.start("control_discover", params, require_llm=True, source="ui")
@@ -81,18 +120,49 @@ def install_discovery(app):
         except ControlError as exc:
             raise AppError(exc.code, str(exc)) from exc
 
-    @router.post("/import")
-    def import_remaining(request: DiscoveryStopRequest):
+    def selectable_report(service, job_id):
+        job = service.job(job_id)
+        report = service.store.get("discovery", str(job_id))
+        if job["action"] != "control_discover" or job["state"] != "success" or not report:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "请等待检索完成后选择活动")
+        if (job.get("result") or {}).get("completion_reason") not in {"search_complete", "target_reached"}:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "请先继续检索并完成核验")
+        return job, report
+
+    @router.post("/filter")
+    def filter_activities(request: DiscoveryFilterRequest):
         service = get_control_service()
         try:
             with service.lock:
-                job = service.job(request.job_id)
-                if job["action"] != "control_discover" or job["state"] == "running":
-                    raise AppError(ErrorCode.VALIDATION_ERROR, "请选择已结束的检索任务")
-                report = service.store.get("discovery", str(request.job_id))
-                if not report or not queue_summary(service, request.job_id, report)["remaining"]:
+                job, report = selectable_report(service, request.job_id)
+                if not pending_candidates(service, request.job_id, report):
                     return discovery_status(service, job)
-                queued = service.start("control_import", {"discovery_job_id": request.job_id, "queue_verified": True},
+                service.ensure_idle()
+                service.store.put("discovery_filter", str(request.job_id), {})
+                filtering = service.start("control_discovery_filter", {"discovery_job_id": request.job_id,
+                    "settings": request.settings.model_dump()}, source="ui")
+                service.store.put("discovery_queue_job", str(request.job_id), {"id": filtering["job_id"]})
+                return discovery_status(service, job)
+        except ControlError as exc:
+            raise AppError(exc.code, str(exc)) from exc
+
+    @router.post("/import")
+    def import_remaining(request: DiscoveryImportRequest):
+        service = get_control_service()
+        try:
+            with service.lock:
+                job, report = selectable_report(service, request.job_id)
+                pending = pending_candidates(service, request.job_id, report)
+                selected_ids = list(pending)
+                if request.selection == "filtered":
+                    preview = service.store.get("discovery_filter", str(request.job_id)) or {}
+                    if not request.filter_id or preview.get("id") != request.filter_id:
+                        raise AppError(ErrorCode.VALIDATION_ERROR, "请先预览当前筛选条件")
+                    selected_ids = [identifier for identifier in preview["dynamic_ids"] if identifier in pending]
+                if not selected_ids:
+                    return discovery_status(service, job)
+                queued = service.start("control_import", {"discovery_job_id": request.job_id, "queue_verified": True,
+                                       "selected_ids": selected_ids},
                                        require_llm=True, source="ui")
                 service.store.put("discovery_queue_job", str(request.job_id), {"id": queued["job_id"]})
                 return discovery_status(service, job)
@@ -105,7 +175,7 @@ def install_discovery(app):
         try:
             with service.lock:
                 job = service.job(request.job_id)
-                if job["action"] != "control_discover" and not (job["action"] == "control_import" and job.get("discovery_queue")):
+                if job["action"] != "control_discover" and not job.get("discovery_queue"):
                     raise ControlError("JOB_NOT_CANCELLABLE", "该任务不是检索任务")
                 if job["state"] == "running":
                     job = service.dispatch("job_cancel", {"job_id": request.job_id})

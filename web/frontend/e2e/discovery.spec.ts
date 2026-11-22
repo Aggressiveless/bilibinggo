@@ -35,8 +35,7 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
   await expect(page.locator("#discovery-start")).toHaveText("继续检索");
   await expect(page.locator("#discovery-stop")).toBeDisabled();
   await expect(page.locator("#discovery-badge")).toHaveText("已停止");
-  await expect(page.locator("#discovery-results a")).toHaveText("键盘 <script>");
-  await expect(page.locator("#discovery-results a")).toHaveAttribute("href", "https://www.bilibili.com/opus/1234567890123456789");
+  await expect(page.locator("#discovery-panel a[href*='/opus/']")).toHaveCount(0);
   await page.reload();
   await expect(page.locator("#discovery-start")).toHaveText("继续检索");
   await expect(page.getByLabel("视频排序")).toHaveValue("comprehensive_page");

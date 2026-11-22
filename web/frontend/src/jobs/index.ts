@@ -1339,6 +1339,10 @@ export async function finishJobOnce(job) {
     await handleJobCompletion(job);
   } catch (error) {
     console.error("finishJobOnce failed", error);
+  } finally {
+    if (["login", "participate", "participate_triple", "control_participate", "control_workflow"].includes(job.action)) {
+      window.dispatchEvent(new Event("binggo:coin-balance-check"));
+    }
   }
 }
 

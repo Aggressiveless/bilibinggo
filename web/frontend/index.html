@@ -345,13 +345,39 @@
                 <div><strong id="discovery-remaining">0</strong><span>待核验候选</span></div>
                 <div><strong id="discovery-eligible">0</strong><span>可参与活动</span></div>
                 <div><strong id="discovery-requests">0</strong><span>本轮请求</span></div>
+                <div><strong id="discovery-bv-count">0</strong><span>累计收录 BV</span></div>
+                <div><strong id="discovery-coins">—</strong><span>剩余硬币</span></div>
+              </div>
+              <div class="discovery-coin-settings">
+                <p id="discovery-coin-note" class="caption">联网校准间隔为 12 小时。</p>
+                <label><input type="checkbox" id="discovery-coins-live" disabled /> 确认投币后刷新余额</label>
               </div>
               <p class="discovery-status" id="discovery-status" role="status" aria-live="polite">正在读取检索状态…</p>
               <div class="action-row discovery-queue" id="discovery-queue" hidden>
                 <p class="discovery-status" id="discovery-queue-status" role="status"></p>
-                <button type="button" class="btn btn-secondary btn-pill" id="discovery-import">导入剩余活动</button>
+                <button type="button" class="btn btn-secondary btn-pill" id="discovery-import">不筛选，加入全部</button>
               </div>
-              <ul class="discovery-results" id="discovery-results" aria-label="找到的可参与活动" hidden></ul>
+              <details class="discovery-filters" id="discovery-filters" hidden>
+                <summary>进一步筛选活动</summary>
+                <form id="discovery-filter-form">
+                  <fieldset id="discovery-filter-fields" class="discovery-filter-fields">
+                    <label>投币要求<select class="form-input" name="coins">
+                      <option value="all">全部</option>
+                      <option value="exclude_required">排除明确要求投币</option>
+                      <option value="required">仅明确要求投币</option>
+                      <option value="not_required">仅明确无需投币</option>
+                    </select></label>
+                    <label>发布者最低粉丝数<input class="form-input" type="number" name="min_followers" value="0" min="0" max="100000000" required /></label>
+                    <label>发布者最少注册天数<input class="form-input" type="number" name="min_account_days" value="0" min="0" max="20000" required /></label>
+                    <label class="discovery-filter-unknown"><input type="checkbox" name="include_unknown" /> 保留发布者资料未知的活动</label>
+                  </fieldset>
+                  <div class="action-row">
+                    <button type="submit" class="btn btn-secondary btn-pill" id="discovery-preview">预览筛选</button>
+                    <button type="button" class="btn btn-primary btn-pill" id="discovery-import-filtered" disabled>加入筛选结果</button>
+                  </div>
+                </form>
+                <p class="discovery-status" id="discovery-filter-result" role="status"></p>
+              </details>
             </article>
 
             <article class="panel participate-settings">

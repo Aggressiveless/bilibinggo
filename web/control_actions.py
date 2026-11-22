@@ -14,7 +14,7 @@ def check_cancel(event):
 def run_control_action(action, params, *, on_progress, cancel_event):
     from src.control_telemetry import network_span
     workflow = params.get("workflow") or {}
-    read_only = action in {"control_discover", "control_import", "control_network", "control_llm_test"} or action == "control_workflow" and "execute" not in workflow.get("stages", [])
+    read_only = action in {"control_discover", "control_import", "control_discovery_filter", "control_network", "control_llm_test"} or action == "control_workflow" and "execute" not in workflow.get("stages", [])
     budget = (params.get("request_budget", 180) if action == "control_discover" else workflow.get("request_budget", 110))
     with network_span(read_only=read_only, max_requests=budget) as counts:
         result = _run_control_action(action, params, on_progress=on_progress, cancel_event=cancel_event)
@@ -35,11 +35,21 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
             from web.discovery_queue import enqueue_verified
             with discovery_client(service, cancel_event, budget=110) as client:
                 try:
-                    result = enqueue_verified(service, params["discovery_job_id"], client, cancel_event, on_progress)
+                    result = enqueue_verified(service, params["discovery_job_id"], client, cancel_event, on_progress, params.get("selected_ids"))
                 finally:
                     client.save()
         else:
             result = import_candidates(service, params)
+    elif action == "control_discovery_filter":
+        from web.discovery_filters import preview_filters
+        from src.lottery_discovery import DiscoveryStopped
+        with discovery_client(service, cancel_event, budget=110) as client:
+            try:
+                result = preview_filters(service, params["discovery_job_id"], params["settings"], client, on_progress)
+            except DiscoveryStopped as exc:
+                result = {"message": str(exc)}
+            finally:
+                client.save()
     elif action == "control_participate":
         result = execute_plan(service, job_id, params["plan_id"], on_progress, cancel_event)
     elif action == "control_network":
@@ -65,11 +75,9 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
             "error": "检索中断，进度已保存",
         }.get(result.get("completion_reason"), "检索完成"))
         message = f"{prefix}：找到 {result['eligible']} 条可导入活动，检查 {result.get('videos_checked', 0)} 个视频"
-        if "queue" in result:
-            queue = result["queue"]
-            message += f"，已入库 {queue['imported']} 条"
-            if queue["remaining"]:
-                message += f"，剩余 {queue['remaining']} 条待导入"
+    elif action == "control_discovery_filter":
+        cancelled = bool(cancel_event and cancel_event.is_set())
+        message = result.get("message") or f"筛选完成，匹配 {result['matched']} 条活动"
     elif action == "control_import" and params.get("queue_verified"):
         cancelled = bool(cancel_event and cancel_event.is_set())
         message = result["message"] or f"活动导入完成，本次报告已入库 {result['imported']} 条"
@@ -154,32 +162,23 @@ def discover(service, job_id, params, event, progress=None):
     from src.participation_store import load_participations
     from src.activity_store import known_activity_ids
     joined = {str(k) for k, v in load_participations().items() if v.user_status == "已参加"}
-    queue = None
     with discovery_client(service, event, budget=params.get("request_budget", 180),
                           min_interval_seconds=params.get("min_interval_seconds", 2.0)) as client:
         try:
             report = find(client, words, video_limit=params.get("video_limit", 36), now=int(time.time()),
                           comprehensive_page=comprehensive, joined_ids=joined, known_ids=known_activity_ids(), on_progress=publish,
                           candidate_limit=params.get("candidate_limit", 9), author_dynamic_limit=params.get("author_dynamic_limit", 2),
-                          resume=params.get("resume", True))
+                          resume=params.get("resume", True), on_video_page=service.store.remember_discovery_videos)
             rows = discovery_candidates([row for category in ("open", "review", "closed", "joined") for row in report[category]])
             value = {"job_id": job_id, "candidates": rows, "errors": [{"message": str(v)} for v in report["errors"][:100]],
                      "stopped": bool(report["stopped"]), "requests_used": report["requests"], "raw": report, "keywords": words,
                      **{k: report[k] for k in ("session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining")}}
             service.store.put("discovery", str(job_id), redact_obj(value))
-            if params.get("auto_queue") and report["completion_reason"] in {"search_complete", "target_reached"}:
-                from web.discovery_queue import enqueue_verified
-
-                def publish_import(**kwargs):
-                    if progress:
-                        progress(**kwargs, result_patch={"phase": "import", "requests_used": client.request_count})
-
-                queue = enqueue_verified(service, job_id, client, event, publish_import)
         finally:
             client.save()
     return {"discovery_job_id": job_id, "candidates": len(rows), "eligible": sum(v["eligible"] for v in rows),
-            "requests_used": client.request_count, "partial": bool(value["stopped"] or value["errors"] or report["has_more"] or (queue or {}).get("remaining")),
-            "errors": value["errors"], **({"queue": queue} if queue is not None else {}),
+            "requests_used": client.request_count, "partial": bool(value["stopped"] or value["errors"] or report["has_more"]),
+            "errors": value["errors"],
             **{k: report[k] for k in ("videos_checked", "search_video_count", "completion_reason", "cache_hits", "llm_requests", "llm_cache_hits",
                                      "session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining",
                                      "min_interval_seconds", "elapsed_seconds")}}
