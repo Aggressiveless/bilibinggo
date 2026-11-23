@@ -180,6 +180,64 @@
 
             <div class="stats-grid" id="stats-grid"></div>
 
+            <article class="panel usage-panel" id="usage-panel" aria-labelledby="usage-title">
+              <div class="usage-header">
+                <div>
+                  <h2 class="section-title" id="usage-title">请求与模型用量</h2>
+                  <p class="caption" id="usage-period">正在读取本机统计…</p>
+                </div>
+                <label class="usage-period-label" for="usage-range">
+                  趋势范围
+                  <select class="form-input" id="usage-range">
+                    <option value="7">近 7 天</option>
+                    <option value="30" selected>近 30 天</option>
+                    <option value="90">近 90 天</option>
+                  </select>
+                </label>
+              </div>
+              <div class="usage-metrics" role="group" aria-label="选择趋势指标">
+                <button type="button" class="usage-metric" data-usage-metric="bilibili_requests" aria-pressed="true">
+                  <span>B站请求</span><strong data-usage-total>—</strong><small>累计尝试次数</small>
+                </button>
+                <button type="button" class="usage-metric" data-usage-metric="llm_requests" aria-pressed="false">
+                  <span>模型请求</span><strong data-usage-total>—</strong><small>累计尝试次数</small>
+                </button>
+                <button type="button" class="usage-metric" data-usage-metric="total_tokens" aria-pressed="false">
+                  <span>模型 Token</span><strong data-usage-total>—</strong><small data-usage-note>累计已记录用量</small>
+                </button>
+                <button type="button" class="usage-metric" data-usage-metric="cost" aria-pressed="false">
+                  <span>模型花费</span><strong data-usage-total>—</strong><small data-usage-note>累计已计金额</small>
+                </button>
+              </div>
+              <div class="usage-chart" aria-labelledby="usage-chart-title">
+                <div class="usage-header">
+                  <h3 id="usage-chart-title">B站请求 · 每日趋势</h3>
+                  <label class="usage-period-label" id="usage-chart-currency-label" for="usage-chart-currency" hidden>
+                    币种
+                    <select class="form-input" id="usage-chart-currency">
+                      <option value="CNY">人民币</option><option value="USD">美元</option>
+                    </select>
+                  </label>
+                </div>
+                <div id="usage-chart-body" aria-busy="true"></div>
+              </div>
+              <details class="usage-pricing">
+                <summary>设置模型计费单价</summary>
+                <p class="caption" id="usage-pricing-model">正在读取当前模型…</p>
+                <form id="usage-pricing-form" hidden>
+                  <p class="caption">按每百万 Token 填写。单价用于估算该模型已记录的未计价用量。留空缓存单价时按普通输入计费。</p>
+                  <div class="usage-pricing-fields">
+                    <label class="field-label">币种<select name="currency" class="form-input"><option value="CNY">人民币（CNY）</option><option value="USD">美元（USD）</option></select></label>
+                    <label class="field-label">输入<input class="form-input" name="input_rate" type="number" min="0" max="1000000" step="0.000001" required /></label>
+                    <label class="field-label">缓存命中输入<input class="form-input" name="cached_input_rate" type="number" min="0" max="1000000" step="0.000001" placeholder="选填" /></label>
+                    <label class="field-label">输出<input class="form-input" name="output_rate" type="number" min="0" max="1000000" step="0.000001" required /></label>
+                  </div>
+                  <button class="btn btn-secondary btn-pill" type="submit">保存单价</button>
+                  <span class="caption" id="usage-pricing-status" role="status"></span>
+                </form>
+              </details>
+            </article>
+
             <article class="panel quick-actions">
               <h2 class="section-title">快捷操作</h2>
               <p class="section-desc quick-actions-desc">从 UP 合集或监控用户动态增量更新活动链接，或直接进入活动列表参与抽奖。</p>

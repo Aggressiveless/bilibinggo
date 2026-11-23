@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 
 from src.bilibili_rate_limit import acquire_bilibili_request_slot
+from src.usage_stats import record_bilibili_request
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -84,6 +85,7 @@ class BilibiliClient:
             timeout=timeout,
             follow_redirects=True,
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            event_hooks={"request": [record_bilibili_request]},
         )
         self._img_key: str | None = None
         self._sub_key: str | None = None

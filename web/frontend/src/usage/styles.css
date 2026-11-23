@@ -1,0 +1,181 @@
+.usage-panel {
+  --usage-blue: var(--bilibili);
+  --usage-amber: var(--accent);
+  --usage-green: var(--success);
+  min-width: 0;
+}
+
+.usage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.usage-header .caption {
+  margin: 4px 0 0;
+}
+
+.usage-period-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground-muted);
+  font-size: 13px;
+}
+
+.usage-period-label .form-input {
+  width: auto;
+  min-width: 85px;
+}
+
+.usage-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.usage-metric {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--surface);
+  color: var(--foreground);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-input);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.usage-metric:hover,
+.usage-metric[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.usage-metric span,
+.usage-metric small {
+  color: var(--foreground-muted);
+  font-size: 12px;
+}
+
+.usage-metric strong {
+  font-size: clamp(18px, 2.1vw, 25px);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-chart {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-input);
+  padding: 14px;
+}
+
+.usage-chart h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.usage-plot {
+  --usage-bar-color: var(--usage-blue);
+  --usage-plot-height: 118px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+.usage-plot[data-metric="llm_requests"],
+.usage-plot[data-metric="total_tokens"] { --usage-bar-color: var(--usage-amber); }
+.usage-plot[data-metric="cost"] { --usage-bar-color: var(--usage-green); }
+
+.usage-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 18px;
+  height: var(--usage-plot-height);
+  text-align: right;
+}
+
+.usage-axis, .usage-dates {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground-muted);
+}
+
+.usage-plot-scroll { overflow-x: auto; }
+
+.usage-bars {
+  display: grid;
+  grid-template-columns: repeat(var(--usage-days), minmax(0, 1fr));
+  align-items: end;
+  min-width: calc(var(--usage-days) * 8px);
+  height: var(--usage-plot-height);
+  border-block: 1px solid var(--border-soft);
+  background: linear-gradient(transparent calc(50% - 1px), var(--border-soft) 50%, transparent calc(50% + 1px));
+}
+
+.usage-bar {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  height: 100%;
+  min-width: 0;
+  padding: 0 1px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.usage-bar::after {
+  content: "";
+  width: min(100%, 24px);
+  height: var(--usage-height);
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+  background: var(--usage-bar-color);
+  opacity: 0.65;
+}
+
+.usage-bar[data-empty]::after { opacity: 0.2; }
+.usage-bar:hover, .usage-bar[aria-pressed="true"] { background: var(--surface-soft); }
+.usage-bar:hover::after, .usage-bar[aria-pressed="true"]:not([data-empty])::after { opacity: 1; }
+.usage-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.usage-dates {
+  display: flex;
+  justify-content: space-between;
+  min-width: calc(var(--usage-days, 30) * 8px);
+  padding: 4px 0;
+}
+
+.usage-day-detail { margin: 6px 0 0; }
+.usage-pricing { margin-top: 14px; }
+.usage-pricing summary { color: var(--link); font-size: 13px; cursor: pointer; }
+.usage-pricing form, .usage-pricing > .caption { margin-top: 8px; }
+
+.usage-pricing-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.usage-pricing-fields .form-input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.usage-period-label[hidden], .usage-pricing form[hidden] { display: none; }
+
+@media (max-width: 850px) {
+  .usage-metrics, .usage-pricing-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

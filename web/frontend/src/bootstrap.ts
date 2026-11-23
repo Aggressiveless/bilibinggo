@@ -19,6 +19,7 @@ import { bindDiagnosticsExport } from "./diagnostics/index";
 import { bindCheckUpdates, loadRuntimeInfo } from "./runtime/index";
 import { bindWatchUsers, loadWatchUsers } from "./watch/index";
 import { bindDiscovery } from "./discovery/index";
+import { bindUsageOverview } from "./usage/index";
 
 export async function init() {
   initSystemPreferences();
@@ -32,6 +33,7 @@ export async function init() {
   bindOnboardingPanel();
   bindActionButtons();
   bindDiscovery();
+  bindUsageOverview();
   bindDiagnosticsExport();
   bindCheckUpdates();
   loadRuntimeInfo().catch(() => {});

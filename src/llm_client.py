@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from typing import Any
 
 import httpx
 
 from src.llm_config import LlmConfig, load_llm_config
 from src.retry_utils import is_transient_http_error, retry_call
+from src.usage_stats import record_llm_request
 
 import threading
 
@@ -72,12 +74,20 @@ def _build_chat_payload(
     return payload
 
 
-def _post_chat_completion(*, url: str, headers: dict[str, str], payload: dict[str, Any]) -> dict[str, Any]:
+def _post_chat_completion(
+    *, config: LlmConfig, headers: dict[str, str], payload: dict[str, Any],
+) -> dict[str, Any]:
     def _call() -> dict[str, Any]:
         with httpx.Client(timeout=_LLM_TIMEOUT) as client:
-            resp = client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            return resp.json()
+            day = date.today()
+            data = None
+            try:
+                resp = client.post(f"{config.base_url}/chat/completions", headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                return data
+            finally:
+                record_llm_request(config, day, data)
 
     return retry_call(_call, attempts=_LLM_RETRY_ATTEMPTS, retry_on=_llm_retryable)
 
@@ -93,9 +103,8 @@ def test_llm_connection(config: LlmConfig) -> str:
         "Authorization": f"Bearer {config.api_key}",
         "Content-Type": "application/json",
     }
-    url = f"{config.base_url}/chat/completions"
     try:
-        _post_chat_completion(url=url, headers=headers, payload=payload)
+        _post_chat_completion(config=config, headers=headers, payload=payload)
     except httpx.HTTPStatusError as exc:
         raise RuntimeError(_format_llm_http_error(exc)) from exc
     except httpx.RequestError as exc:
@@ -120,11 +129,9 @@ def chat_json(*, system: str, user: str, config: LlmConfig | None = None) -> dic
         "Authorization": f"Bearer {cfg.api_key}",
         "Content-Type": "application/json",
     }
-    url = f"{cfg.base_url}/chat/completions"
-
     with _llm_lock:
         try:
-            data = _post_chat_completion(url=url, headers=headers, payload=payload)
+            data = _post_chat_completion(config=cfg, headers=headers, payload=payload)
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(_format_llm_http_error(exc)) from exc
         except httpx.RequestError as exc:
