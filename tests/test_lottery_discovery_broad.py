@@ -209,13 +209,13 @@ def test_pinned_portal_and_collection_keep_each_destination(monkeypatch):
         if identifier == linked_ids[0]:
             on_links("合集\n" + "\n".join(d.opus_link(i) for i in linked_ids[-2:]))
         return {"dynamic_id": identifier, "kind": "dynamic", "url": d.opus_link(identifier),
-                "status": "review", "reason": "仍需核验", "model_confidence": 81}
+                "status": "rejected", "reason": d.MISSING_DYNAMIC_DEADLINE, "model_confidence": 81}
 
     monkeypatch.setattr(d, "inspect_dynamic", inspect)
     snapshots = []
     report = broad.discover_page(CaseClient(), ["GTA6抽奖"], candidate_limit=0, on_progress=snapshots.append)
     assert len(checked) == len(set(checked)) == 30
-    assert len(report["review"]) == 30 and not report["open"]
+    assert len(report["rejected"]) == 29 and len(report["source"]) == 1 and not report["open"]
     audits = snapshots[-1]["video_checks"]
     assert {note.get("dynamic_id") for note in audits[portal]["notes"]} >= set(linked_ids[-2:])
     assert "28 个抽奖入口" in audits[list_video]["source_reason"]
@@ -242,6 +242,38 @@ def test_large_creator_weak_lottery_hint_gets_broader_review(monkeypatch):
     report = broad.discover_page(CreatorClient(), ["抽奖"], video_limit=1, collect_followers=True)
     assert checked_limits == [6]
     assert not report["open"]
+
+
+def test_credible_video_finishes_home_search_and_rejects_undated_dynamic():
+    dynamic_id = "1246355215351808021"
+    looked_up = []
+
+    class Client(PageClient):
+        def read(self, url, params, **kwargs):
+            if url == d.VIDEO_URL:
+                return {"code": 0, "data": {"title": "这期有抽奖", "owner": {"mid": 42}}}
+            if url == broad.AUTHOR_SEARCH_URL:
+                looked_up.append(params["host_mid"])
+                return {"code": 0, "data": {"items": [{"id_str": dynamic_id,
+                    "modules": {"module_author": {"mid": 42}, "module_dynamic": {"desc": {"text": "关注转发抽键盘"}}}}]}}
+            if url == d.LOTTERY_NOTICE_URL:
+                return {"code": 0, "data": {}}
+            return super().read(url, params, **kwargs)
+
+        def extract(self, text, **context):
+            return {"model_assessment": "lottery", "model_confidence": 95,
+                    **({"prize": "键盘", "rules": "关注转发"} if "键盘" in text else {})}
+
+    snapshots = []
+    report = broad.discover_page(Client(), ["抽奖"], video_limit=1, on_progress=snapshots.append)
+    assert looked_up == ["42"] and report["sources_remaining"] == 0
+    assert not report["open"] and [row["dynamic_id"] for row in report["rejected"]] == [dynamic_id]
+    payload = snapshots[-1]["video_checks"]["BV0000000000"]
+    result = display_video_check({"bvid": "BV0000000000", "payload": payload, "first_seen": "", "last_seen": "",
+                                  "legacy_history": False, "sightings": 1}, known=set(), joined=set(), outcomes={}, now=0)
+    assert result["status"] == "rejected"
+    assert result["activities"][0]["reason"] == d.MISSING_DYNAMIC_DEADLINE
+    assert any("已检索发布者主页" in note["message"] for note in result["reasons"])
 
 
 def test_audit_shares_dynamic_results_and_preserves_only_distinct_sightings(tmp_path, monkeypatch):

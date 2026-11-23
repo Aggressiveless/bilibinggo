@@ -90,8 +90,7 @@ def discovery_status(service, job=None):
     }}, **(job.get("result") or {})}
     summary.setdefault("requests_used", report.get("requests_used", 0))
     summary.setdefault("verification_remaining", report.get("verification_remaining", 0))
-    candidates = [row for row in report.get("candidates", []) if row.get("eligible")]
-    summary["eligible"] = len(candidates)
+    summary["eligible"] = len(verified_candidates(report))
     expires = raw.get("resume_expires_at", raw.get("checked_at", 0) + 1800)
     queue_job = service.store.get("discovery_queue_job", str(job["job_id"]))
     secondary = service.job(queue_job["id"]) if queue_job else None

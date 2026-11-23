@@ -65,6 +65,20 @@ def test_date_without_clock_is_not_lost():
     assert result["status"] == "closed"
 
 
+def test_dynamic_requires_registration_deadline_or_valid_platform_notice():
+    from web.discovery_queue import verified_candidates
+
+    now = date(2026, 11, 22)
+    fields = {"prize": "键盘", "rules": "转发评论", "draw": "11月25日开奖", "open": "现在仍可参与",
+              "model_assessment": "lottery", "model_confidence": 95}
+    result = discovery.assess_candidate(fields, now=now, published=now, require_deadline=True)
+    assert result["status"] == "rejected" and result["reason"] == discovery.MISSING_DYNAMIC_DEADLINE
+    notice = {"lottery_time": date(2026, 11, 25), "status": 0}
+    assert discovery.assess_candidate({}, now=now, notice=notice, require_deadline=True)["status"] == "open"
+    legacy = {"dynamic_id": "1246355215351808021", "eligible": True, "raw": {"reason": discovery.DRAW_ONLY_INVITATION}}
+    assert not verified_candidates({"candidates": [legacy]})
+
+
 def test_winner_announcement_is_not_home_participation():
     assert not discovery._home_participation_hint("参与方式是给本视频三连，抽奖结果会在后续我主页的动态公布")
     assert discovery._home_participation_hint("抽机械键盘，去主页置顶动态参与")

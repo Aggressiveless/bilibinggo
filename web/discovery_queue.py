@@ -9,14 +9,19 @@ import httpx
 from src.activity_store import known_activity_ids
 from src.control_store import ControlError
 from src.log_redact import redact_text
-from src.lottery_discovery import DiscoveryStopped
+from src.lottery_discovery import DRAW_ONLY_INVITATION, DiscoveryStopped
 from src.participation_store import load_participations
 from src.pipeline.refresh_all_pipeline import run_new_links_pipeline
 from web.activity_service import invalidate_activity_cache
 
 
+def is_verified_candidate(row):
+    return bool(row.get("eligible") and row.get("dynamic_id")
+                and (row.get("raw") or {}).get("reason") != DRAW_ONLY_INVITATION)
+
+
 def verified_candidates(report):
-    return {row["dynamic_id"]: row for row in report.get("candidates", []) if row.get("eligible") and row.get("dynamic_id")}
+    return {row["dynamic_id"]: row for row in report.get("candidates", []) if is_verified_candidate(row)}
 
 
 def queue_summary(service, job_id, report):

@@ -182,7 +182,8 @@ def discover(service, job_id, params, event, progress=None):
                           resume=params.get("resume", True), replay_completed=params.get("replay_completed", True),
                           on_video_page=service.store.remember_discovery_videos,
                           collect_followers=params.get("collect_followers", False))
-            rows = discovery_candidates([row for category in ("open", "review", "closed", "joined") for row in report[category]])
+            rows = discovery_candidates([row for category in ("open", "review", "closed", "joined", "rejected", "source")
+                                         for row in report.get(category, [])])
             value = {"job_id": job_id, "candidates": rows, "errors": [{"message": str(v)} for v in report["errors"][:100]],
                      "stopped": bool(report["stopped"]), "requests_used": report["requests"], "raw": report, "keywords": words,
                      **{k: report[k] for k in ("session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining")}}
@@ -199,6 +200,7 @@ def discover(service, job_id, params, event, progress=None):
 
 def import_candidates(service, params):
     from src.pipeline.refresh_all_pipeline import run_new_links_pipeline
+    from web.discovery_queue import is_verified_candidate
     report = service.store.get("discovery", str(params["discovery_job_id"]))
     if not report:
         raise ControlError("NOT_FOUND", "发现报告不存在")
@@ -206,7 +208,7 @@ def import_candidates(service, params):
     if not set(params["candidate_ids"]).issubset(mapping):
         raise ControlError("VALIDATION_ERROR", "候选ID不属于该报告")
     selected = [mapping[k] for k in dict.fromkeys(params["candidate_ids"])]
-    if any(not v["eligible"] for v in selected):
+    if any(not is_verified_candidate(v) for v in selected):
         raise ControlError("VALIDATION_ERROR", "仅允许导入已解析的可用动态活动")
     if any((v.get("raw") or {}).get("draw_time") and v["raw"]["draw_time"] <= time.time() for v in selected):
         raise ControlError("PLAN_STALE", "候选开奖时间已过，请重新检索")
@@ -306,7 +308,8 @@ def workflow(service, job_id, config, progress, event):
             "request_budget": config["request_budget"] - reserve, "video_limit": 36, "mode": "standard",
             "candidate_limit": config["max_activities_per_run"]}, event, progress)
         report = service.store.get("discovery", str(job_id))
-        chosen = [v["candidate_id"] for v in report["candidates"] if v["eligible"]][:config["max_activities_per_run"]]
+        from web.discovery_queue import verified_candidates
+        chosen = [v["candidate_id"] for v in verified_candidates(report).values()][:config["max_activities_per_run"]]
         if chosen:
             summary["import"] = import_candidates(service, {"discovery_job_id": job_id, "candidate_ids": chosen})
         if summary["discovery"]["partial"]:

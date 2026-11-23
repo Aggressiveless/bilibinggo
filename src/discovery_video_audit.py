@@ -5,6 +5,8 @@ import html
 import re
 from collections import Counter
 
+from src.lottery_discovery import DRAW_ONLY_INVITATION, MISSING_DYNAMIC_DEADLINE
+
 
 def video_title(value) -> str:
     # Search responses wrap matched text in <em> tags.
@@ -90,11 +92,19 @@ def display_video_check(row, *, known, joined, outcomes, now):
                 status, reason = "rejected", "关联活动已超过报名截止或开奖时间"
             elif outcome == "skipped":
                 status, reason = "rejected", "导入时复核未通过"
+            elif reason == DRAW_ONLY_INVITATION:
+                status, reason = "rejected", MISSING_DYNAMIC_DEADLINE
             else:
                 status = "ready"
         elif status == "open":
-            status, reason = "review", "已确认是视频评论区抽奖，可从原视频查看参与方式"
-        elif status not in {"pending", "review"}:
+            status, reason = "video_only", "已确认是视频评论区抽奖，可从原视频查看参与方式"
+        elif status == "review" and identifier:
+            status = "source" if reason.startswith("关联动态包含") else "rejected"
+            if reason == "缺少可核验的报名截止或进行中状态":
+                reason = "动态缺少可核验的报名截止时间或平台有效期"
+        elif status == "review" and reason == "视频提供了抽奖线索，待核验关联活动":
+            status, reason = "source", "旧版记录了视频抽奖线索，关联结果见下方动态"
+        elif status not in {"pending", "source"}:
             status = "rejected"
         status_counts[status] += 1
         reasons[(status, reason, note.get("model_reason"), note.get("model_assessment"), note.get("kind"),
@@ -102,7 +112,7 @@ def display_video_check(row, *, known, joined, outcomes, now):
         if identifier:
             activities.append({"dynamic_id": identifier, "status": status, "reason": reason,
                                **{key: note.get(key) for key in ("prize", "rules_summary", "model_reason", "model_confidence", "followers")}})
-    status = next(value for value in ("ready", "pending", "review", "handled", "rejected") if status_counts[value])
+    status = next(value for value in ("ready", "pending", "video_only", "handled", "rejected", "source") if status_counts[value])
     ordered = sorted(reasons.items(), key=lambda entry: (entry[0][0] != status, not entry[0][2]))
     return {"bvid": row["bvid"], "title": check.get("title") or row["title"],
             "first_seen": row["first_seen"], "last_seen": row["last_seen"], "status": status,

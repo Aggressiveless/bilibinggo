@@ -36,6 +36,8 @@ RATE_CODES = {-352, -412, -509, -799}
 RATE_HTTP = {403, 412, 429}
 RECENT_SECONDS = 7 * 86400
 DATE_CONTEXT_DAYS = 62
+DRAW_ONLY_INVITATION = "主办方明确邀请当前参与，预定开奖时间未到"
+MISSING_DYNAMIC_DEADLINE = "动态未注明报名截止时间，无法确认活动有效期"
 BV_RE = re.compile(r"BV[0-9A-Za-z]{10}\Z")
 DYNAMIC_RE = re.compile(
     r"https?://(?:www\.bilibili\.com/(?:opus|dynamic)/|t\.bilibili\.com/)([0-9]{15,22})(?![0-9A-Za-z])"
@@ -285,7 +287,8 @@ def _date_from_quote(quote: str, published: int, now: int) -> int | None:
     return int(target.timestamp())
 
 
-def assess_candidate(fields: dict, *, now: int, published: int = 0, notice: dict | None = None) -> dict:
+def assess_candidate(fields: dict, *, now: int, published: int = 0, notice: dict | None = None,
+                     require_deadline: bool = False) -> dict:
     deadline = _date_from_quote(fields.get("deadline", ""), published, now)
     draw = _date_from_quote(fields.get("draw", ""), published, now)
     if notice:
@@ -301,8 +304,8 @@ def assess_candidate(fields: dict, *, now: int, published: int = 0, notice: dict
         status, reason = "open", "B站抽奖通知显示进行中，开奖时间未到"
     elif fields.get("prize") and fields.get("rules") and deadline and deadline > now:
         status, reason = "open", "主办方公开了参与条件和仍未到的报名截止时间"
-    elif fields.get("prize") and fields.get("rules") and fields.get("open") and draw and draw > now:
-        status, reason = "open", "主办方明确邀请当前参与，预定开奖时间未到"
+    elif not require_deadline and fields.get("prize") and fields.get("rules") and fields.get("open") and draw and draw > now:
+        status, reason = "open", DRAW_ONLY_INVITATION
     elif notice or fields.get("prize") and fields.get("rules"):
         status = "review"
         if fields.get("deadline") and not deadline:
@@ -321,6 +324,15 @@ def assess_candidate(fields: dict, *, now: int, published: int = 0, notice: dict
         status = "irrelevant"
         missing = [label for key, label in (("prize", "奖品"), ("rules", "参与要求")) if not fields.get(key)]
         reason = "缺少同一场活动的" + "和".join(missing) + "原文"
+    if require_deadline and status == "review":
+        status = "rejected"
+        if not notice:
+            if deadline:
+                reason = "动态缺少可确认的奖品或参与要求"
+            elif fields.get("deadline"):
+                reason = "报名截止原文无法解析成可靠日期"
+            else:
+                reason = MISSING_DYNAMIC_DEADLINE
     result = {"status": status, "reason": reason, "deadline": deadline, "draw_time": draw, "evidence": fields}
     for key in ("model_reason", "model_assessment", "model_confidence", "rules_summary"):
         if key in fields:
@@ -409,7 +421,7 @@ def inspect_dynamic(client, dynamic_id: str, *, now: int, item: dict | None = No
     return {"kind": "dynamic", "url": url, "dynamic_id": dynamic_id,
             "publisher": author.get("name") or "", "publisher_uid": publisher_uid,
             "prize": prizes or fields.get("prize", ""), "rule_text": text[:1800], "official_notice": notice,
-            **assess_candidate(fields, now=now, published=extract_feed_pub_ts(item) or 0, notice=notice)}
+            **assess_candidate(fields, now=now, published=extract_feed_pub_ts(item) or 0, notice=notice, require_deadline=True)}
 
 
 def discover(
@@ -506,7 +518,7 @@ def discover(
                 str(notice[key]) for key in ("first_prize_cmt", "second_prize_cmt", "third_prize_cmt")
                 if notice and notice.get(key)
             )
-            assessment = assess_candidate(fields, now=now, notice=notice, published=published)
+            assessment = assess_candidate(fields, now=now, notice=notice, published=published, require_deadline=True)
             if home_prize is not None and assessment["status"] in {"open", "review"}:
                 if not home_prize or not any(home_prize in value for value in (text, prizes)):
                     assessment.update(status="review", reason="已找到主页抽奖动态，尚未确认与视频指向同一场")
@@ -654,7 +666,7 @@ def discover(
     except (httpx.HTTPError, RuntimeError, ValueError) as exc:
         errors.append(str(exc).splitlines()[0][:200])
 
-    ranked = {"irrelevant": 0, "review": 1, "open": 2, "closed": 3, "joined": 3}
+    ranked = {"irrelevant": 0, "review": 1, "rejected": 1, "open": 2, "closed": 3, "joined": 3}
     unique_rows: dict[str, dict] = {}
     for row in rows:
         key = row["url"] or row["source_video"] + "#publisher-home"
@@ -682,7 +694,7 @@ def discover(
         row["followers"] = followers[uid]
 
     result = {status: [row for row in rows if row["status"] == status]
-              for status in ("open", "review", "closed", "joined")}
+              for status in ("open", "review", "closed", "joined", "rejected")}
     emit("finished", f"检索结束：可导入 {len(result['open'])} 条，待核验 {len(result['review'])} 条")
     return {"checked_at": now, "requests": client.request_count, "stopped": stopped,
             "completion_reason": termination, "cache_hits": getattr(client, "cache_hits", 0),

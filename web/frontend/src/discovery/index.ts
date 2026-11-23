@@ -36,7 +36,7 @@ interface Candidate {
   triple_requirement: "required" | "optional" | "not_mentioned" | "unknown";
 }
 
-const videoStates = { pending: "待检测", review: "有线索 · 待核验", rejected: "检测不合格", ready: "待导入", handled: "已处理" };
+const videoStates = { pending: "检测未完成", source: "入口已处理", rejected: "核验不通过", ready: "待导入", handled: "已处理", video_only: "视频抽奖" };
 const modelStates = { lottery: "有抽奖", entry: "抽奖入口", collection: "抽奖合集", not_lottery: "未发现抽奖", uncertain: "证据不足" };
 type VideoState = keyof typeof videoStates;
 
