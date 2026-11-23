@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Literal
 
 from src.activity_store import append_activities, known_activity_ids
+from src.app_logging import get_logger
 from src.bilibili_client import BilibiliClient
 from src.lottery_enricher import (
     ENRICH_SKIP_REASON,
@@ -23,6 +24,7 @@ from src.pipeline.status_step import apply_initial_status
 from src.sources.common import CheckResult, normalize_activity_id
 
 ProgressCallback = Callable[[int, int, str], None]
+logger = get_logger("job")
 
 
 @dataclass
@@ -104,6 +106,8 @@ def run_new_links_pipeline(
             if outcome.skipped:
                 reason = outcome.skip_reason or "skipped"
                 skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                if not outcome.lottery_type:
+                    logger.info("跳过活动 %s：%s", dynamic_id, reason)
             elif outcome.lottery_type in ("互动抽奖", "预约抽奖", "转发抽奖"):
                 tasks.append((outcome.dynamic_id, outcome.lottery_type))
                 classify_outcome_by_id[outcome.dynamic_id] = outcome

@@ -74,6 +74,13 @@ def wbi_sign(params: dict, img_key: str, sub_key: str) -> dict:
     return signed
 
 
+class BilibiliAPIError(RuntimeError):
+    def __init__(self, code: int | str, message: str | None) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(f"API error {code}: {message}")
+
+
 class BilibiliClient:
     def __init__(self, timeout: float = 25.0, *, warmup: bool = True) -> None:
         headers = dict(DEFAULT_HEADERS)
@@ -194,7 +201,7 @@ class BilibiliClient:
                     time.sleep(1.2 * (attempt + 1))
                     last_error = RuntimeError(f"API error {code}: {data.get('message')}")
                     continue
-                raise RuntimeError(f"API error {code}: {data.get('message')}")
+                raise BilibiliAPIError(code, data.get("message"))
             except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
                 last_error = exc if isinstance(exc, Exception) else RuntimeError(str(exc))
                 if attempt < retries and (

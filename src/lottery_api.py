@@ -5,7 +5,7 @@ import re
 import threading
 import time
 
-from src.bilibili_client import BilibiliClient
+from src.bilibili_client import BilibiliAPIError, BilibiliClient
 from src.lottery_classifier import UPOWER_BUSINESS_TYPE
 from src.sources.common import opus_link
 
@@ -23,6 +23,7 @@ LOTTERY_NOTICE_URL = "https://api.vc.bilibili.com/lottery_svr/v1/lottery_svr/lot
 DYNAMIC_DETAIL_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"
 OPUS_DETAIL_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail"
 OPUS_DETAIL_FEATURES = "htmlNewStyle,ugcDelete,editable,opusPrivateVisible"
+DYNAMIC_NOT_VISIBLE_CODE = 4101152
 
 RESERVE_RESERVED_STATUS = 2
 
@@ -218,6 +219,8 @@ def probe_dynamic_detail_api(
             referer=referer,
             retries=retries,
         )
+    except BilibiliAPIError as exc:
+        data = {"code": exc.code, "message": exc.message}
     except Exception as exc:
         logger.debug("dynamic/detail 请求失败 %s: %s", dynamic_id, exc)
         return None, None, str(exc)

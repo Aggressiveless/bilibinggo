@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import httpx
+
 from src.bilibili_client import BilibiliClient
 from src.dead_links import is_dynamic_detail_permanently_gone
 from src.forward_parser import (
@@ -11,6 +13,7 @@ from src.forward_parser import (
     fetch_dynamic_content_with_retry,
 )
 from src.lottery_api import (
+    DYNAMIC_NOT_VISIBLE_CODE,
     _fetch_opus_detail_item,
     _normalize_dynamic_item,
     fetch_lottery_notice,
@@ -63,17 +66,21 @@ class ClassifyFetchContext:
         self._detail_api_item = self._fetch_detail_api_item(retries=2)
         return self._detail_api_item
 
-    def is_deleted_link(self) -> bool:
+    def unavailable_reason(self) -> Literal["链接失效", "动态不可见"] | None:
         self._ensure_detail_api_item()
-        if self._detail_api_item is not _UNSET and self._detail_api_item is not None:
-            return False
-        code = None if self._detail_api_code is _UNSET else self._detail_api_code
-        message = "" if self._detail_api_message is _UNSET else str(self._detail_api_message or "")
-        return is_dynamic_detail_permanently_gone(
-            item=None if self._detail_api_item is _UNSET else self._detail_api_item,
-            code=code,
-            message=message,
-        )
+        if self._detail_api_item is not None:
+            return None
+        if self._detail_api_code == DYNAMIC_NOT_VISIBLE_CODE:
+            # Visibility can depend on the account. Skip this import without
+            # treating the response as evidence to delete a stored activity.
+            return "动态不可见"
+        if is_dynamic_detail_permanently_gone(
+            item=None,
+            code=None if self._detail_api_code is _UNSET else self._detail_api_code,
+            message="" if self._detail_api_message is _UNSET else self._detail_api_message,
+        ):
+            return "链接失效"
+        return None
 
     def get_additional(self) -> dict | None:
         if self._additional is not _UNSET:
@@ -156,13 +163,19 @@ class ClassifyFetchContext:
     def classify_reserve_candidate(
         self,
         additional: dict | None,
-    ) -> Literal["预约抽奖", "skip", "not_reserve"]:
+    ) -> Literal["预约抽奖", "skip", "not_reserve", "unavailable"]:
         reserve = (additional or {}).get("reserve") if additional else None
         has_reserve_block = bool(reserve)
         if not has_reserve_block:
             if additional is not None:
                 return "not_reserve"
-            if not _has_reserve_from_page(self.client, self.dynamic_id):
+            try:
+                has_reserve_block = _has_reserve_from_page(self.client, self.dynamic_id)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    return "unavailable"
+                raise
+            if not has_reserve_block:
                 return "not_reserve"
 
         reserve = reserve or {}

@@ -14,7 +14,7 @@ from src.lottery_classifier import (
 )
 from src.sources.common import opus_link
 
-SkipReason = Literal["链接失效", "充电抽奖", "非抽奖活动"]
+SkipReason = Literal["链接失效", "动态不可见", "活动页 404", "充电抽奖", "非抽奖活动"]
 ParticipatableType = Literal["互动抽奖", "预约抽奖", "转发抽奖"]
 
 
@@ -55,8 +55,9 @@ def classify_new_link(client: BilibiliClient, dynamic_id: str) -> ClassifyOutcom
     """API 优先分类；其余由 LLM 判断是否为转发抽奖。skipped 不落库。"""
     ctx = ClassifyFetchContext(client, dynamic_id)
     referer = opus_link(dynamic_id)
-    if ctx.is_deleted_link():
-        return ClassifyOutcome(dynamic_id, None, True, "链接失效")
+    unavailable_reason = ctx.unavailable_reason()
+    if unavailable_reason:
+        return ClassifyOutcome(dynamic_id, None, True, unavailable_reason)
 
     additional = ctx.get_additional()
     if additional and _is_upower_lottery(additional):
@@ -89,6 +90,8 @@ def classify_new_link(client: BilibiliClient, dynamic_id: str) -> ClassifyOutcom
         return ClassifyOutcome(dynamic_id, "充电抽奖", True, "充电抽奖")
 
     reserve_outcome = ctx.classify_reserve_candidate(additional)
+    if reserve_outcome == "unavailable":
+        return ClassifyOutcome(dynamic_id, None, True, "活动页 404")
     if reserve_outcome == "skip":
         return ClassifyOutcome(dynamic_id, "非抽奖活动", True, "非抽奖活动")
     if reserve_outcome == "预约抽奖":
