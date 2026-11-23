@@ -6,7 +6,7 @@ import { showToast } from "../shell/toast";
 import { setButtonLoading } from "../utils/motion";
 import { sanitizeUserText } from "../utils/text";
 
-const RELEASES_URL = "https://github.com/luovicter-collab/bilibinggo/releases";
+const RELEASES_URL = "https://github.com/Komerser/bilibinggo/releases";
 
 export async function loadRuntimeInfo() {
   const versionEl = document.getElementById("runtime-version");

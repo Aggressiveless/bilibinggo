@@ -334,31 +334,40 @@
               <div class="project-showcase-grid">
                 <div class="project-showcase-main">
                   <div class="project-showcase-intro">
-                    <p class="eyebrow">Open Source</p>
-                    <h2 class="project-showcase-title">bilibinggo</h2>
-                    <p class="project-showcase-desc">聚合 B 站抽奖 UP 合集，增量发现活动、本地管理参与状态，Web 控制台一键参与互动 / 转发 / 预约抽奖。</p>
+                    <p class="eyebrow">Open Source · Community Fork</p>
+                    <h2 class="project-showcase-title">bilibinggo · Komerser fork</h2>
+                    <p class="project-showcase-desc">检索并复核抽奖线索，增量导入活动；通过统一队列执行更新、检索与自动顺序参与，在本地查看历史、任务日志与用量统计。</p>
                   </div>
                   <ul class="project-highlights" aria-label="项目能力">
                     <li class="project-highlight">
-                      <span class="project-highlight-title">本地 SQLite</span>
-                      <span class="project-highlight-text">活动、参与与任务落盘，数据只在你的电脑上</span>
+                      <span class="project-highlight-title">唯一新视频检索</span>
+                      <span class="project-highlight-text">按目标收集新 BV，跨页去重，停止后可继续</span>
                     </li>
                     <li class="project-highlight">
-                      <span class="project-highlight-title">实时进度</span>
-                      <span class="project-highlight-text">SSE 推送任务日志，断线自动回退轮询</span>
+                      <span class="project-highlight-title">统一任务队列</span>
+                      <span class="project-highlight-text">更新、检索与参与依次执行，日志汇总进度与结果</span>
                     </li>
                     <li class="project-highlight">
-                      <span class="project-highlight-title">本机私有</span>
-                      <span class="project-highlight-text">仅绑定 127.0.0.1，Cookie 与密钥不上传</span>
+                      <span class="project-highlight-title">自动顺序参与</span>
+                      <span class="project-highlight-text">按筛选与排序逐项参与，执行前检查活动条件</span>
                     </li>
                     <li class="project-highlight">
-                      <span class="project-highlight-title">跨平台包</span>
-                      <span class="project-highlight-text">Windows 安装 / 便携，macOS Apple Silicon</span>
+                      <span class="project-highlight-title">请求与模型用量</span>
+                      <span class="project-highlight-text">概览查看平台请求、模型用量与近期记录</span>
+                    </li>
+                    <li class="project-highlight">
+                      <span class="project-highlight-title">本机私有数据</span>
+                      <span class="project-highlight-text">活动与历史存入 SQLite，Cookie 与密钥留在本机</span>
+                    </li>
+                    <li class="project-highlight">
+                      <span class="project-highlight-title">Windows 发行包</span>
+                      <span class="project-highlight-text">提供 x64 安装包与便携包，其他平台可参考源码</span>
                     </li>
                   </ul>
                   <div class="project-showcase-actions">
-                    <a class="btn btn-primary btn-pill project-btn" href="https://github.com/luovicter-collab/bilibinggo" target="_blank" rel="noopener">访问 GitHub 仓库</a>
-                    <a class="btn btn-secondary btn-pill project-btn" href="https://github.com/luovicter-collab" target="_blank" rel="noopener">作者 victor</a>
+                    <a class="btn btn-primary btn-pill project-btn" href="https://github.com/Komerser/bilibinggo" target="_blank" rel="noopener">访问 Fork 仓库</a>
+                    <a class="btn btn-secondary btn-pill project-btn" href="https://github.com/Komerser" target="_blank" rel="noopener">维护者 Komerser</a>
+                    <a class="btn btn-ghost btn-pill project-btn" href="https://github.com/luovicter-collab/bilibinggo" target="_blank" rel="noopener">上游项目</a>
                     <button type="button" class="btn btn-ghost btn-pill" id="export-diagnostics">导出诊断包</button>
                   </div>
                 </div>
@@ -366,16 +375,24 @@
                   <div class="project-meta">
                     <div class="project-meta-row">
                       <span class="project-info-label">Repository</span>
-                      <span class="project-info-value">luovicter-collab / bilibinggo</span>
+                      <span class="project-info-value">Komerser / bilibinggo</span>
                     </div>
                     <div class="project-meta-pairs">
                       <div class="project-meta-item">
-                        <span class="project-info-label">Author</span>
-                        <span class="project-info-value">victor</span>
+                        <span class="project-info-label">Fork 维护者</span>
+                        <a class="project-info-value" href="https://github.com/Komerser" target="_blank" rel="noopener">Komerser</a>
+                      </div>
+                      <div class="project-meta-item">
+                        <span class="project-info-label">原作者</span>
+                        <a class="project-info-value" href="https://github.com/luovicter-collab" target="_blank" rel="noopener">victor</a>
                       </div>
                       <div class="project-meta-item">
                         <span class="project-info-label">License</span>
                         <span class="project-info-value">MIT</span>
+                      </div>
+                      <div class="project-meta-item">
+                        <span class="project-info-label">发行平台</span>
+                        <span class="project-info-value">Windows x64</span>
                       </div>
                       <div class="project-meta-item">
                         <span class="project-info-label">Version</span>
@@ -393,7 +410,7 @@
                   </div>
                   <div class="project-showcase-side-actions">
                     <button type="button" class="btn btn-secondary btn-pill btn-compact" id="check-updates">检查更新</button>
-                    <a class="btn btn-ghost btn-pill btn-compact" id="open-releases" href="https://github.com/luovicter-collab/bilibinggo/releases" target="_blank" rel="noopener">Releases</a>
+                    <a class="btn btn-ghost btn-pill btn-compact" id="open-releases" href="https://github.com/Komerser/bilibinggo/releases" target="_blank" rel="noopener">Releases</a>
                   </div>
                   <p class="caption" id="runtime-health-hint" hidden></p>
                 </div>
