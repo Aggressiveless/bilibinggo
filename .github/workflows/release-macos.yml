@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   build-macos:
+    # 手工准备且带校验清单的发行版只发布已经验证的平台；仍可手动构建 macOS。
+    if: github.event_name == 'workflow_dispatch' || !contains(join(github.event.release.assets.*.name, ','), 'release-manifest.json')
     runs-on: macos-14
     steps:
       - name: Checkout
