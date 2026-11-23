@@ -36,6 +36,26 @@ def test_current_participation_uses_deadline_and_draw_separately(fields, notice,
 def test_year_inference_is_bound_to_recent_source_and_supports_rollover():
     assert discovery._date_from_quote("1月2日20:00", date(2026, 12, 30), date(2026, 12, 31)) == date(2027, 1, 2, 20)
     assert discovery._date_from_quote("11月26日20:00", date(2025, 11, 20), date(2026, 11, 21)) is None
+    assert discovery._date_from_quote("11月26日20:00", date(2026, 11, 10), date(2026, 11, 23)) == date(2026, 11, 26, 20)
+
+
+def test_short_lottery_portal_only_reads_b23_and_caches_supported_destinations(monkeypatch, tmp_path):
+    calls = []
+
+    def get(self, url, **kwargs):
+        calls.append(url)
+        assert kwargs["headers"]["Cookie"] == ""
+        target = ("https://www.bilibili.com/opus/1246355215351808021?share=1" if url.endswith("QdYJp3e")
+                  else "http://127.0.0.1/private")
+        return httpx.Response(302, headers={"Location": target}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(BilibiliClient, "_http_get", get)
+    with discovery.DiscoveryClient(tmp_path / "cache.json", budget=2) as client:
+        monkeypatch.setattr(client, "_wait_for_request", lambda seconds: None)
+        for _ in range(2):
+            assert client.resolve_short_link("https://b23.tv/QdYJp3e") == "https://www.bilibili.com/opus/1246355215351808021"
+        assert client.resolve_short_link("https://b23.tv/outbound") is None
+    assert calls == ["https://b23.tv/QdYJp3e", "https://b23.tv/outbound"]
 
 
 def test_date_without_clock_is_not_lost():
@@ -141,7 +161,8 @@ def test_model_evidence_must_exist_and_is_cached(monkeypatch, tmp_path):
 
     def chat(**kwargs):
         calls.append(kwargs)
-        return {"prize": "机械键盘", "deadline": "2030年1月1日20:00", "assessment": "uncertain",
+        return {"prize": "机械键盘", "deadline": "2030年1月1日20:00", "assessment": "uncertain", "confidence": 71,
+                "rules_summary": "评论区留言参赛",
                 "reason": "  原文没有说明\n报名截止时间  "}
 
     monkeypatch.setattr(discovery, "chat_json", chat)
@@ -152,6 +173,7 @@ def test_model_evidence_must_exist_and_is_cached(monkeypatch, tmp_path):
             assert not fields["deadline"]
             assert fields["model_reason"] == "原文没有说明 报名截止时间"
             assert fields["model_assessment"] == "uncertain"
+            assert fields["model_confidence"] == 71 and fields["rules_summary"] == "评论区留言参赛"
         assert client.request_count == 0
     assert len(calls) == 1
 

@@ -17,6 +17,9 @@ class PageClient:
         self.budget = budget
         self.calls = []
 
+    def extract(self, text, **context):
+        return {"model_assessment": "not_lottery", "model_reason": "文字没有抽奖线索", "model_confidence": 5}
+
     def read(self, url, params, **kwargs):
         key = json.dumps([url, params], sort_keys=True)
         if key in self.cache.setdefault("responses", {}):
@@ -172,12 +175,73 @@ def test_video_comment_candidates_are_not_counted_as_importable_dynamics():
             if url == d.VIDEO_URL:
                 return {"code": 0, "data": {"desc": "评论区留言，抽奖送键盘，2030年11月25日20:00截止"}}
             return super().read(url, params, **kwargs)
-        def extract(self, text):
+        def extract(self, text, **context):
             return {"prize": "键盘", "rules": "评论区留言", "deadline": "2030年11月25日20:00截止"}
     snapshots = []
     result = broad.discover_page(CommentClient(), ["抽奖"], video_limit=1, on_progress=snapshots.append)
     assert result["open"][0]["kind"] == "video_comment"
     assert snapshots[-1]["eligible"] == 0
+
+
+def test_pinned_portal_and_collection_keep_each_destination(monkeypatch):
+    portal, list_video = "BV1BZWN6GEC4", "BV18nsN6hEBw"
+    linked_ids = [str(1246355215351808020 + i) for i in range(30)]
+    checked = []
+
+    class CaseClient(PageClient):
+        def read(self, url, params, **kwargs):
+            if url == d.SEARCH_URL:
+                return {"code": 0, "data": {"result": [{"bvid": portal}, {"bvid": list_video}]}}
+            if url == d.VIDEO_URL:
+                return {"code": 0, "data": {"aid": 1 if params["bvid"] == portal else 2,
+                    "owner": {"mid": 42}, "title": "GTA6活动"}}
+            assert url == d.REPLIES_URL
+            message = ("抽奖传送门[星星眼]→https://b23.tv/QdYJp3e" if params["oid"] == 1
+                       else "【官方抽奖】\n" + "\n".join(d.opus_link(identifier) for identifier in linked_ids[:-2]))
+            return {"code": 0, "data": {"top": {"upper": {"member": {"mid": "42"}, "content": {"message": message}}}}}
+
+        def resolve_short_link(self, url):
+            assert url == "https://b23.tv/QdYJp3e"
+            return d.opus_link(linked_ids[0])
+
+    def inspect(client, identifier, *, on_links, **kwargs):
+        checked.append(identifier)
+        if identifier == linked_ids[0]:
+            on_links("合集\n" + "\n".join(d.opus_link(i) for i in linked_ids[-2:]))
+        return {"dynamic_id": identifier, "kind": "dynamic", "url": d.opus_link(identifier),
+                "status": "review", "reason": "仍需核验", "model_confidence": 81}
+
+    monkeypatch.setattr(d, "inspect_dynamic", inspect)
+    snapshots = []
+    report = broad.discover_page(CaseClient(), ["GTA6抽奖"], candidate_limit=0, on_progress=snapshots.append)
+    assert len(checked) == len(set(checked)) == 30
+    assert len(report["review"]) == 30 and not report["open"]
+    audits = snapshots[-1]["video_checks"]
+    assert {note.get("dynamic_id") for note in audits[portal]["notes"]} >= set(linked_ids[-2:])
+    assert "28 个抽奖入口" in audits[list_video]["source_reason"]
+
+
+def test_large_creator_weak_lottery_hint_gets_broader_review(monkeypatch):
+    class CreatorClient(PageClient):
+        def read(self, url, params, **kwargs):
+            if url == d.VIDEO_URL:
+                return {"code": 0, "data": {"title": "下周可能做个抽奖", "owner": {"mid": 42}}}
+            return super().read(url, params, **kwargs)
+
+        def extract(self, text, **context):
+            assert context["followers"] == 250_000
+            return {"model_assessment": "uncertain", "model_reason": "提到抽奖但没有明确方式", "model_confidence": 60}
+
+    checked_limits = []
+    def author_search(client, uid, *, limit):
+        checked_limits.append(limit)
+        return [], {"search_url": "https://space.bilibili.com/42/search/dynamic"}
+
+    monkeypatch.setattr(d, "read_follower_count", lambda *args: 250_000)
+    monkeypatch.setattr(broad, "search_author_lotteries", author_search)
+    report = broad.discover_page(CreatorClient(), ["抽奖"], video_limit=1, collect_followers=True)
+    assert checked_limits == [6]
+    assert not report["open"]
 
 
 def test_audit_shares_dynamic_results_and_preserves_only_distinct_sightings(tmp_path, monkeypatch):
@@ -219,7 +283,7 @@ def test_audit_shares_dynamic_results_and_preserves_only_distinct_sightings(tmp_
     assert all(row["repeat_count"] == 1 and not row["repeat_count_incomplete"] for row in results)
     assert results[0]["title"] == "视频&标题"
     assert results[1]["reasons"][0]["model_reason"] == "明确给出参与方式和奖品"
-    assert "未送模型" in results[2]["reasons"][0]["message"]
+    assert results[2]["reasons"][0]["model_assessment"] == "not_lottery"
     assert "未能读取" in results[3]["reasons"][0]["message"]
     imported = display_video_check(rows[0], known={target}, joined=set(), outcomes={target: "imported"}, now=0)
     assert imported["status"] == "handled" and imported["reasons"][0]["message"] == "关联活动已导入"

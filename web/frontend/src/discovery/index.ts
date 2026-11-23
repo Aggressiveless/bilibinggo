@@ -36,9 +36,20 @@ interface Candidate {
   triple_requirement: "required" | "optional" | "not_mentioned" | "unknown";
 }
 
-const videoStates = { pending: "待检测", rejected: "检测不合格", ready: "待导入", handled: "已处理" };
-const modelStates = { lottery: "有抽奖", not_lottery: "未发现抽奖", uncertain: "证据不足" };
+const videoStates = { pending: "待检测", review: "有线索 · 待核验", rejected: "检测不合格", ready: "待导入", handled: "已处理" };
+const modelStates = { lottery: "有抽奖", entry: "抽奖入口", collection: "抽奖合集", not_lottery: "未发现抽奖", uncertain: "证据不足" };
 type VideoState = keyof typeof videoStates;
+
+interface ActivityCheck {
+  dynamic_id: string;
+  status: VideoState;
+  reason: string;
+  prize?: string;
+  rules_summary?: string;
+  model_reason?: string;
+  model_confidence?: number | null;
+  followers?: number | null;
+}
 
 interface VideoRecord {
   bvid: string;
@@ -48,7 +59,10 @@ interface VideoRecord {
   status: VideoState;
   repeat_count: number;
   repeat_count_incomplete: boolean;
-  reasons: { message: string; model_reason?: string; model_assessment?: keyof typeof modelStates; kind?: string; count: number }[];
+  source_reason?: string;
+  activities?: ActivityCheck[];
+  reasons: { message: string; model_reason?: string; model_assessment?: keyof typeof modelStates; kind?: string; count: number;
+    model_confidence?: number | null; rules_summary?: string }[];
 }
 
 interface DiscoveryStatus {
@@ -459,13 +473,21 @@ function bindSourceViews() {
         status.dataset.videoState = item.status;
         status.textContent = videoStates[item.status] || videoStates.pending;
         resultCell.append(status);
+        if (item.source_reason) {
+          const sourceReason = document.createElement("span");
+          sourceReason.className = "video-record-detail";
+          sourceReason.textContent = item.source_reason;
+          resultCell.append(sourceReason);
+        }
         const reasons = (item.reasons || []).map((reason) => {
           const detail = document.createElement("span");
           detail.className = "video-record-detail";
           const model = reason.model_assessment ? modelStates[reason.model_assessment] : "";
           const scope = reason.kind === "video_comment" ? "视频" : "关联动态";
+          const confidence = typeof reason.model_confidence === "number" ? ` · 线索可信度 ${reason.model_confidence}/100` : "";
           detail.textContent = `${reason.message}${reason.count > 1 ? `（${reason.count} 个）` : ""}`
-            + (reason.model_reason ? `。模型（${scope}${model ? ` · ${model}` : ""}）${reason.model_reason}` : "");
+            + (reason.model_reason ? `。模型（${scope}${model ? ` · ${model}` : ""}${confidence}）${reason.model_reason}` : "")
+            + (reason.rules_summary ? `。规则摘要：${reason.rules_summary}` : "");
           return detail;
         });
         resultCell.append(...reasons.slice(0, 2));
@@ -475,6 +497,28 @@ function bindSourceViews() {
           toggle.textContent = `其余 ${reasons.length - 2} 项原因`;
           more.append(toggle, ...reasons.slice(2));
           resultCell.append(more);
+        }
+        if (item.activities?.length) {
+          const linked = document.createElement("details");
+          const toggle = document.createElement("summary");
+          toggle.textContent = `逐条查看 ${item.activities.length} 个关联动态`;
+          linked.append(toggle);
+          for (const activity of item.activities) {
+            const entry = document.createElement("div");
+            entry.className = "video-record-detail";
+            const target = document.createElement("a");
+            target.href = `https://www.bilibili.com/opus/${encodeURIComponent(activity.dynamic_id)}`;
+            target.target = "_blank";
+            target.rel = "noopener noreferrer";
+            target.textContent = activity.prize || activity.dynamic_id;
+            const details = [videoStates[activity.status], activity.reason];
+            if (typeof activity.model_confidence === "number") details.push(`线索可信度 ${activity.model_confidence}/100`);
+            if (typeof activity.followers === "number") details.push(`${activity.followers.toLocaleString()} 粉丝`);
+            if (activity.rules_summary) details.push(`规则摘要：${activity.rules_summary}`);
+            entry.append(target, ` · ${details.join(" · ")}`);
+            linked.append(entry);
+          }
+          resultCell.append(linked);
         }
         const repeats = row.insertCell();
         repeats.textContent = item.repeat_count_incomplete ? (item.repeat_count ? `≥ ${item.repeat_count}` : "未统计") : String(item.repeat_count ?? 0);

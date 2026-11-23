@@ -26,6 +26,8 @@ def snapshot_video_checks(state, rows, *, legacy=False):
         if data.get("title"):
             check["title"] = data["title"]
         check["notes"].extend(data.get("notes", []))
+        if data.get("source_reason"):
+            check["source_reason"] = data["source_reason"]
 
     dynamics = {row["dynamic_id"]: row for row in rows if row.get("dynamic_id")}
     comments = {row.get("source_video"): row for row in rows if row.get("kind") == "video_comment"}
@@ -37,7 +39,9 @@ def snapshot_video_checks(state, rows, *, legacy=False):
 
     for index, source in enumerate(state.get("source_tasks", [])):
         if index >= state.get("source_index", 0):
-            add(source, audit_note("pending", "等待读取专栏" if source["kind"] == "article" else "等待检索发布者主页"))
+            label = {"article": "等待读取专栏", "short": "等待展开抽奖传送门", "video": "等待模型判断视频线索",
+                     "author": "等待检索发布者主页"}[source["kind"]]
+            add(source, audit_note("pending", label))
         elif source.get("audit"):
             add(source, source["audit"])
 
@@ -49,7 +53,11 @@ def snapshot_video_checks(state, rows, *, legacy=False):
         elif row:
             note = audit_note(row["status"], row.get("reason") or "已核验候选", kind=row["kind"],
                               dynamic_id=identifier, deadline=row.get("deadline"), draw_time=row.get("draw_time"),
-                              model_reason=row.get("model_reason") or None, model_assessment=row.get("model_assessment"))
+                              model_reason=row.get("model_reason") or None, model_assessment=row.get("model_assessment"),
+                              model_confidence=row.get("model_confidence"), rules_summary=row.get("rules_summary"),
+                              followers=row.get("followers"), prize=row.get("prize"))
+            if task.get("audit"):
+                add(task, task["audit"])
         else:
             note = task.get("audit") or audit_note("pending", "旧版未保留该候选的核验依据")
         add(task, note)
@@ -66,7 +74,7 @@ def display_video_check(row, *, known, joined, outcomes, now):
     legacy = bool(row["legacy_history"])
     fallback = "旧版只记录了收录时间，等下次扫描补齐" if legacy else "已收录，尚未进入视频扫描范围"
     source_notes = check.get("notes") or [audit_note("pending", fallback)]
-    reasons, status_counts = Counter(), Counter()
+    reasons, status_counts, activities = Counter(), Counter(), []
     for note in source_notes:
         status, reason = note["status"], note["reason"]
         identifier = note.get("dynamic_id")
@@ -85,15 +93,21 @@ def display_video_check(row, *, known, joined, outcomes, now):
             else:
                 status = "ready"
         elif status == "open":
-            status, reason = "rejected", "已确认是视频评论区抽奖，当前活动列表仅支持导入动态活动"
-        elif status != "pending":
+            status, reason = "review", "已确认是视频评论区抽奖，可从原视频查看参与方式"
+        elif status not in {"pending", "review"}:
             status = "rejected"
         status_counts[status] += 1
-        reasons[(status, reason, note.get("model_reason"), note.get("model_assessment"), note.get("kind"))] += 1
-    status = next(value for value in ("ready", "pending", "handled", "rejected") if status_counts[value])
+        reasons[(status, reason, note.get("model_reason"), note.get("model_assessment"), note.get("kind"),
+                 note.get("model_confidence"), note.get("rules_summary"))] += 1
+        if identifier:
+            activities.append({"dynamic_id": identifier, "status": status, "reason": reason,
+                               **{key: note.get(key) for key in ("prize", "rules_summary", "model_reason", "model_confidence", "followers")}})
+    status = next(value for value in ("ready", "pending", "review", "handled", "rejected") if status_counts[value])
     ordered = sorted(reasons.items(), key=lambda entry: (entry[0][0] != status, not entry[0][2]))
     return {"bvid": row["bvid"], "title": check.get("title") or row["title"],
             "first_seen": row["first_seen"], "last_seen": row["last_seen"], "status": status,
             "repeat_count": max(0, row["sightings"] - int(not legacy)), "repeat_count_incomplete": legacy,
-            "reasons": [{"message": reason, "model_reason": model, "model_assessment": assessment, "kind": kind, "count": count}
-                        for (_, reason, model, assessment, kind), count in ordered]}
+            "source_reason": check.get("source_reason"), "activities": activities,
+            "reasons": [{"message": reason, "model_reason": model, "model_assessment": assessment, "kind": kind,
+                         "model_confidence": confidence, "rules_summary": summary, "count": count}
+                        for (_, reason, model, assessment, kind, confidence, summary), count in ordered]}

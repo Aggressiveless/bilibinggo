@@ -17,6 +17,7 @@ from src.discovery_video_audit import audit_note, snapshot_video_checks, video_t
 AUTHOR_SEARCH_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space/search"
 AUTHOR_SEARCH_FEATURES = "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard"
 SESSION_TTL_SECONDS = 1800
+LARGE_CREATOR_FOLLOWERS = 100_000
 
 
 def _legacy_scan_notes(session, entries, finished):
@@ -133,7 +134,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
     known_ids, joined_ids = set(known_ids or []), set(joined_ids or [])
     cache = getattr(client, "cache", {})
     sessions = cache.setdefault("broad_sessions", {})
-    key = hashlib.sha256(json.dumps([6, keywords, video_limit, comprehensive_page, author_dynamic_limit], ensure_ascii=False).encode()).hexdigest()[:24]
+    key = hashlib.sha256(json.dumps([7, keywords, video_limit, comprehensive_page, author_dynamic_limit], ensure_ascii=False).encode()).hexdigest()[:24]
     previous = sessions.get(key)
     resumed = bool(resume and previous and previous.get("expires_at", 0) > time.time()
                    and (replay_completed or not previous.get("done")))
@@ -152,6 +153,16 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
     added_open = 0
     started = time.monotonic()
     follower_counts = state.setdefault("follower_counts", {}) if collect_followers else {}
+
+    def followers_for(uid):
+        if not collect_followers or not uid.isdigit():
+            return None
+        if uid not in follower_counts:
+            try:
+                follower_counts[uid] = d.read_follower_count(client, uid)
+            except (httpx.HTTPError, RuntimeError, ValueError):
+                follower_counts[uid] = None
+        return follower_counts[uid]
 
     def scan_completed():
         return state["search_index"] == len(keywords) and state["scan_index"] == len(state["videos"])
@@ -205,12 +216,103 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                 detail["notes"].append(audit_note("pending", "达到本轮候选上限，部分入口未核验"))
 
     def add_source(task):
-        identity = (task["kind"], task.get("uid") or task.get("cv_id"))
-        existing = next((t for t in state["source_tasks"] if (t["kind"], t.get("uid") or t.get("cv_id")) == identity), None)
+        identity = (task["kind"], task["key"])
+        existing = next((t for t in state["source_tasks"] if (t["kind"], t["key"]) == identity), None)
         if existing:
             attach_source(existing, task)
+            for target in state["tasks"]:
+                if target.get("source_key") == identity[0] + ":" + identity[1]:
+                    attach_source(target, task)
         else:
             state["source_tasks"].append(task)
+
+    def add_links(text, source, *, parent=None):
+        # Keep first appearance and every unique entry, including long pinned lists.
+        bvs = source.get("source_videos", [source["source_video"]])
+        chain = source.get("chain", [])
+        depth = source.get("depth", 0)
+        if parent:
+            chain = [*chain, d.opus_link(parent)]
+        info = {"source_video": source["source_video"], "source_videos": bvs,
+                "chain": chain, "depth": depth + int(parent is not None),
+                "context": source.get("context", "")}
+        if source.get("key") and source["kind"] in {"article", "short"}:
+            info["source_key"] = f"{source['kind']}:{source['key']}"
+        identifiers = [identifier for identifier in dict.fromkeys(d.DYNAMIC_RE.findall(text)) if identifier != parent]
+        articles = list(dict.fromkeys(d.ARTICLE_RE.findall(text)))
+        short_links = list(dict.fromkeys(d.SHORT_LINK_RE.findall(text)))
+        if (identifiers or articles or short_links) and info["depth"] > 2:
+            source["audit"] = audit_note("review", "关联动态还包含其他入口，已保留本条供手动查看")
+            return 0
+        for identifier in identifiers:
+            add_task({**info, "kind": "dynamic", "dynamic_id": identifier,
+                      "found_via": "collection_link" if parent else "video_link"})
+        for cv in articles:
+            add_source({**info, "kind": "article", "key": cv})
+        for code in short_links:
+            add_source({**info, "kind": "short", "key": code})
+        return len(identifiers) + len(articles) + len(short_links)
+
+    def resolve_sources():
+        while state["source_index"] < len(state["source_tasks"]):
+            state["phase"] = "resolve_sources"
+            source = state["source_tasks"][state["source_index"]]
+            kind, key_value = source["kind"], source["key"]
+            try:
+                if kind == "article":
+                    article_url = f"https://www.bilibili.com/read/cv{key_value}"
+                    emit(f"解析合集专栏 cv{key_value}")
+                    response = client.read(d.ARTICLE_URL, {"id": int(key_value)}, referer=article_url, ttl=600)
+                    if d.api_code(response) != 0 or not response.get("data"):
+                        raise RuntimeError("专栏内容不可读")
+                    links = d.extract_opus_links_from_article(response["data"])
+                    if not add_links("\n".join(links), {**source, "chain": [*source.get("chain", []), article_url]}):
+                        source["audit"] = audit_note("review", "关联专栏未找到可继续核验的动态链接")
+                elif kind == "short":
+                    short_url = f"https://b23.tv/{key_value}"
+                    emit(f"展开抽奖传送门 {short_url}")
+                    target_url = client.resolve_short_link(short_url)
+                    if not target_url:
+                        source["audit"] = audit_note("review", "短链未解析出可核验的 B 站动态或专栏")
+                    else:
+                        add_links(target_url, {**source, "chain": [*source.get("chain", []), short_url]})
+                elif kind == "video":
+                    emit(f"研判视频线索 {key_value}")
+                    uid = source["uid"]
+                    fans = followers_for(uid)
+                    fields = client.extract(source["text"], source="视频标题、简介及作者评论", followers=fans)
+                    model = fields.get("model_assessment")
+                    confidence = fields.get("model_confidence") or 0
+                    popular = (fans or 0) >= LARGE_CREATOR_FOLLOWERS
+                    credible = model in {"lottery", "entry", "collection"} or model == "uncertain" and confidence >= (45 if popular else 65)
+                    suggest_home = credible or popular and source["lottery_hint"] and model != "not_lottery"
+                    assessment = d.assess_candidate(fields, now=now)
+                    source["audit"] = audit_note("review" if suggest_home or model in {None, "uncertain"} else "rejected",
+                        "视频提供了抽奖线索，待核验关联活动" if suggest_home else assessment["reason"],
+                        kind="video_comment", **{k: fields[k] for k in ("model_reason", "model_assessment", "model_confidence", "rules_summary") if k in fields})
+                    if suggest_home and uid.isdigit():
+                        add_source({**source, "kind": "author", "key": uid})
+                else:
+                    uid = key_value
+                    fans = followers_for(uid)
+                    limit = max(author_dynamic_limit, 6) if (fans or 0) >= LARGE_CREATOR_FOLLOWERS else author_dynamic_limit
+                    emit(f"作者 {uid} 主页搜索“抽奖”，取最近 {limit} 条原创动态")
+                    items, metadata = search_author_lotteries(client, uid, limit=limit)
+                    state["author_queries"][uid] = {**metadata, "followers": fans, "reviewed_limit": limit}
+                    if not items:
+                        source["audit"] = audit_note("review", "有抽奖线索，发布者主页未找到可核验的原创抽奖动态")
+                    for item in items:
+                        add_task({"kind": "dynamic", "dynamic_id": str(item["id_str"]), "item": item,
+                                  "source_video": source["source_video"], "context": source.get("context", ""),
+                                  "source_videos": source.get("source_videos", [source["source_video"]]),
+                                  "chain": [*source.get("chain", []), metadata["search_url"]],
+                                  "source_key": f"author:{uid}", "home_group": uid, "found_via": "publisher_home"})
+            except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+                state["errors"].append(f"入口解析失败：{str(exc)[:200]}")
+                label = {"article": "关联专栏读取失败", "short": "抽奖短链读取失败", "video": "视频线索暂未取得模型判定",
+                         "author": "发布者主页检索失败"}[kind]
+                source["audit"] = audit_note("pending", label)
+            state["source_index"] += 1
 
     try:
         while state["search_index"] < len(keywords):
@@ -261,66 +363,30 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                         state["errors"].append(f"{bvid}: 评论不可读：{str(exc)[:150]}")
                         detail["notes"].append(audit_note("pending", "作者评论未能读取，核验资料不完整"))
                 text = "\n".join(texts)
-                identifiers = sorted(set(d.DYNAMIC_RE.findall(text)), key=int, reverse=True)
-                for identifier in identifiers[:24]:
-                    add_task({"kind": "dynamic", "dynamic_id": identifier, "source_video": url, "found_via": "video_link"})
-                articles = sorted(set(d.ARTICLE_RE.findall(text)), key=int, reverse=True)
-                for cv in articles[:2]:
-                    add_source({"kind": "article", "cv_id": cv, "source_video": url})
+                linked = add_links(text, {"source_video": url, "context": detail["title"]})
+                if linked:
+                    detail["source_reason"] = f"找到 {linked} 个抽奖入口，逐条核验" if linked > 1 else "找到关联入口，沿链接核验"
                 lottery = bool(d.LOTTERY_RE.search(text))
                 explicit_home = d._home_participation_hint(text)
                 video_comment = lottery and bool(d.COMMENT_ENTRY_RE.search(text) or d.VIDEO_COMMENT_RE.search(text) and d.COMMENT_RE.search(text))
-                home = explicit_home or lottery and not (identifiers or articles or video_comment)
-                if home and str(owner.get("mid") or "").isdigit():
-                    add_source({"kind": "author", "uid": str(owner["mid"]), "owner": owner,
-                                "source_video": url, "text": text[:4800]})
-                elif home:
-                    detail["notes"].append(audit_note("pending", "有抽奖线索，但缺少发布者 UID，无法检索主页"))
-                if video_comment and not (identifiers or articles or explicit_home):
+                uid = str(owner.get("mid") or "")
+                if explicit_home and uid.isdigit():
+                    add_source({"kind": "author", "key": uid, "source_video": url, "context": detail["title"]})
+                elif video_comment and not linked:
                     add_task({"kind": "video_comment", "source_video": url, "text": text[:4800],
                               "published": video.get("pubdate") or row.get("pubdate") or 0, "owner": owner})
-                elif not (identifiers or articles or home or detail["notes"]):
-                    detail["notes"].append(audit_note("rejected", "标题、简介和可读的作者评论里未发现抽奖线索或入口，未送模型"))
+                elif not linked and text.strip():
+                    add_source({"kind": "video", "key": bvid, "uid": uid, "source_video": url,
+                                "text": text[:8000], "lottery_hint": lottery or explicit_home, "context": detail["title"]})
+                elif not linked and not detail["notes"]:
+                    detail["notes"].append(audit_note("pending", "视频标题、简介和作者评论均无可核验文字"))
             except (httpx.HTTPError, RuntimeError, ValueError) as exc:
                 state["errors"].append(f"{bvid}: {str(exc)[:200]}")
                 detail["notes"].append(audit_note("pending", "视频详情未能读取，无法核验"))
             state["scan_index"] += 1
         emit(f"整页扫描完成：{state['scan_index']} 个视频，开始解析入口")
 
-        while state["source_index"] < len(state["source_tasks"]):
-            state["phase"] = "resolve_sources"
-            source = state["source_tasks"][state["source_index"]]
-            try:
-                if source["kind"] == "article":
-                    article_url = f"https://www.bilibili.com/read/cv{source['cv_id']}"
-                    emit(f"解析合集专栏 cv{source['cv_id']}")
-                    response = client.read(d.ARTICLE_URL, {"id": int(source["cv_id"])}, referer=article_url, ttl=600)
-                    if d.api_code(response) != 0 or not response.get("data"):
-                        raise RuntimeError("专栏内容不可读")
-                    links = d.extract_opus_links_from_article(response.get("data") or {})
-                    identifiers = sorted(set(d.DYNAMIC_RE.findall("\n".join(links))), key=int, reverse=True)[:24]
-                    if not identifiers:
-                        source["audit"] = audit_note("rejected", "关联专栏中没有可识别的抽奖动态链接")
-                    for identifier in identifiers:
-                        add_task({"kind": "dynamic", "dynamic_id": identifier, "source_video": source["source_video"],
-                                  "source_videos": source.get("source_videos", [source["source_video"]]),
-                                  "source_article": article_url, "found_via": "article_link"})
-                else:
-                    uid = source["uid"]
-                    emit(f"作者 {uid} 主页搜索“抽奖”，取最近 {author_dynamic_limit} 条原创动态")
-                    items, metadata = search_author_lotteries(client, uid, limit=author_dynamic_limit)
-                    state["author_queries"][uid] = metadata
-                    if not items:
-                        source["audit"] = audit_note("rejected", "发布者主页搜索未返回相关的原创抽奖动态")
-                    for item in items:
-                        add_task({"kind": "dynamic", "dynamic_id": str(item["id_str"]), "item": item,
-                                  "source_video": source["source_video"], "source_text": source["text"],
-                                  "source_videos": source.get("source_videos", [source["source_video"]]),
-                                  "source_home": metadata["search_url"], "home_group": uid, "found_via": "publisher_home"})
-            except (httpx.HTTPError, RuntimeError, ValueError) as exc:
-                state["errors"].append(f"入口解析失败：{str(exc)[:200]}")
-                source["audit"] = audit_note("pending", "关联专栏读取失败" if source["kind"] == "article" else "发布者主页检索失败")
-            state["source_index"] += 1
+        resolve_sources()
         if state["verify_index"] == 0:
             state["tasks"] = _fair_order(state["tasks"])
 
@@ -335,20 +401,28 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                            "status": "review", "reason": "本地活动库已有该活动，无需重复导入", "prize": "",
                            "deadline": None, "draw_time": None, "evidence": {}}
                 elif task["kind"] == "video_comment":
-                    fields = client.extract(task["text"])
                     owner = task.get("owner") or {}
+                    fields = client.extract(task["text"], source="视频评论区抽奖", followers=followers_for(str(owner.get("mid") or "")))
                     row = {"kind": "video_comment", "url": task["source_video"], "source_video": task["source_video"],
                            "publisher": owner.get("name") or "", "publisher_uid": str(owner.get("mid") or ""),
                            "prize": fields.get("prize", ""), **d.assess_candidate(fields, now=now, published=task["published"])}
                 else:
                     def note_skip(status, reason):
                         task["audit"] = audit_note(status, reason)
-                    row = d.inspect_dynamic(client, identifier, now=now, item=task.get("item"), on_skip=note_skip)
+                    link_count = 0
+
+                    def queue_linked(text):
+                        nonlocal link_count
+                        link_count = add_links(text, task, parent=identifier)
+
+                    row = d.inspect_dynamic(client, identifier, now=now, item=task.get("item"), on_skip=note_skip,
+                                            on_links=queue_linked, followers_for=followers_for, context=task.get("context", ""))
+                    if row and link_count and row["status"] in {"review", "irrelevant"}:
+                        row.update(status="review", reason=f"关联动态包含 {link_count} 个入口，已按目标分别核验")
                 if row:
                     row.update(source_video=task["source_video"], found_via=task.get("found_via", "video_comment"),
                         source_chain=[{"source": task["source_video"]},
-                                      *([{"source": task["source_article"]}] if task.get("source_article") else []),
-                                      *([{"source": task["source_home"], "keyword": "抽奖"}] if task.get("source_home") else []),
+                                      *[{"source": url} for url in task.get("chain", [])],
                                       {"target": row["url"]}])
                     if task.get("home_group"):
                         row["home_group"] = task["home_group"]
@@ -360,6 +434,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                 task["audit"] = audit_note("pending", reason)
             state["verify_index"] += 1
             state["verified"] += 1
+            resolve_sources()
             if candidate_limit and added_open >= candidate_limit:
                 completion = "target_reached"
                 break
@@ -373,10 +448,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                     continue
                 state["phase"] = "publisher_stats"
                 emit(f"读取发布者粉丝数 {index}/{len(publishers)}")
-                try:
-                    follower_counts[uid] = d.read_follower_count(client, uid)
-                except (httpx.HTTPError, RuntimeError, ValueError):
-                    follower_counts[uid] = None
+                followers_for(uid)
         state["done"] = state["verify_index"] == len(state["tasks"])
     except d.DiscoveryStopped as exc:
         stopped = str(exc)
