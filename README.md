@@ -1,4 +1,4 @@
-> **Komerser fork · 6.0.1** — [更新内容](CHANGELOG.md) · [下载 6.0.1](https://github.com/Komerser/bilibinggo/releases/tag/v6.0.1)。Windows 程序为 `Binggo-RepostFix.exe`，默认端口 `8182`，数据位于程序旁的 `user-data`。本 fork 基于 [上游 bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
+> **Komerser fork · 6.0.2** — [更新内容](CHANGELOG.md) · [下载 6.0.2](https://github.com/Komerser/bilibinggo/releases/tag/v6.0.2)。Windows 程序为 `Binggo-RepostFix.exe`，默认端口 `8182`，数据位于程序旁的 `user-data`。本 fork 基于 [上游 bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
 
 <p align="center">
   <img src="docs/images/logo.svg" alt="Binggo" width="80" height="80">

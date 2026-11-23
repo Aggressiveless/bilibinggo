@@ -1,6 +1,6 @@
-﻿Binggo 6.0.1（Komerser fork）
+﻿Binggo 6.0.2（Komerser fork）
 
-下载：https://github.com/Komerser/bilibinggo/releases/tag/v6.0.1
+下载：https://github.com/Komerser/bilibinggo/releases/tag/v6.0.2
 源码：https://github.com/Komerser/bilibinggo
 上游：https://github.com/luovicter-collab/bilibinggo
 
@@ -16,6 +16,8 @@
 4. 请勿将含 Cookie、模型密钥及数据库的 user-data 上传公开仓库。
 
 主要更新
+- 活动页支持导出当前筛选中的开放活动，并预览导入文件中的重复项与过期项。
+- 更新数据源时跳过不可访问的单条活动，并在日志中记录原因。
 - 动态转发接口修复与按活动要求收藏。
 - 抽奖线索检索、候选复核、增量导入，以及唯一新视频目标数量。
 - 检索停止后继续，保留去重结果、扫描游标和真实完成进度。
