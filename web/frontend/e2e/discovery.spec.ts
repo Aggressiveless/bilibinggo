@@ -18,7 +18,7 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
       expect(route.request().postDataJSON()).toEqual({ job_id: starts });
       snapshot = { ...snapshot, job: { ...snapshot.job, state: "cancelled" },
         summary: { ...snapshot.summary, completion_reason: "cancelled", eligible: 1 }, resume_available: true,
-        candidates: [{ dynamic_id: "1234567890123456789", raw: { prize: "键盘 <script>" } }] };
+        candidates: [] };
     }
     await route.fulfill({ json: snapshot });
   });

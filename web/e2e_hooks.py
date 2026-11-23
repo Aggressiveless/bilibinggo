@@ -112,6 +112,10 @@ def _mock_is_llm_ready() -> bool:
     return _STATE["llm"] == "ready"
 
 
+def _mock_has_login_cookie() -> bool:
+    return _STATE["account"] == "logged_in"
+
+
 def _client_is_loopback(request: Request) -> bool:
     host = (request.client.host if request.client else "") or ""
     return host in _LOOPBACK_HOSTS
@@ -127,6 +131,7 @@ def install_e2e_hooks(app: FastAPI) -> None:
 
     import web.account_service as account_service
     import web.api_errors as api_errors
+    import src.llm_settings as llm_settings
 
     # 用 sys.modules 取已加载的 web.app，避免在 app 模块体尾部安装时二次 import 踩坑
     web_app = sys.modules.get("web.app")
@@ -134,10 +139,18 @@ def install_e2e_hooks(app: FastAPI) -> None:
     _ORIGINALS["account_service.get_account_profile"] = account_service.get_account_profile
     _ORIGINALS["account_service.get_account_extras"] = account_service.get_account_extras
     _ORIGINALS["api_errors.is_llm_ready"] = api_errors.is_llm_ready
+    _ORIGINALS["account_service.has_login_cookie"] = account_service.has_login_cookie
+    _ORIGINALS["account_service._load_account_cache"] = account_service._load_account_cache
+    _ORIGINALS["llm_settings.is_llm_ready"] = llm_settings.is_llm_ready
 
     account_service.get_account_profile = _mock_account_profile  # type: ignore[assignment]
     account_service.get_account_extras = _mock_account_extras  # type: ignore[assignment]
     api_errors.is_llm_ready = _mock_is_llm_ready  # type: ignore[assignment]
+    # Queue dispatch rechecks credentials and model readiness. Keep those gates
+    # in the same synthetic state without writing credentials to the test home.
+    account_service.has_login_cookie = _mock_has_login_cookie
+    account_service._load_account_cache = _mock_account_profile
+    llm_settings.is_llm_ready = _mock_is_llm_ready
 
     if web_app is not None:
         _ORIGINALS["web_app.get_account_profile"] = web_app.get_account_profile
@@ -172,10 +185,14 @@ def uninstall_e2e_hooks() -> None:
 
     import web.account_service as account_service
     import web.api_errors as api_errors
+    import src.llm_settings as llm_settings
 
     account_service.get_account_profile = _ORIGINALS["account_service.get_account_profile"]  # type: ignore[assignment]
     account_service.get_account_extras = _ORIGINALS["account_service.get_account_extras"]  # type: ignore[assignment]
     api_errors.is_llm_ready = _ORIGINALS["api_errors.is_llm_ready"]  # type: ignore[assignment]
+    account_service.has_login_cookie = _ORIGINALS["account_service.has_login_cookie"]
+    account_service._load_account_cache = _ORIGINALS["account_service._load_account_cache"]
+    llm_settings.is_llm_ready = _ORIGINALS["llm_settings.is_llm_ready"]
 
     web_app = sys.modules.get("web.app")
     if web_app is not None and "web_app.get_account_profile" in _ORIGINALS:

@@ -19,7 +19,10 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "off",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [{ name: "chromium", use: {
+    ...devices["Desktop Chrome"],
+    ...(process.env.BINGGO_E2E_BROWSER_CHANNEL ? { channel: process.env.BINGGO_E2E_BROWSER_CHANNEL } : {}),
+  } }],
   webServer: {
     command: "python scripts/run_e2e_server.py",
     cwd: repoRoot,

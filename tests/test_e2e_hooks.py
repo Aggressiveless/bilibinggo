@@ -40,6 +40,11 @@ def test_install_and_state_roundtrip(monkeypatch) -> None:
         get_resp = client.get("/api/testing/e2e-state")
         assert get_resp.status_code == 200
         assert get_resp.json()["state"]["account"] == "logged_out"
+        from web.control_service import ControlService
+        from src.llm_settings import is_llm_ready
+
+        assert ControlService.account(None)["credentials_present"] is False
+        assert is_llm_ready() is False
 
         post_resp = client.post(
             "/api/testing/e2e-state",
@@ -59,6 +64,8 @@ def test_install_and_state_roundtrip(monkeypatch) -> None:
         extras = hooks._mock_account_extras()
         assert extras["at_alert"]["increased"] is False
         assert hooks._mock_is_llm_ready() is True
+        assert ControlService.account(None)["credentials_present"] is True
+        assert is_llm_ready() is True
     finally:
         hooks.uninstall_e2e_hooks()
         hooks._INSTALLED = prev_installed

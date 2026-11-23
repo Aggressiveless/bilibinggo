@@ -40,4 +40,14 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
+Windows 已安装 Edge 时，可直接使用它运行测试，无需下载 Chromium：
+
+```powershell
+$env:BINGGO_E2E_BROWSER_CHANNEL = "msedge"
+$env:BINGGO_OFFLINE = "1"
+npm.cmd run test:e2e
+```
+
+队列验收拦截启动与变更请求，模拟忙碌时提交、上下移动、移除和读取历史日志；不会执行真实参与。检索验收覆盖开始、停止、重载和继续检索。
+
 E2E 不依赖本机已在跑的 `8787` 控制台；真 Cookie 手测仍用 `python scripts/run_dashboard.py`。

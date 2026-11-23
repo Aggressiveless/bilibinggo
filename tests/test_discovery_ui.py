@@ -30,7 +30,8 @@ def test_start_requires_saved_login_and_ready_model(browser_control, monkeypatch
 
 
 @pytest.mark.parametrize("mode", ["standard", "comprehensive_page"])
-def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, monkeypatch, mode):
+@pytest.mark.parametrize("enqueue", [False, True])
+def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, monkeypatch, mode, enqueue):
     client, service, runner = browser_control
     monkeypatch.setattr(service, "account", lambda: {"credentials_present": True})
     monkeypatch.setattr("src.llm_settings.is_llm_ready", lambda: True)
@@ -54,13 +55,14 @@ def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, 
     body = {"keywords": [" 抽奖 ", "抽奖"]}
     if mode == "comprehensive_page":
         body["mode"] = mode
-    response = client.post("/api/discovery/start", json=body)
+    response = client.post("/api/discovery/start", params={"enqueue": enqueue}, json=body)
     assert response.status_code == 200
     job_id = response.json()["job"]["job_id"]
     try:
         assert entered.wait(3)
         status = client.get("/api/discovery/current").json()
-        assert status["job"]["job_id"] == job_id and status["job"]["source"] == "ui"
+        assert status["job"]["job_id"] == job_id
+        assert status["job"]["source"] == ("queue" if enqueue else "ui")
         assert status["mode"] == mode
         assert status["keywords"] == ["抽奖"] and status["summary"]["videos_checked"] == 2
         assert client.post("/api/discovery/start", json={}).status_code == 409
@@ -78,6 +80,14 @@ def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, 
         assert client.post("/api/discovery/stop", json={"job_id": job_id}).status_code == 200
     finally:
         runner.cancel()
+        if enqueue:
+            deadline = time.monotonic() + 4
+            while time.monotonic() < deadline:
+                entries = client.get("/api/task-queue").json()["entries"]
+                if all(row["state"] not in {"queued", "starting", "running"} for row in entries):
+                    break
+                threading.Event().wait(.02)
+            assert entries and entries[-1]["state"] == "cancelled"
 
 
 def test_stop_cannot_cancel_unrelated_job_and_host_origin_are_checked(browser_control):

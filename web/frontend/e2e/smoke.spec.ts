@@ -75,7 +75,7 @@ test.describe("Binggo smoke @smoke", () => {
     const body = await jobResp.json();
     expect(body.error?.code).toBe("LLM_NOT_READY");
     await expect(
-      page.locator(".toast-message").filter({ hasText: /请先测试 LLM 连接/ }),
+      page.locator("#task-notice-message").filter({ hasText: /LLM 配置.*连接测试/ }),
     ).toBeVisible({ timeout: 8_000 });
   });
 

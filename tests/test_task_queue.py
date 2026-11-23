@@ -41,8 +41,11 @@ def test_dashboard_buttons_share_reorderable_queue(isolated_home, monkeypatch):
         return response.json()["queue_entry"]
 
     try:
-        assert submit("refresh_all")["state"] == "running"
+        active = submit("refresh_all")
+        assert active["state"] == "running"
         assert refresh_started.wait(1)
+        for operation in ("up", "down", "remove"):
+            assert client.patch(f"/api/task-queue/{active['id']}", json={"operation": operation}).status_code == 400
         participation = submit("participate_triple")
         assert participation["state"] == "queued"
         discovery = client.post("/api/discovery/start?enqueue=true", json={"keywords": ["GTA6抽奖"]})
@@ -55,6 +58,11 @@ def test_dashboard_buttons_share_reorderable_queue(isolated_home, monkeypatch):
         response = client.patch(f"/api/task-queue/{search['id']}", json={"operation": "up"})
         assert response.status_code == 200
         assert [entry["id"] for entry in response.json()["entries"] if entry["state"] == "queued"] == [search["id"], participation["id"]]
+        response = client.patch(f"/api/task-queue/{search['id']}", json={"operation": "down"})
+        assert response.status_code == 200
+        assert [entry["id"] for entry in response.json()["entries"] if entry["state"] == "queued"] == [participation["id"], search["id"]]
+        response = client.patch(f"/api/task-queue/{search['id']}", json={"operation": "up"})
+        assert response.status_code == 200
         assert [action for action, _ in calls] == ["refresh_all"]
     finally:
         release_refresh.set()
