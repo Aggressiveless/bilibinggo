@@ -183,7 +183,7 @@ export const ONBOARDING_STEPS = [
   {
     id: "try",
     title: "去活动页试一次",
-    desc: "进入活动列表，尝试参与单个活动或使用「三连参与」。",
+    desc: "进入活动列表，尝试参与单个活动或使用「自动顺序参与」。",
     cta: "去活动页",
   },
 ];
@@ -278,7 +278,7 @@ export const LOGIN_REQUIRED_ACTIONS = new Set([
   "refresh_watch",
   "refresh_status",
   "participate",
-  "participate_triple",
+  "participate_sequential",
 ]);
 
 export const LLM_REQUIRED_ACTIONS = new Set([
@@ -287,5 +287,5 @@ export const LLM_REQUIRED_ACTIONS = new Set([
   "refresh_source",
   "refresh_watch",
   "participate",
-  "participate_triple",
+  "participate_sequential",
 ]);

@@ -61,8 +61,8 @@ export interface AppState {
   account: Record<string, unknown> | null;
   settings: Record<string, unknown> | null;
   atAlertShownKey: string;
-  tripleTargets: { count: number; limit: number; items: unknown[] };
-  tripleFilterKey: string;
+  participationTargets: { count: number; items: unknown[] };
+  participationFilterKey: string;
   smoothJobPercent: number;
   activeJobKey: string;
   jobResultTimer: number | null;

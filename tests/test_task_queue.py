@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -11,7 +12,8 @@ from web.job_runner import JobRunner
 from web.task_queue import TaskQueue
 
 
-def test_dashboard_buttons_share_reorderable_queue(isolated_home, monkeypatch):
+@pytest.mark.parametrize("participation_action", ["participate_triple", "participate_sequential"])
+def test_dashboard_buttons_share_reorderable_queue(isolated_home, monkeypatch, participation_action):
     runner = JobRunner()
     service = get_control_service()
     calls = []
@@ -46,7 +48,7 @@ def test_dashboard_buttons_share_reorderable_queue(isolated_home, monkeypatch):
         assert refresh_started.wait(1)
         for operation in ("up", "down", "remove"):
             assert client.patch(f"/api/task-queue/{active['id']}", json={"operation": operation}).status_code == 400
-        participation = submit("participate_triple")
+        participation = submit(participation_action)
         assert participation["state"] == "queued"
         discovery = client.post("/api/discovery/start?enqueue=true", json={"keywords": ["GTA6抽奖"]})
         assert discovery.status_code == 200, discovery.text
@@ -77,7 +79,7 @@ def test_dashboard_buttons_share_reorderable_queue(isolated_home, monkeypatch):
         time.sleep(0.05)
 
     assert [entry["state"] for entry in entries] == ["success", "success", "success", "cancelled"]
-    assert [action for action, _ in calls] == ["refresh_all", "control_discover", "participate_triple"]
+    assert [action for action, _ in calls] == ["refresh_all", "control_discover", participation_action]
     assert calls[1][1]["keywords"] == ["GTA6抽奖"]
     assert calls[1][1]["request_budget"] is None
     assert calls[2][1]["_queued_serial"] is True

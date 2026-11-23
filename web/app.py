@@ -43,6 +43,7 @@ from web.activity_service import (
     get_summary,
     list_activities,
     summarize_triple_participate_targets,
+    summarize_sequential_participate_targets,
 )
 from web.api_contract import API_CONTRACT_VERSION, ApiContractMiddleware, patch_openapi_schema
 from web.api_errors import AppError, ErrorCode, register_exception_handlers, require_llm_ready, require_login
@@ -114,6 +115,7 @@ _JOB_REQUIRES_LOGIN = frozenset(
     {
         "participate",
         "participate_triple",
+        "participate_sequential",
         "refresh_all",
         "refresh_source",
         "refresh_status",
@@ -124,6 +126,7 @@ _JOB_REQUIRES_LLM = frozenset(
     {
         "participate",
         "participate_triple",
+        "participate_sequential",
         "refresh_all",
         "refresh_source",
         "refresh_watch",
@@ -271,6 +274,15 @@ def api_triple_participate_targets(
         sort=sort,
         order=order,
     )
+
+
+@app.get("/api/activities/participation-targets", tags=["stable"])
+def api_sequential_participate_targets(
+    status: str | None = None, type: str | None = None, draw: str | None = None,
+    draw_window: str | None = None, q: str | None = None, sort: str | None = None, order: str | None = None,
+) -> dict[str, Any]:
+    return summarize_sequential_participate_targets(status=status, lottery_type=type, draw=draw,
+                                                  draw_window=draw_window, q=q, sort=sort, order=order)
 
 
 @app.post("/api/jobs", response_model=JobStartOut, tags=["stable"])

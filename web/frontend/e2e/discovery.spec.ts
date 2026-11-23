@@ -10,7 +10,7 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/start")) {
       starts += 1;
-      expect(route.request().postDataJSON()).toEqual({ keywords: ["转发抽奖"], mode: "comprehensive_page" });
+      expect(route.request().postDataJSON()).toEqual({ keywords: ["转发抽奖"], mode: "comprehensive_page", target_new_videos: 100 });
       snapshot = { ...snapshot, mode: "comprehensive_page", job: { job_id: starts, state: "running", cancel_requested: false,
         progress: { message: "扫描视频 2/36" } }, summary: { videos_checked: 2, requests_used: 5, verification_remaining: 8 } };
     } else if (path.endsWith("/stop")) {
@@ -61,6 +61,7 @@ test("request budget shows a pause, and stopping remains available after reload"
   await page.locator('[data-section="sources"]').click();
   await expect(page.locator("#discovery-badge")).toHaveText("本轮额度已用完");
   await expect(page.locator("#discovery-remaining")).toHaveText("133");
+  await expect(page.locator("#discovery-videos-label")).toHaveText("上次扫描视频");
   await expect(page.locator("#discovery-start")).toHaveText("继续检索");
   snapshot = { ...snapshot, job: { job_id: 45, state: "running", cancel_requested: false }, summary: {} };
   await page.reload();

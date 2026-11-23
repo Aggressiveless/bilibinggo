@@ -129,12 +129,19 @@ def _fair_order(tasks):
 
 def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_page=True,
                   candidate_limit=9, known_ids=None, joined_ids=None, author_dynamic_limit=2,
-                  resume=True, replay_completed=True, on_progress=None, on_video_page=None, collect_followers=False):
+                  resume=True, replay_completed=True, on_progress=None, on_video_page=None, collect_followers=False,
+                  target_new_videos=None, known_bvids=None):
     now = int(time.time()) if now is None else now
     known_ids, joined_ids = set(known_ids or []), set(joined_ids or [])
+    known_bvids = set(known_bvids or [])
+    if target_new_videos is not None:
+        video_limit = target_new_videos
     cache = getattr(client, "cache", {})
     sessions = cache.setdefault("broad_sessions", {})
-    key = hashlib.sha256(json.dumps([8, keywords, video_limit, comprehensive_page, author_dynamic_limit], ensure_ascii=False).encode()).hexdigest()[:24]
+    identity = [8, keywords, video_limit, comprehensive_page, author_dynamic_limit]
+    if target_new_videos is not None:
+        identity += ["new-videos-v1", target_new_videos]
+    key = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()[:24]
     previous = sessions.get(key)
     resumed = bool(resume and previous and previous.get("expires_at", 0) > time.time()
                    and (replay_completed or not previous.get("done")))
@@ -154,6 +161,13 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
     started = time.monotonic()
     follower_counts = state.setdefault("follower_counts", {}) if collect_followers else {}
 
+    def target_stats():
+        if target_new_videos is None:
+            return {}
+        return {"target_new_videos": target_new_videos, "new_videos_checked": state["scan_index"],
+                "duplicates_skipped": state.get("duplicates_skipped", 0),
+                "search_exhausted": state["search_index"] == len(keywords) and len(state["videos"]) < video_limit}
+
     def followers_for(uid):
         if not collect_followers or not uid.isdigit():
             return None
@@ -165,7 +179,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
         return follower_counts[uid]
 
     def scan_completed():
-        return state["search_index"] == len(keywords) and state["scan_index"] == len(state["videos"])
+        return (state["search_index"] == len(keywords) or len(state["videos"]) >= video_limit) and state["scan_index"] == len(state["videos"])
 
     def current_rows():
         values = []
@@ -194,7 +208,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             "cache_hits": getattr(client, "cache_hits", 0), "llm_requests": getattr(client, "llm_requests", 0),
             "llm_cache_hits": getattr(client, "llm_cache_hits", 0), "session_id": key, "resumed": resumed,
             "scan_completed": scan_completed(), "verification_remaining": len(state["tasks"]) - state["verify_index"],
-            "video_checks": snapshot_video_checks(state, rows, legacy=legacy)})
+            "video_checks": snapshot_video_checks(state, rows, legacy=legacy), **target_stats()})
 
     def attach_source(existing, duplicate):
         sources = existing.setdefault("source_videos", [existing["source_video"]])
@@ -335,26 +349,48 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             state["source_index"] += 1
 
     try:
-        while state["search_index"] < len(keywords):
+        while state["search_index"] < len(keywords) and (target_new_videos is None or len(state["videos"]) < video_limit):
             state["phase"] = "search"
             word = keywords[state["search_index"]]
-            emit(f"获取搜索第一页：{word}")
-            params = {"search_type": "video", "keyword": word, "page": 1, "page_size": 36,
+            page_number = state.get("search_page", 1) if target_new_videos is not None else 1
+            emit(f"搜索 {word} · 第 {page_number} 页" + (f" · 新视频 {len(state['videos'])}/{video_limit}" if target_new_videos else ""))
+            params = {"search_type": "video", "keyword": word, "page": page_number, "page_size": 36,
                       "order": "totalrank" if comprehensive_page else "pubdate"}
             response = client.read(d.SEARCH_URL, params, referer="https://search.bilibili.com/", ttl=1800, wbi=True)
             if d.api_code(response) != 0 or not isinstance(response.get("data"), dict):
                 raise RuntimeError(f"视频搜索未返回有效结果（业务码 {d.api_code(response)}）")
             seen = {row["bvid"] for row in state["videos"]}
             page = [row for row in response["data"].get("result") or [] if d.BV_RE.fullmatch(str(row.get("bvid") or ""))]
-            if on_video_page:
-                on_video_page(({"bvid": row["bvid"], "title": video_title(row.get("title"))} for row in page),
-                              page_id=f"{capture_id}:{state['search_index']}")
+            accepted = []
             for row in page:
                 identifier = row["bvid"]
+                if target_new_videos is not None and (identifier in seen or identifier in known_bvids):
+                    state["duplicates_skipped"] = state.get("duplicates_skipped", 0) + 1
+                    continue
                 if identifier not in seen and len(state["videos"]) < video_limit:
                     state["videos"].append(row)
                     seen.add(identifier)
-            state["search_index"] += 1
+                    accepted.append(row)
+            if on_video_page:
+                # Only claimed new videos enter the library in target mode;
+                # excess results stay available to a future run.
+                on_video_page(({"bvid": row["bvid"], "title": video_title(row.get("title"))}
+                               for row in (accepted if target_new_videos is not None else page)),
+                              page_id=f"{capture_id}:{state['search_index']}:{page_number}")
+            signature = [row["bvid"] for row in page]
+            repeated = signature == state.get("last_page_bvids")
+            state["last_page_bvids"] = signature
+            pages = response["data"].get("numPages")
+            exhausted = not page or (isinstance(pages, (int, float)) and page_number >= pages)
+            # Some endpoints repeat the last page without pagination metadata.
+            exhausted = exhausted or (pages is None and repeated)
+            if target_new_videos is None or exhausted:
+                state["search_index"] += 1
+                state["search_page"] = 1
+                state.pop("last_page_bvids", None)
+            else:
+                state["search_page"] = page_number + 1
+            emit(f"已收集新视频 {len(state['videos'])}/{video_limit}" if target_new_videos else f"已读取 {len(state['videos'])} 个视频")
 
         # No article, author lookup, target verification or LLM extraction is allowed
         # before the whole selected video page has been collected.
@@ -473,6 +509,8 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                 emit(f"读取发布者粉丝数 {index}/{len(publishers)}")
                 followers_for(uid)
         state["done"] = state["verify_index"] == len(state["tasks"])
+        if target_new_videos is not None and state["done"]:
+            completion = "target_reached" if state["scan_index"] >= video_limit else "search_exhausted"
     except d.DiscoveryStopped as exc:
         stopped = str(exc)
         completion = "request_budget" if "预算" in stopped else ("cancelled" if "取消" in stopped else "platform_paused")
@@ -498,4 +536,4 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
         "cache_hits": getattr(client, "cache_hits", 0), "llm_requests": getattr(client, "llm_requests", 0),
         "llm_cache_hits": getattr(client, "llm_cache_hits", 0), "elapsed_seconds": round(time.monotonic() - started, 3),
         "min_interval_seconds": getattr(client, "min_interval_seconds", 2.0),
-        "request_start_offsets": getattr(client, "request_start_offsets", []), **result}
+        "request_start_offsets": getattr(client, "request_start_offsets", []), **target_stats(), **result}

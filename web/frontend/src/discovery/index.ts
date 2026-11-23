@@ -73,6 +73,7 @@ interface DiscoveryStatus {
   queue?: { total: number; imported: number; existing: number; expired: number; skipped: number; remaining: number; message: string };
   keywords: string[];
   mode?: "standard" | "comprehensive_page";
+  target_new_videos?: number;
   summary: {
     videos_checked?: number;
     verification_remaining?: number;
@@ -80,6 +81,10 @@ interface DiscoveryStatus {
     requests_used?: number;
     completion_reason?: string;
     phase?: string;
+    target_new_videos?: number;
+    new_videos_checked?: number;
+    duplicates_skipped?: number;
+    search_exhausted?: boolean;
   };
   bv_count?: number;
   pending_selection?: number;
@@ -119,6 +124,7 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
   const start = element<HTMLButtonElement>("discovery-start");
   const stop = element<HTMLButtonElement>("discovery-stop");
   const input = element<HTMLInputElement>("discovery-keywords");
+  const targetInput = element<HTMLInputElement>("discovery-target");
   if (start) {
     start.disabled = running || submitting;
     start.textContent = filtering ? "筛选中…" : importing ? "导入中…" : running ? "检索中…" : status.resume_available ? "继续检索" : "开始检索";
@@ -128,8 +134,20 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
     stop.textContent = stopping ? "正在停止…" : filtering ? "停止筛选" : importing ? "停止导入" : "停止检索";
   }
   if (input) input.disabled = running || submitting;
+  if (targetInput) targetInput.disabled = running || submitting;
   const summary = status.summary;
   setText("discovery-videos", summary.videos_checked || 0);
+  setText("discovery-duplicates", summary.duplicates_skipped || 0);
+  const target = summary.target_new_videos || status.target_new_videos;
+  setText("discovery-videos-label", job && !target ? "上次扫描视频" : "本次已检索新视频");
+  const targetPanel = element("discovery-target-progress");
+  if (targetPanel) targetPanel.hidden = !target;
+  if (target) {
+    const checked = summary.new_videos_checked || 0;
+    setText("discovery-target-label", `新视频 ${checked} / ${target}`);
+    const meter = element<HTMLProgressElement>("discovery-target-meter");
+    if (meter) { meter.max = target; meter.value = checked; }
+  }
   setText("discovery-remaining", summary.verification_remaining || 0);
   setText("discovery-eligible", summary.eligible || 0);
   setText("discovery-requests", summary.requests_used || 0);
@@ -147,6 +165,9 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
     } else if (job.state === "cancelled" || reason === "cancelled") {
       badge = "已停止";
       message = "已停止检索。";
+    } else if (reason === "search_exhausted") {
+      badge = "新视频不足";
+      message = `搜索结果已耗尽，本次检索 ${summary.new_videos_checked || 0} / ${target} 条新视频。可更换关键词或排序后继续找新视频。`;
     } else if (reason === "platform_paused") {
       badge = "平台限制，已暂停";
       message = status.stop_message || "平台暂时限制请求，请稍后继续。";
@@ -158,7 +179,8 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
       message = "上次检索因程序重启中断。";
     } else {
       badge = status.resume_available ? "本轮已结束" : "检索完成";
-      message = `已找到 ${summary.eligible || 0} 条可参与活动。`;
+      message = target ? `已检索 ${summary.new_videos_checked || 0} 条新视频，找到 ${summary.eligible || 0} 条可参与活动。`
+        : `已找到 ${summary.eligible || 0} 条可参与活动。`;
     }
     if (status.resume_available) message += "进度已保存，使用相同关键词和排序可继续。";
   }
@@ -184,6 +206,7 @@ export function bindDiscovery() {
   const form = element<HTMLFormElement>("discovery-form");
   const input = element<HTMLInputElement>("discovery-keywords");
   const mode = element<HTMLSelectElement>("discovery-mode");
+  const targetInput = element<HTMLInputElement>("discovery-target");
   const stop = element<HTMLButtonElement>("discovery-stop");
   const importButton = element<HTMLButtonElement>("discovery-import");
   const selectedButton = element<HTMLButtonElement>("discovery-import-selected");
@@ -195,7 +218,7 @@ export function bindDiscovery() {
   const filterFields = element<HTMLFieldSetElement>("discovery-filter-fields");
   const previewButton = element<HTMLButtonElement>("discovery-preview");
   const filteredImport = element<HTMLButtonElement>("discovery-import-filtered");
-  if (!form || !input || !mode || !stop || !importButton || !selectedButton || !selectionPanel || !candidateBody ||
+  if (!form || !input || !mode || !targetInput || !stop || !importButton || !selectedButton || !selectionPanel || !candidateBody ||
       !selectAll || !filterPanel || !filterForm || !filterFields || !previewButton || !filteredImport) return;
   let snapshot: DiscoveryStatus = { job: null, keywords: ["转发抽奖"], summary: {}, resume_available: false };
   let submitting = false;
@@ -262,6 +285,7 @@ export function bindDiscovery() {
   };
   const render = () => {
     const sameSearch = mode.value === (snapshot.mode || "standard") &&
+      Number(targetInput.value) === (snapshot.target_new_videos || snapshot.summary.target_new_videos || 100) &&
       JSON.stringify(keywords()) === JSON.stringify(snapshot.keywords);
     renderDiscovery(snapshot, submitting);
     const start = element<HTMLButtonElement>("discovery-start");
@@ -277,8 +301,8 @@ export function bindDiscovery() {
       ? `匹配 ${snapshot.filter?.matched || 0} / ${snapshot.filter?.total || 0} 条 · 发布者资料未知 ${snapshot.filter?.unknown_metadata || 0} 条`
       : issue || "调整条件后预览匹配数量，再确认加入。");
     setText("discovery-help", mode.value === "comprehensive_page"
-      ? "搜索 1 个关键词，检查综合排序第一页，最多 36 个视频。"
-      : "最多 3 个关键词，用逗号分隔。按发布时间检索，最多检查 36 个视频。");
+      ? "搜索 1 个关键词，按综合排序持续翻页；已有和本轮重复 BV 均跳过，不计入目标。"
+      : "最多 3 个关键词，用逗号分隔。按最新发布持续翻页；已有和本轮重复 BV 均跳过，不计入目标。");
   };
   const apply = (value: DiscoveryStatus) => {
     if (value.job?.job_id !== snapshot.job?.job_id) selected.clear();
@@ -300,6 +324,7 @@ export function bindDiscovery() {
     if (!initialized || value.job?.state === "running") {
       input.value = value.keywords.join("，");
       mode.value = value.mode || "standard";
+      targetInput.value = String(value.target_new_videos || value.summary.target_new_videos || 100);
     }
     initialized = true;
     render();
@@ -355,10 +380,17 @@ export function bindDiscovery() {
       input.focus();
       return;
     }
-    submit("/api/discovery/start?enqueue=true", { keywords: words, mode: mode.value });
+    const target = Number(targetInput.value);
+    if (!Number.isInteger(target) || target < 1 || target > 10000) {
+      showToast("目标新视频数请输入 1–10000 的整数", "info");
+      targetInput.focus();
+      return;
+    }
+    submit("/api/discovery/start?enqueue=true", { keywords: words, mode: mode.value, target_new_videos: target });
   });
   input.addEventListener("input", render);
   mode.addEventListener("change", render);
+  targetInput.addEventListener("input", render);
   stop.addEventListener("click", () => {
     const job = activeJob(snapshot);
     if (submitting || job?.state !== "running" || job.cancel_requested) return;

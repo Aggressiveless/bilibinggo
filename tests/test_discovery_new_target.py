@@ -1,0 +1,144 @@
+"""Targets count new BVs across pages, restarts and the persistent BV library."""
+import pytest
+import time
+from contextlib import nullcontext
+from fastapi.testclient import TestClient
+
+from src import lottery_discovery as d
+from src.lottery_discovery_broad import discover_page
+from src.control_store import ControlStore
+
+
+def bv(index):
+    return f"BV{index:010d}"
+
+
+class PaginatedClient:
+    pages = [range(36), range(20, 56), range(56, 92), range(80, 116), range(116, 152)]
+
+    def __init__(self, cache=None, budget=1000):
+        self.cache = cache if cache is not None else {}
+        self.budget = budget
+        self.request_count = 0
+        self.calls = []
+
+    def read(self, url, params, **kwargs):
+        if self.request_count >= self.budget:
+            raise d.DiscoveryStopped("已达到本轮 B 站请求预算")
+        self.request_count += 1
+        self.calls.append((url, params))
+        if url == d.SEARCH_URL:
+            return {"code": 0, "data": {"numPages": len(self.pages), "result": [
+                {"bvid": bv(index)} for index in self.pages[params["page"] - 1]]}}
+        assert url == d.VIDEO_URL
+        return {"code": 0, "data": {"owner": {}}}
+
+
+@pytest.mark.parametrize("comprehensive", [False, True])
+def test_100_new_bvs_skip_existing_and_cross_page_duplicates(tmp_path, comprehensive):
+    store = ControlStore(tmp_path)
+    store.remember_discovery_videos([bv(i) for i in range(20)])
+    client = PaginatedClient()
+    snapshots = []
+    result = discover_page(client, ["抽奖"], target_new_videos=100,
+                           known_bvids=store.discovery_video_ids(), comprehensive_page=comprehensive,
+                           candidate_limit=0, replay_completed=False,
+                           on_video_page=store.remember_discovery_videos, on_progress=snapshots.append)
+    assert result["completion_reason"] == "target_reached"
+    assert result["videos_checked"] == result["new_videos_checked"] == 100
+    assert result["target_new_videos"] == 100 and result["duplicates_skipped"] == 48
+    assert not result["has_more"] and result["scan_completed"]
+    assert store.discovery_video_ids() == {bv(i) for i in range(120)}
+    scanned = [params["bvid"] for url, params in client.calls if url == d.VIDEO_URL]
+    assert scanned == [bv(i) for i in range(20, 120)]
+    assert snapshots[-1]["new_videos_checked"] == 100
+    assert [params["page"] for url, params in client.calls if url == d.SEARCH_URL] == [1, 2, 3, 4, 5]
+    assert {params["order"] for url, params in client.calls if url == d.SEARCH_URL} == {"totalrank" if comprehensive else "pubdate"}
+
+
+@pytest.mark.parametrize("budget", [2, 8])
+def test_resume_keeps_claimed_new_bvs_and_page_cursor(tmp_path, budget):
+    store = ControlStore(tmp_path)
+    store.remember_discovery_videos([bv(i) for i in range(20)])
+    first = PaginatedClient(budget=budget)
+    partial = discover_page(first, ["抽奖"], target_new_videos=100,
+                            known_bvids=store.discovery_video_ids(), candidate_limit=0,
+                            on_video_page=store.remember_discovery_videos, replay_completed=False)
+    assert partial["completion_reason"] == "request_budget" and partial["has_more"]
+    # A fresh client sees the earlier run's BVs in the library, but its own
+    # durable cursor must still finish processing and count those claimed BVs.
+    second = PaginatedClient(first.cache)
+    result = discover_page(second, ["抽奖"], target_new_videos=100,
+                           known_bvids=store.discovery_video_ids(), candidate_limit=0,
+                           on_video_page=store.remember_discovery_videos, replay_completed=False)
+    assert result["resumed"] and result["completion_reason"] == "target_reached"
+    assert result["new_videos_checked"] == 100 and store.discovery_video_count() == 120
+    scanned = [p["bvid"] for client in [first, second] for url, p in client.calls if url == d.VIDEO_URL]
+    assert scanned == [bv(i) for i in range(20, 120)]
+    assert result["duplicates_skipped"] == 48
+
+
+def test_exhaustion_and_later_run_never_recount_old_bvs(tmp_path):
+    store = ControlStore(tmp_path)
+    store.remember_discovery_videos([bv(i) for i in range(140)])
+    for expected in (12, 0):
+        result = discover_page(PaginatedClient(), ["抽奖"], target_new_videos=100,
+                               known_bvids=store.discovery_video_ids(), candidate_limit=0,
+                               on_video_page=store.remember_discovery_videos)
+        assert result["new_videos_checked"] == expected
+        assert result["completion_reason"] == "search_exhausted" and result["search_exhausted"]
+        assert not result["has_more"]
+    assert store.discovery_video_count() == 152
+
+
+def test_repeated_last_page_without_metadata_terminates():
+    class Repeating(PaginatedClient):
+        def read(self, url, params, **kwargs):
+            if url == d.SEARCH_URL:
+                self.calls.append((url, params))
+                return {"code": 0, "data": {"result": [{"bvid": bv(1)}]}}
+            return super().read(url, params, **kwargs)
+    client = Repeating()
+    result = discover_page(client, ["抽奖"], target_new_videos=100, known_bvids={bv(1)})
+    assert result["completion_reason"] == "search_exhausted" and result["new_videos_checked"] == 0
+    assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize("existing,checked,reason", [(20, 100, "target_reached"), (140, 12, "search_exhausted")])
+def test_browser_queue_reports_actual_target_progress(isolated_home, monkeypatch, existing, checked, reason):
+    from web.app import app
+    from web.control_service import get_control_service
+    from web.job_runner import JobRunner
+    runner = JobRunner()
+    monkeypatch.setattr("web.job_runner.runner", runner)
+    monkeypatch.setattr("web.app.runner", runner)
+    service = get_control_service()
+    monkeypatch.setattr(service, "account", lambda: {"credentials_present": True})
+    monkeypatch.setattr("src.llm_settings.is_llm_ready", lambda: True)
+    client = PaginatedClient()
+    client.save = lambda: None
+    monkeypatch.setattr("web.control_actions.discovery_client", lambda *a, **kw: nullcontext(client))
+    service.store.remember_discovery_videos([bv(i) for i in range(existing)])
+    api = TestClient(app)
+    response = api.post("/api/discovery/start?enqueue=true", json={"keywords": ["抽奖"], "target_new_videos": 100})
+    assert response.status_code == 200, response.text
+    deadline = time.monotonic() + 8
+    while runner.is_running() and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert not runner.is_running()
+    job = api.get("/api/jobs/current").json()
+    assert job["state"] == "success"
+    assert job["progress_step"] == checked and job["progress_total"] == 100
+    assert job["result"]["completion_reason"] == reason
+    status = api.get("/api/discovery/current").json()
+    assert status["target_new_videos"] == 100
+    assert status["summary"]["new_videos_checked"] == checked
+    if checked < 100:
+        assert "未达到" in job["message"] and "检索完成" not in job["message"]
+    deadline = time.monotonic() + 4
+    while time.monotonic() < deadline:
+        entries = api.get("/api/task-queue").json()["entries"]
+        if all(row["state"] not in {"queued", "starting", "running"} for row in entries):
+            break
+        time.sleep(.02)
+    assert entries[-1]["state"] == "success"

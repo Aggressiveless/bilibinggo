@@ -468,7 +468,7 @@ class JobRunner:
             progress_step = self._status.progress_step
             progress_total = self._status.progress_total
             action_name = self._status.action
-            if progress_total:
+            if progress_total and not (action_name == "control_discover" and result and result.get("target_new_videos")):
                 progress_step = progress_total
 
         db_ok = False
@@ -586,7 +586,7 @@ class JobRunner:
                     raise RuntimeError("run_action 返回值无效")
 
                 action_ok = payload.get("ok")
-                if action_ok is None and action in {"participate", "participate_triple"}:
+                if action_ok is None and action in {"participate", "participate_triple", "participate_sequential"}:
                     action_ok = False
                 cancelled_flag = bool(payload.get("cancelled"))
                 if cancel_event and cancel_event.is_set() and (not action_ok or cancelled_flag):

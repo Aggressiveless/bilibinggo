@@ -428,6 +428,10 @@
                   <option value="comprehensive_page">综合排序</option>
                 </select>
               </div>
+              <div class="discovery-target-field">
+                <label class="field-label" for="discovery-target">目标新视频数</label>
+                <input id="discovery-target" class="form-input" type="number" min="1" max="10000" step="1" value="100" required aria-describedby="discovery-help" />
+              </div>
               <div class="action-row">
                 <button type="submit" class="btn btn-primary btn-pill" id="discovery-start" disabled>开始检索</button>
                 <button type="button" class="btn btn-secondary btn-pill" id="discovery-stop" disabled>停止检索</button>
@@ -435,11 +439,16 @@
             </form>
             <p class="caption" id="discovery-help">最多 3 个关键词，用逗号分隔。检索会运行到候选核验完成。</p>
             <div class="discovery-metrics" aria-label="检索统计">
-              <div><strong id="discovery-videos">0</strong><span>已扫描视频</span></div>
+              <div><strong id="discovery-videos">0</strong><span id="discovery-videos-label">本次已检索新视频</span></div>
+              <div><strong id="discovery-duplicates">0</strong><span>已跳过重复 BV</span></div>
               <div><strong id="discovery-remaining">0</strong><span>待核验候选</span></div>
               <div><strong id="discovery-eligible">0</strong><span>可参与活动</span></div>
               <div><strong id="discovery-requests">0</strong><span>本次请求</span></div>
               <div><strong id="discovery-bv-count">0</strong><span>累计收录 BV</span></div>
+            </div>
+            <div class="discovery-target-progress" id="discovery-target-progress" hidden>
+              <div class="discovery-target-copy"><strong id="discovery-target-label">新视频 0 / 100</strong><span>重复 BV 不计入目标</span></div>
+              <progress id="discovery-target-meter" max="100" value="0" aria-label="新视频检索进度"></progress>
             </div>
             <p class="discovery-status" id="discovery-status" role="status" aria-live="polite">正在读取检索状态…</p>
             <div class="discovery-video-summary" id="discovery-video-summary" hidden>
@@ -595,21 +604,20 @@
               <p class="section-desc">未参加且已过期的活动会自动从列表隐藏，本地历史记录仍会保留。</p>
               <button class="btn btn-ghost btn-compact btn-pill" data-action="refresh_status">刷新任务状态</button>
             </div>
-            <div class="triple-participate-bar" id="triple-participate-bar" data-tone="blocked">
-              <div class="triple-participate-lead">
-                <p class="triple-participate-eyebrow">快捷操作</p>
-                <h3 class="triple-participate-title">三连参与</h3>
-                <p class="triple-participate-desc" id="triple-participate-desc">依次参与当前列表最前面的 3 个未参加活动（预约抽奖：关注 + 预约，互动/转发走对应步骤）</p>
+            <div class="sequential-participate-bar" id="sequential-participate-bar" data-tone="blocked">
+              <div class="sequential-participate-lead">
+                <h3 class="sequential-participate-title">自动顺序参与</h3>
+                <p class="sequential-participate-desc" id="sequential-participate-desc">按当前筛选顺序逐项参与全部未参加活动，执行进度和结果在日志页查看。</p>
               </div>
-              <div class="triple-participate-targets" id="triple-participate-targets" aria-live="polite"></div>
+              <p class="sequential-participate-count" id="sequential-participate-targets" aria-live="polite">正在读取可参与活动…</p>
               <button
                 type="button"
-                class="btn btn-primary btn-pill triple-participate-btn"
-                id="triple-participate-btn"
-                data-action="participate_triple"
+                class="btn btn-primary btn-pill sequential-participate-btn"
+                id="sequential-participate-btn"
+                data-action="participate_sequential"
                 disabled
               >
-                <span class="triple-participate-btn-label" id="triple-participate-btn-label">三连参与</span>
+                <span class="sequential-participate-btn-label" id="sequential-participate-btn-label">自动顺序参与</span>
               </button>
             </div>
             <div class="filters activities-filters">

@@ -39,7 +39,8 @@ def test_discovery_start_stop_and_reload_keep_partial_progress(browser_control, 
 
     def discover(active_service, job_id, params, event, progress):
         assert active_service is service and params["request_budget"] is None and params["resume"]
-        assert params["mode"] == mode and params["video_limit"] == 36
+        assert params["mode"] == mode and params["video_limit"] == 100
+        assert params["target_new_videos"] == 100
         assert params["candidate_limit"] == 0 and params["collect_followers"]
         progress(step=2, total=36, message="扫描视频", result_patch={"videos_checked": 2})
         entered.set()
@@ -101,7 +102,8 @@ def test_stop_cannot_cancel_unrelated_job_and_host_origin_are_checked(browser_co
 
 @pytest.mark.parametrize("body", [{"keywords": []}, {"keywords": [" "]}, {"keywords": ["a"] * 4},
                                       {"keywords": ["a" * 81]}, {"request_budget": 0}, {"action": "participate"},
-                                      {"mode": "unknown"}, {"mode": "comprehensive_page", "keywords": ["a", "b"]}])
+                                      {"mode": "unknown"}, {"mode": "comprehensive_page", "keywords": ["a", "b"]},
+                                      {"target_new_videos": 0}, {"target_new_videos": 10001}, {"target_new_videos": 1.5}])
 def test_browser_cannot_submit_invalid_or_unrelated_actions(browser_control, body):
     client, _, _ = browser_control
     assert client.post("/api/discovery/start", json=body).status_code == 400

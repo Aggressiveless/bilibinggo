@@ -21,6 +21,7 @@ JOB_ACTION_LABELS: dict[str, str] = {
     "refresh_status": "刷新任务状态",
     "participate": "参与活动",
     "participate_triple": "三连参与",
+    "participate_sequential": "自动顺序参与",
     "refresh_watch": "更新监控用户动态",
     "control_discover": "主动检索抽奖",
     "control_import": "导入检索结果",

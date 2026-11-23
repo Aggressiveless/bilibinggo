@@ -13,6 +13,7 @@ ALLOWED_JOB_ACTIONS = frozenset(
         "refresh_status",
         "participate",
         "participate_triple",
+        "participate_sequential",
     }
 )
 

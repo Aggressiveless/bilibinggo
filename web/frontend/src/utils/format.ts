@@ -111,7 +111,7 @@ export function formatJobProgressDisplay(job) {
   const step = Number(job.progress_step) || 0;
   const total = Number(job.progress_total) || 0;
   const percent = calcJobProgressPercent(job);
-  if (job.action === "participate" || job.action === "participate_triple") {
+  if (job.action === "participate" || job.action === "participate_sequential") {
     if (total > 0) {
       return { percent, value: `${step}/${total}`, suffix: " 步", showPercentSuffix: false };
     }
@@ -122,10 +122,10 @@ export function formatJobProgressDisplay(job) {
 
 export function formatProgressTitle(job) {
   if (job.action === "participate") return "正在参与活动";
-  if (job.action === "participate_triple") {
+  if (job.action === "participate_sequential") {
     const lanes = parseTripleProgressLanes(job.progress_message);
-    const count = lanes.length || Number(job.result?.targets?.length) || 3;
-    return `三连参与 · 并行 ${count} 个活动`;
+    const count = Number(job.result?.targets?.length) || lanes.length;
+    return count ? `自动顺序参与 · ${count} 个活动` : "自动顺序参与";
   }
   return job.label || "任务运行中…";
 }
@@ -140,20 +140,20 @@ export function formatProgressDetail(job) {
     if (step > 0 && step <= labels.length) return `当前步骤：${labels[step - 1]}`;
     return "准备开始参与…";
   }
-  if (job.action === "participate_triple") {
+  if (job.action === "participate_sequential") {
     const lanes = parseTripleProgressLanes(job.progress_message);
-    if (!lanes.length) return "并行处理中，请稍候…";
+    if (!lanes.length) return "准备按顺序参与，请稍候…";
     const { doneCount, activeLanes, failedCount } = summarizeTripleProgressLanes(lanes);
     if (failedCount > 0) {
       return `已停止 ${doneCount}/${lanes.length} 完成 · ${failedCount} 个失败`;
     }
     if (activeLanes.length > 1) {
-      return `并行进行中 ${doneCount}/${lanes.length} · ${activeLanes.length} 个活动同时执行`;
+      return `顺序参与中 ${doneCount}/${lanes.length} · ${activeLanes.length} 个活动处理中`;
     }
     if (activeLanes.length === 1) {
-      return `并行进行中 ${doneCount}/${lanes.length} · 当前：…${activeLanes[0].idPart} ${activeLanes[0].status}`;
+      return `顺序参与中 ${doneCount}/${lanes.length} · 当前：…${activeLanes[0].idPart} ${activeLanes[0].status}`;
     }
-    return `并行进行中 ${doneCount}/${lanes.length} 个活动已完成步骤`;
+    return `顺序参与中 ${doneCount}/${lanes.length} 个活动已完成步骤`;
   }
   return sanitizeUserText(job.progress_message || job.message || "请稍候，任务在后台执行中");
 }

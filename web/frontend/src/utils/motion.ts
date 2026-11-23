@@ -19,7 +19,7 @@ export function setButtonLoading(button, loading, options = {}) {
     button.classList.add("is-loading");
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
-    const labelEl = button.querySelector(".triple-participate-btn-label");
+    const labelEl = button.querySelector(".sequential-participate-btn-label");
     if (labelEl && label !== undefined) {
       labelEl.textContent = label;
     } else if (label !== undefined) {
@@ -38,7 +38,7 @@ export function setButtonLoading(button, loading, options = {}) {
 }
 
 export function clearActionButtonLoading() {
-  document.querySelectorAll("[data-action].is-loading, .triple-participate-btn.is-loading").forEach((btn) => {
+  document.querySelectorAll("[data-action].is-loading, .sequential-participate-btn.is-loading").forEach((btn) => {
     setButtonLoading(btn, false);
   });
   document.querySelectorAll(".source-row.is-updating").forEach((row) => {

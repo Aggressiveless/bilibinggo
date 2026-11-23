@@ -5,7 +5,7 @@
 import { state } from "../state";
 import { fetchJSON } from "../api/client";
 import { isLlmConfigured, requireSetup, scrollToLlmSettings, syncProjectState } from "../account/index";
-import { buildActivityFilterJobParams, loadActivities, loadSummary, renderTripleParticipateBar } from "../activities/index";
+import { buildActivityFilterJobParams, loadActivities, loadSummary, renderParticipationBar } from "../activities/index";
 import { ACTION_LABELS, COMMENT_OPTIONAL_PATTERNS, FORWARD_REQUIRED_ACTIONS, INTERACT_REQUIRED_ACTIONS, JOB_RESULT_EXIT_MS, PARTICIPATE_ACTIVE_KEYWORDS, PARTICIPATE_DONE_KEYWORDS, PARTICIPATE_FAIL_KEYWORDS, PARTICIPATE_PENDING_KEYWORDS, PARTICIPATE_STEP_LABELS, REFRESH_ALL_DS_COUNT, REFRESH_ALL_PIPELINE, REFRESH_ALL_PIPELINE_SUBSTEPS, REFRESH_WATCH_PIPELINE, RESERVE_REQUIRED_ACTIONS, RESERVE_STEP_LABELS, jobLog, jobMessage, jobResultActions, jobResultBanner, jobResultBody, jobResultEyebrow, jobResultHint, jobResultIcon, jobResultSummary, jobResultTitle, progressBanner, progressChip, progressDetail, progressFill, progressFillGlow, progressLabel, progressPercent, progressPercentSuffix, progressRing, progressSteps, progressTrack, qrcodeClose, qrcodeFrame, qrcodeImg, qrcodeModal, qrcodeOverlay, qrcodeOverlayIcon, qrcodeOverlayText, qrcodeStatus, qrcodeTitle, sidebarLoginBtn } from "../dom";
 import { startRealtime } from "../realtime/sse";
 import { confirmRefreshAll } from "../shell/confirm";
@@ -400,10 +400,10 @@ export function participateProgressLabels(total) {
   return [...PARTICIPATE_STEP_LABELS];
 }
 
-export function tripleTargetsForJob(job) {
+export function participationTargetsForJob(job) {
   const fromJob = job?.result?.targets;
   if (Array.isArray(fromJob) && fromJob.length) return fromJob;
-  return state.tripleTargets?.items || [];
+  return state.participationTargets?.items || [];
 }
 
 export function inferLotteryTypeFromLaneStatus(status) {
@@ -428,7 +428,7 @@ export function resolveTripleLaneLotteryType(lane, job, laneIndex = -1) {
 }
 
 export function findTripleTargetForLane(lane, job, laneIndex = -1) {
-  const targets = tripleTargetsForJob(job);
+  const targets = participationTargetsForJob(job);
   if (laneIndex >= 0 && laneIndex < targets.length) {
     return targets[laneIndex];
   }
@@ -576,7 +576,7 @@ export function summarizeTripleResult(result) {
     if (payloadJoinedSuccess(item)) joined += 1;
     else failed += 1;
   }
-  return { joined, failed, total: items.length };
+  return { joined, failed, total: result?.targets?.length || items.length };
 }
 
 export function renderActionChips(actions) {
@@ -698,12 +698,12 @@ export function renderTripleParticipationResults(result) {
 }
 
 export function showParticipationResult(job) {
-  if (!jobResultBanner || (job.action !== "participate" && job.action !== "participate_triple")) return;
+  if (!jobResultBanner || (job.action !== "participate" && job.action !== "participate_sequential")) return;
   if (job.result?.skipped) return;
   hideParticipationResult(true);
 
   const result = job.result || {};
-  const isTriple = job.action === "participate_triple";
+  const isTriple = job.action === "participate_sequential";
   let joined = 0;
   let failed = 0;
   let total = 1;
@@ -726,18 +726,18 @@ export function showParticipationResult(job) {
   if (allSucceeded) {
     tone = "is-success";
     icon = "✓";
-    title = isTriple ? "三连参与完成" : "参与成功";
+    title = isTriple ? "自动顺序参与完成" : "参与成功";
   } else if (joined > 0) {
     tone = "is-partial";
     icon = "◐";
-    title = isTriple ? "三连参与部分完成" : "参与部分完成";
+    title = isTriple ? "自动顺序参与部分完成" : "参与部分完成";
   }
 
   jobResultBanner.className = `job-result-banner ${tone}`;
   jobResultBanner.hidden = false;
   jobResultBanner.dataset.jobId = String(job.id);
   if (jobResultIcon) jobResultIcon.textContent = icon;
-  if (jobResultEyebrow) jobResultEyebrow.textContent = isTriple ? "三连参与结果" : "参与结果";
+  if (jobResultEyebrow) jobResultEyebrow.textContent = isTriple ? "自动顺序参与结果" : "参与结果";
   if (jobResultTitle) jobResultTitle.textContent = title;
   if (jobResultSummary) {
     const fallback = joined > 0 ? "请查看下方各活动执行情况" : "请查看下方步骤详情";
@@ -778,7 +778,7 @@ export function renderTripleParticipateProgress(job) {
   progressSteps.classList.add("is-triple");
   const lanes = parseTripleProgressLanes(job.progress_message);
   if (!lanes.length) {
-    progressSteps.innerHTML = `<p class="caption">三连参与并行进行中…</p>`;
+    progressSteps.innerHTML = `<p class="caption">正在按顺序参与活动…</p>`;
     return;
   }
   progressSteps.innerHTML = `
@@ -812,7 +812,7 @@ export function renderTripleParticipateProgress(job) {
 
 export function renderParticipateSteps(job) {
   if (!progressSteps) return;
-  if (job.state === "running" && job.action === "participate_triple") {
+  if (job.state === "running" && job.action === "participate_sequential") {
     renderTripleParticipateProgress(job);
     return;
   }
@@ -940,7 +940,7 @@ export function calcJobProgressPercent(job) {
     }
     if (step >= 4) return 100;
   }
-  if (job.action === "participate" || job.action === "participate_triple") {
+  if (job.action === "participate" || job.action === "participate_sequential") {
     if (total <= 0) return 0;
     return Math.max(0, Math.min(100, Math.round((step / total) * 100)));
   }
@@ -1011,7 +1011,7 @@ export function updateProgressUI(job) {
   if (progressChip) {
     const chipMap = {
       participate: "参与任务",
-      participate_triple: "三连参与",
+      participate_sequential: "自动顺序参与",
       refresh_all: "同步任务",
       refresh_source: "数据源更新",
       refresh_watch: "监控扫描",
@@ -1086,7 +1086,7 @@ export async function startJob(action, params = {}) {
 }
 
 export function collectFinishedDynamicIds(job) {
-  if (job.action === "participate_triple") {
+  if (job.action === "participate_sequential") {
     return (job.result?.items || []).map((item) => item?.dynamic_id).filter(Boolean);
   }
   if (job.action === "participate" && job.result?.dynamic_id) {
@@ -1098,7 +1098,7 @@ export function collectFinishedDynamicIds(job) {
 export async function handleJobCompletion(job) {
   dismissRunningToasts();
 
-  const isParticipation = job.action === "participate" || job.action === "participate_triple";
+  const isParticipation = job.action === "participate" || job.action === "participate_sequential";
   if (job.action === "login" && job.state === "success" && !state.qrcodeDismissed) {
     renderQrcodeLoginState({
       ...job,
@@ -1136,8 +1136,8 @@ export async function handleJobCompletion(job) {
     showToast(String(error.message || error), "error");
   }
   clearActionButtonLoading();
-  if (job.action === "participate_triple") {
-    renderTripleParticipateBar(state.tripleTargets);
+  if (job.action === "participate_sequential") {
+    renderParticipationBar(state.participationTargets);
   }
   flashActivityRows(finishedDynamicIds);
   if (job.action === "login" && job.state === "success") hideQrcodeModal(false);
@@ -1152,13 +1152,13 @@ export function bindActionButtons() {
       const params = {};
       if (button.dataset.dynamicId) params.dynamic_id = button.dataset.dynamicId;
       if (button.dataset.sourceId) params.source_id = button.dataset.sourceId;
-      if (action === "participate_triple") {
+      if (action === "participate_sequential") {
         Object.assign(params, buildActivityFilterJobParams());
       }
       if (action === "participate") {
         setButtonLoading(button, true, { label: "参与中…" });
       }
-      if (action === "participate_triple") {
+      if (action === "participate_sequential") {
         setButtonLoading(button, true, { label: "参与中" });
       }
       if (action === "refresh_source") {
@@ -1176,7 +1176,7 @@ export function bindActionButtons() {
         if (!(await startJob(action, params))) {
           setButtonLoading(button, false);
           if (action === "refresh_source") setSourceRowUpdating(params.source_id, false);
-          if (action === "participate_triple") renderTripleParticipateBar(state.tripleTargets);
+          if (action === "participate_sequential") renderParticipationBar(state.participationTargets);
         }
       } catch (error) {
         notifyJobStartError(error, action, params);
@@ -1184,8 +1184,8 @@ export function bindActionButtons() {
         if (action === "refresh_source") {
           setSourceRowUpdating(params.source_id, false);
         }
-        if (action === "participate_triple") {
-          renderTripleParticipateBar(state.tripleTargets);
+        if (action === "participate_sequential") {
+          renderParticipationBar(state.participationTargets);
         }
       }
     });
@@ -1194,7 +1194,7 @@ export function bindActionButtons() {
 
 export function resolveJobPollIntervalMs(action) {
   if (action === "login") return 500;
-  if (action === "participate" || action === "participate_triple") return 400;
+  if (action === "participate" || action === "participate_sequential") return 400;
   return 1000;
 }
 
@@ -1241,7 +1241,7 @@ export async function finishJobOnce(job) {
   } catch (error) {
     console.error("finishJobOnce failed", error);
   } finally {
-    if (["login", "participate", "participate_triple", "control_participate", "control_workflow"].includes(job.action)) {
+    if (["login", "participate", "participate_sequential", "control_participate", "control_workflow"].includes(job.action)) {
       window.dispatchEvent(new Event("binggo:coin-balance-check"));
     }
   }

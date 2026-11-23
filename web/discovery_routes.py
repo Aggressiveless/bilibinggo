@@ -21,6 +21,7 @@ class DiscoveryStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     keywords: list[str] = Field(default_factory=lambda: ["转发抽奖"], min_length=1, max_length=3)
     mode: Literal["standard", "comprehensive_page"] = "standard"
+    target_new_videos: int = Field(default=100, ge=1, le=10000, strict=True)
 
     @field_validator("keywords")
     @classmethod
@@ -34,7 +35,8 @@ class DiscoveryStartRequest(BaseModel):
 def discovery_job_params(request: DiscoveryStartRequest):
     if request.mode == "comprehensive_page" and len(request.keywords) != 1:
         raise AppError(ErrorCode.VALIDATION_ERROR, "综合排序每轮检索一个关键词")
-    return {"keywords": request.keywords, "mode": request.mode, "video_limit": 36,
+    return {"keywords": request.keywords, "mode": request.mode, "video_limit": request.target_new_videos,
+            "target_new_videos": request.target_new_videos,
             "request_budget": None, "candidate_limit": 0, "resume": True, "replay_completed": False,
             "collect_followers": True}
 
@@ -94,7 +96,8 @@ def discovery_status(service, job=None):
     raw = report.get("raw") or {}
     summary = {**{key: value for key, value in raw.items() if key in {
         "completion_reason", "videos_checked", "search_video_count", "verification_remaining",
-        "sources_remaining", "has_more", "requests", "resumed", "phase",
+        "sources_remaining", "has_more", "requests", "resumed", "phase", "target_new_videos",
+        "new_videos_checked", "duplicates_skipped", "search_exhausted",
     }}, **(job.get("result") or {})}
     summary.setdefault("requests_used", report.get("requests_used", 0))
     summary.setdefault("verification_remaining", report.get("verification_remaining", 0))
@@ -103,7 +106,7 @@ def discovery_status(service, job=None):
     queue_job = service.store.get("discovery_queue_job", str(job["job_id"]))
     secondary = service.job(queue_job["id"]) if queue_job else None
     preview = service.store.get("discovery_filter", str(job["job_id"])) or {}
-    can_select = job["state"] == "success" and summary.get("completion_reason") in {"search_complete", "target_reached"}
+    can_select = job["state"] == "success" and summary.get("completion_reason") in {"search_complete", "target_reached", "search_exhausted"}
     pending = pending_candidates(service, job["job_id"], report) if can_select else {}
     selectable = []
     for identifier, row in pending.items():
@@ -120,6 +123,7 @@ def discovery_status(service, job=None):
     video_summary = Counter(row["status"] for row in video_checks)
     return {"job": job, "keywords": report.get("keywords") or job.get("keywords") or ["转发抽奖"],
             "mode": job.get("discovery_mode", "standard"),
+            "target_new_videos": job.get("target_new_videos"),
             "summary": summary, "bv_count": bv_count, "stop_message": raw.get("stopped", ""),
             "pending_selection": len(pending),
             "candidates": selectable,
@@ -178,7 +182,7 @@ def install_discovery(app):
         report = service.store.get("discovery", str(job_id))
         if job["action"] != "control_discover" or job["state"] != "success" or not report:
             raise AppError(ErrorCode.VALIDATION_ERROR, "请等待检索完成后选择活动")
-        if (job.get("result") or {}).get("completion_reason") not in {"search_complete", "target_reached"}:
+        if (job.get("result") or {}).get("completion_reason") not in {"search_complete", "target_reached", "search_exhausted"}:
             raise AppError(ErrorCode.VALIDATION_ERROR, "请先继续检索并完成核验")
         return job, report
 

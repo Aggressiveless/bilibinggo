@@ -136,6 +136,7 @@ class ControlService:
         if action == "control_discover":
             metadata["keywords"] = (params or {}).get("keywords", [])
             metadata["discovery_mode"] = (params or {}).get("mode", "standard")
+            metadata["target_new_videos"] = (params or {}).get("target_new_videos")
         elif action == "control_discovery_filter" or (action == "control_import" and (params or {}).get("queue_verified")):
             metadata["discovery_queue"] = params["discovery_job_id"]
         job = self.store.new_job(action, BOOT_ID, metadata=metadata)

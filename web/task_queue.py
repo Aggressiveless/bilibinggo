@@ -19,15 +19,15 @@ from web.control_service import get_control_service
 from web.user_messages import JOB_ACTION_LABELS
 
 logger = get_logger("task_queue")
-QUEUEABLE_ACTIONS = frozenset({"participate", "participate_triple", "refresh_all", "refresh_source", "refresh_watch", "refresh_status"})
+QUEUEABLE_ACTIONS = frozenset({"participate", "participate_triple", "participate_sequential", "refresh_all", "refresh_source", "refresh_watch", "refresh_status"})
 _WAITING = frozenset({"queued", "starting", "running"})
 
 
 def task_label(action, params):
     if action == "control_discover":
         return "检索新视频 · " + "、".join(params["keywords"])
-    if action == "participate_triple":
-        return "顺序参与未参加活动"
+    if action in {"participate_triple", "participate_sequential"}:
+        return "自动顺序参与"
     label = JOB_ACTION_LABELS.get(action, action)
     target = params.get("dynamic_id") or params.get("source_id")
     return f"{label} · {target}" if target else label
@@ -78,7 +78,7 @@ class TaskQueue:
 
             if not is_llm_ready():
                 raise ControlError("LLM_NOT_READY", "请先完成 LLM 配置与连接测试")
-        if action == "participate_triple":
+        if action in {"participate_triple", "participate_sequential"}:
             params = {**params, "_queued_serial": True}
         return self.runner.try_start(action, params, source="queue"), None
 

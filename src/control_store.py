@@ -110,6 +110,10 @@ class ControlStore:
         with self.connect() as db:
             return db.execute("SELECT count(*) FROM discovery_videos").fetchone()[0]
 
+    def discovery_video_ids(self) -> set[str]:
+        with self.connect() as db:
+            return {row[0] for row in db.execute("SELECT bvid FROM discovery_videos")}
+
     def list_discovery_videos(self, *, limit: int, offset: int, job_id=None) -> tuple[int, list[dict]]:
         fields = """v.*, c.job_id, c.payload, coalesce(m.title,'') AS title,
                     coalesce(m.sightings,0) AS sightings, coalesce(m.legacy_history,1) AS legacy_history"""

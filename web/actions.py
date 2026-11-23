@@ -819,17 +819,20 @@ def run_action(
             "log": action_log,
         }
 
-    if action == "participate_triple":
+    if action in {"participate_triple", "participate_sequential"}:
         _raise_if_cancelled(cancel_event)
 
         filters = _list_filter_params(params)
-        targets = pick_triple_participate_targets(**filters)
+        sequential = action == "participate_sequential"
+        targets = (pick_triple_participate_targets(**filters, limit=None) if sequential
+                   else pick_triple_participate_targets(**filters))
+        label = "自动顺序参与" if sequential else "三连参与"
         from_auto = bool(params.get("from_auto"))
         if not targets:
             return {
                 "ok": True,
                 "message": "当前没有可参与的未参加活动，已跳过",
-                "log": "无可参与目标，本次三连参与已跳过",
+                "log": f"无可参与目标，本次{label}已跳过",
                 "result": {
                     "skipped": True,
                     "from_auto": from_auto,
@@ -846,7 +849,7 @@ def run_action(
             return {
                 "ok": True,
                 "message": "当前没有可参与的未参加活动，已跳过",
-                "log": "进度计划为空，本次三连参与已跳过",
+                "log": f"进度计划为空，本次{label}已跳过",
                 "result": {
                     "skipped": True,
                     "from_auto": from_auto,
@@ -857,9 +860,9 @@ def run_action(
                 },
             }
 
-        serial = bool(params.get("_queued_serial"))
+        serial = sequential or bool(params.get("_queued_serial"))
         execution_order = "依次" if serial else "并行"
-        logger.info("三连参与开始：%s", ", ".join(target_titles))
+        logger.info("%s开始：%s", label, ", ".join(target_titles))
         triple_target_items = build_triple_target_preview(targets)["items"]
         progress(
             step=0,
@@ -990,6 +993,13 @@ def run_action(
                     task_states[dynamic_id] = f"失败：{exc}"
                     _mark_other_tasks_stopped(dynamic_id, reason="已停止（其他活动失败）")
                     _emit_triple_progress(log_append=f"{dynamic_id}：{exc}")
+                    if sequential:
+                        failed = getattr(exc, "participation_result", None) or {}
+                        exc.participation_result = {"targets": triple_target_items,
+                            "message": f"顺序参与停止：成功 {len(results)}，失败 1，尚余 {len(targets) - len(results) - 1} 个活动未执行",
+                            "items": [*[item["payload"] for item in results],
+                                      {**failed, "dynamic_id": dynamic_id, "status": "failed", "message": str(exc)}],
+                            "joined": len(results), "failed": 1, "remaining": len(targets) - len(results) - 1}
                     raise
                 progress(
                     step=_overall_progress_step(),
@@ -1031,9 +1041,9 @@ def run_action(
         refresh_local_activity_statuses()
         results.sort(key=lambda item: target_ids.index(item["dynamic_id"]))
         log_blocks = [format_participation_log(item["payload"]) for item in results]
-        message = f"三连参与完成：{len(results)} 个活动全部成功"
+        message = f"{label}完成：{len(results)} 个活动全部成功"
         progress(step=total_steps, total=total_steps, message=message, log_append=message)
-        logger.info("三连参与成功 count=%s", len(results))
+        logger.info("%s成功 count=%s", label, len(results))
         invalidate_activity_cache()
         return {
             "ok": True,

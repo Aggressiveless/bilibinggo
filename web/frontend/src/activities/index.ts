@@ -147,8 +147,8 @@ export function renderActivities(payload) {
     loadActivities();
   });
   bindActionButtons();
-  const preview = resolveTripleTargets(payload);
-  if (preview) applyTripleTargets(preview);
+  const preview = resolveParticipationTargets(payload);
+  if (preview) applyParticipationTargets(preview);
 }
 
 export async function loadSummary() {
@@ -214,72 +214,26 @@ export function buildActivityFilterQueryParams() {
   return params;
 }
 
-export function renderTripleParticipateBar(data) {
-  const bar = document.getElementById("triple-participate-bar");
-  const descEl = document.getElementById("triple-participate-desc");
-  const targetsEl = document.getElementById("triple-participate-targets");
-  const btn = document.getElementById("triple-participate-btn");
-  const labelEl = document.getElementById("triple-participate-btn-label");
-  if (!btn || !targetsEl || !labelEl) return;
-
+export function renderParticipationBar(data) {
+  const bar = document.getElementById("sequential-participate-bar");
+  const desc = document.getElementById("sequential-participate-desc");
+  const countLabel = document.getElementById("sequential-participate-targets");
+  const button = document.getElementById("sequential-participate-btn");
+  const label = document.getElementById("sequential-participate-btn-label");
+  if (!bar || !countLabel || !button || !label) return;
   const count = Number(data?.count) || 0;
-  const items = data?.items || [];
-  const jobRunning = document.body.classList.contains("job-running");
-  const setupOk = isSetupComplete();
-
-  let tone = "blocked";
-  if (setupOk && jobRunning) tone = "running";
-  else if (setupOk && count > 0) tone = "ready";
-  else if (setupOk) tone = "empty";
-
-  if (bar) {
-    bar.dataset.tone = tone;
-    bar.classList.toggle("is-ready", tone === "ready");
-    bar.classList.toggle("is-empty", tone === "empty");
-    bar.classList.toggle("is-blocked", tone === "blocked");
-    bar.classList.toggle("is-running", tone === "running");
-  }
-
-  if (!setupOk) {
-    if (descEl) descEl.textContent = "完成登录与 LLM 配置后，可依次参与最多 3 个活动";
-    targetsEl.innerHTML = `<span class="triple-participate-empty">需先完成登录与 LLM 配置</span>`;
-    btn.disabled = true;
-    labelEl.textContent = "三连参与";
-    return;
-  }
-
-  if (count <= 0) {
-    if (descEl) descEl.textContent = jobRunning ? "可排队，执行时按当前筛选条件重新检查活动" : "当前筛选列表下没有可参与的未参加活动";
-    targetsEl.innerHTML = `<span class="triple-participate-empty">暂无可参与目标</span>`;
-    btn.disabled = !jobRunning;
-    labelEl.textContent = "三连参与";
-    return;
-  }
-
-  if (descEl) {
-    const sortHint =
-      state.filters.sort === "heat"
-        ? state.filters.order === "asc"
-          ? "（按热度升序）"
-          : "（按热度降序）"
-        : "";
-    descEl.textContent =
-      count === 1
-        ? `执行时参与当前筛选下最前面的 1 个未参加活动${sortHint}`
-        : `执行时依次参与当前筛选下最前面的 ${Math.min(count, 3)} 个未参加活动${sortHint}`;
-  }
-  targetsEl.innerHTML = items
-    .map(
-      (item, index) => `
-      <span class="triple-target-chip is-entering type-${lotteryTypeTone(item.lottery_type)}" style="--chip-delay:${index * 55}ms" title="${escapeHtml(item.activity_title || item.dynamic_id)}">
-        <span class="triple-target-chip-index">${index + 1}</span>
-        <span class="triple-target-chip-title">${escapeHtml(truncateText(item.activity_title || item.dynamic_id))}</span>
-        <span class="triple-target-chip-type">${escapeHtml(item.lottery_type || "")}</span>
-      </span>`
-    )
-    .join("");
-  btn.disabled = false;
-  labelEl.textContent = `${jobRunning ? "排队参与" : "三连参与"} (${Math.min(count, 3)})`;
+  const busy = document.body.classList.contains("job-running");
+  const ready = isSetupComplete();
+  bar.dataset.tone = !ready ? "blocked" : count ? "ready" : "empty";
+  bar.classList.toggle("is-blocked", !ready);
+  bar.classList.toggle("is-empty", ready && !count);
+  bar.classList.remove("is-ready", "is-running");
+  countLabel.textContent = ready ? `${count} 个活动待参与` : "需先完成登录与 LLM 配置";
+  if (desc) desc.textContent = !ready
+    ? "完成登录与 LLM 配置后，可按顺序自动参与活动。"
+    : "按当前筛选顺序逐项参与全部未参加活动，遇到失败会停止；进度和结果在日志页查看。";
+  button.disabled = !ready || (!count && !busy);
+  label.textContent = busy ? "排队顺序参与" : "开始顺序参与";
 }
 
 export function buildActivityFilterJobParams() {
@@ -298,14 +252,13 @@ export function getActiveFilterKey() {
   return JSON.stringify(state.filters);
 }
 
-export function computeTripleTargetsFromItems(items) {
+export function computeParticipationTargetsFromItems(items) {
   const eligible = (items || []).filter(
     (item) => item?.can_participate && item.activity_status === "未参加"
   );
-  const picked = eligible.slice(0, 3);
+  const picked = eligible;
   return {
     count: picked.length,
-    limit: 3,
     items: picked.map((item) => ({
       dynamic_id: String(item.dynamic_id || ""),
       activity_title: String(item.activity_title || item.prize || "未知活动"),
@@ -315,30 +268,30 @@ export function computeTripleTargetsFromItems(items) {
   };
 }
 
-export function resolveTripleTargets(payload) {
-  if (payload?.triple_targets && Array.isArray(payload.triple_targets.items)) {
-    return payload.triple_targets;
+export function resolveParticipationTargets(payload) {
+  if (payload?.sequential_targets && Array.isArray(payload.sequential_targets.items)) {
+    return payload.sequential_targets;
   }
   if (state.page === 1) {
-    return computeTripleTargetsFromItems(payload?.items || []);
+    return computeParticipationTargetsFromItems(payload?.items || []);
   }
   return null;
 }
 
-export function applyTripleTargets(data) {
-  state.tripleTargets = data || { count: 0, limit: 3, items: [] };
-  state.tripleFilterKey = getActiveFilterKey();
-  renderTripleParticipateBar(state.tripleTargets);
+export function applyParticipationTargets(data) {
+  state.participationTargets = data || { count: 0, items: [] };
+  state.participationFilterKey = getActiveFilterKey();
+  renderParticipationBar(state.participationTargets);
 }
 
-export async function loadTripleTargets() {
+export async function loadParticipationTargets() {
   try {
     const query = buildActivityFilterQueryParams().toString();
-    const url = query ? `/api/activities/triple-targets?${query}` : "/api/activities/triple-targets";
+    const url = query ? `/api/activities/participation-targets?${query}` : "/api/activities/participation-targets";
     const data = await fetchJSON(url);
-    applyTripleTargets(data);
+    applyParticipationTargets(data);
   } catch {
-    applyTripleTargets({ count: 0, limit: 3, items: [] });
+    applyParticipationTargets({ count: 0, items: [] });
   }
 }
 
@@ -352,14 +305,14 @@ export async function loadActivities() {
   try {
     const payload = await fetchJSON(`/api/activities?${params.toString()}`);
     renderActivities(payload);
-    const preview = resolveTripleTargets(payload);
+    const preview = resolveParticipationTargets(payload);
     if (preview) {
-      applyTripleTargets(preview);
+      applyParticipationTargets(preview);
     } else {
-      await loadTripleTargets();
+      await loadParticipationTargets();
     }
-    if (state.tripleFilterKey !== filterKey) {
-      await loadTripleTargets();
+    if (state.participationFilterKey !== filterKey) {
+      await loadParticipationTargets();
     }
   } catch (error) {
     showToast(String(error.message || error), "error");

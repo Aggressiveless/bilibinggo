@@ -79,7 +79,10 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
             "platform_paused": "平台限制，检索暂停，进度已保存",
             "target_reached": "本轮检索已结束，可继续检索",
             "error": "检索中断，进度已保存",
+            "search_exhausted": "搜索结果已耗尽，未达到新视频目标",
         }.get(result.get("completion_reason"), "检索完成"))
+        if result.get("target_new_videos") and result.get("completion_reason") == "target_reached":
+            prefix = "目标新视频检索完成"
         message = f"{prefix}：找到 {result['eligible']} 条可导入活动，检查 {result.get('videos_checked', 0)} 个视频"
     elif action == "control_discovery_filter":
         cancelled = bool(cancel_event and cancel_event.is_set())
@@ -90,7 +93,10 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
     else:
         check_cancel(cancel_event)
         message = "控制任务完成"
-    on_progress(step=1, total=1, message=message)
+    if action == "control_discover" and result.get("target_new_videos"):
+        on_progress(step=result.get("new_videos_checked", 0), total=result["target_new_videos"], message=message)
+    else:
+        on_progress(step=1, total=1, message=message)
     return {"ok": not cancelled, "cancelled": cancelled, "message": message, "log": message, "result": redact_obj(result)}
 
 
@@ -154,6 +160,7 @@ def discover(service, job_id, params, event, progress=None):
     from src.lottery_discovery_broad import discover_page as find
     words = expand_keywords(params["keywords"]) if params.get("expand_keywords") else params["keywords"]
     comprehensive = params.get("mode") == "comprehensive_page"
+    target = params.get("target_new_videos")
     saved_checks = {}
     def publish(snapshot):
         checks = snapshot.get("video_checks", {})
@@ -164,12 +171,14 @@ def discover(service, job_id, params, event, progress=None):
         value = {"job_id": job_id, "candidates": discovery_candidates(snapshot["rows"]),
                  "errors": [{"message": str(v)} for v in snapshot["errors"][:100]], "stopped": False, "requests_used": snapshot["requests"], "keywords": words,
                  **{k: snapshot[k] for k in ("session_id", "resumed", "scan_completed", "verification_remaining")}}
+        target_stats = {k: snapshot[k] for k in ("target_new_videos", "new_videos_checked", "duplicates_skipped", "search_exhausted") if k in snapshot}
+        value.update(raw=target_stats)
         service.store.put("discovery", str(job_id), redact_obj(value))
         if progress:
-            progress(step=snapshot["videos_checked"], total=max(1, min(params.get("video_limit", 36), snapshot["search_video_count"])),
+            progress(step=snapshot["videos_checked"], total=target or max(1, min(params.get("video_limit", 36), snapshot["search_video_count"])),
                      message=f"{snapshot['message']} · 请求 {snapshot['requests']}，可导入 {snapshot['eligible']}",
                      result_patch={"discovery_job_id": job_id, "eligible": snapshot["eligible"], "requests_used": snapshot["requests"],
-                                   "videos_checked": snapshot["videos_checked"], "phase": snapshot["phase"],
+                                   "videos_checked": snapshot["videos_checked"], "phase": snapshot["phase"], **target_stats,
                                    **{k: snapshot[k] for k in ("session_id", "resumed", "scan_completed", "verification_remaining")}})
     from src.participation_store import load_participations
     from src.activity_store import known_activity_ids
@@ -177,12 +186,13 @@ def discover(service, job_id, params, event, progress=None):
     with discovery_client(service, event, budget=params.get("request_budget", 180),
                           min_interval_seconds=params.get("min_interval_seconds", 2.0)) as client:
         try:
+            target_options = ({"target_new_videos": target, "known_bvids": service.store.discovery_video_ids()} if target is not None else {})
             report = find(client, words, video_limit=params.get("video_limit", 36), now=int(time.time()),
                           comprehensive_page=comprehensive, joined_ids=joined, known_ids=known_activity_ids(), on_progress=publish,
                           candidate_limit=params.get("candidate_limit", 9), author_dynamic_limit=params.get("author_dynamic_limit", 2),
                           resume=params.get("resume", True), replay_completed=params.get("replay_completed", True),
                           on_video_page=service.store.remember_discovery_videos,
-                          collect_followers=params.get("collect_followers", False))
+                          collect_followers=params.get("collect_followers", False), **target_options)
             rows = discovery_candidates([row for category in ("open", "review", "closed", "joined", "rejected", "source")
                                          for row in report.get(category, [])])
             value = {"job_id": job_id, "candidates": rows, "errors": [{"message": str(v)} for v in report["errors"][:100]],
@@ -194,6 +204,7 @@ def discover(service, job_id, params, event, progress=None):
     return {"discovery_job_id": job_id, "candidates": len(rows), "eligible": sum(v["eligible"] for v in rows),
             "requests_used": client.request_count, "partial": bool(value["stopped"] or value["errors"] or report["has_more"]),
             "errors": value["errors"],
+            **{k: report[k] for k in ("target_new_videos", "new_videos_checked", "duplicates_skipped", "search_exhausted") if k in report},
             **{k: report[k] for k in ("videos_checked", "search_video_count", "completion_reason", "cache_hits", "llm_requests", "llm_cache_hits",
                                      "session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining",
                                      "min_interval_seconds", "elapsed_seconds")}}

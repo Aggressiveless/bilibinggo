@@ -353,7 +353,7 @@ def _filtered_activity_rows(
 def _pick_triple_from_rows(
     rows: list[dict[str, Any]],
     *,
-    limit: int = PARTICIPATE_TRIPLE_LIMIT,
+    limit: int | None = PARTICIPATE_TRIPLE_LIMIT,
 ) -> list[dict[str, Any]]:
     targets: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -370,7 +370,7 @@ def _pick_triple_from_rows(
             continue
         seen_ids.add(dynamic_id)
         targets.append(row)
-        if len(targets) >= limit:
+        if limit is not None and len(targets) >= limit:
             break
     return targets
 
@@ -404,7 +404,7 @@ def pick_triple_participate_targets(
     q: str | None = None,
     sort: str | None = None,
     order: str | None = None,
-    limit: int = PARTICIPATE_TRIPLE_LIMIT,
+    limit: int | None = PARTICIPATE_TRIPLE_LIMIT,
 ) -> list[dict[str, Any]]:
     """按当前列表筛选与排序，取最前面可参与的未参加活动（默认最多 3 个）。"""
     rows = _filtered_activity_rows(
@@ -417,6 +417,11 @@ def pick_triple_participate_targets(
         order=order,
     )
     return _pick_triple_from_rows(rows, limit=limit)
+
+
+def summarize_sequential_participate_targets(**filters) -> dict[str, Any]:
+    targets = pick_triple_participate_targets(**filters, limit=None)
+    return {"count": len(targets), "items": _format_triple_target_items(targets), "execution": "sequential"}
 
 
 def summarize_triple_participate_targets(
@@ -469,6 +474,7 @@ def list_activities(
     start = (page - 1) * page_size
     page_items = normalized[start : start + page_size]
     triple_targets = build_triple_target_preview(_pick_triple_from_rows(normalized))
+    sequential = _pick_triple_from_rows(normalized, limit=None)
 
     return {
         "total": total,
@@ -477,6 +483,9 @@ def list_activities(
         "pages": max(1, (total + page_size - 1) // page_size),
         "items": page_items,
         "triple_targets": triple_targets,
+        "sequential_targets": {"count": len(sequential),
+                               "items": _format_triple_target_items(sequential),
+                               "execution": "sequential"},
     }
 
 

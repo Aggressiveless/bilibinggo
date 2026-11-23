@@ -4,7 +4,7 @@ import { confirmModal, gotoOverview, setE2EState } from "./helpers";
 test("page actions enqueue while busy and logs own queue controls and history", async ({ page, request }) => {
   await setE2EState(request, { account: "logged_in", llm: "ready" });
   const active = { id: 900, action: "refresh_all", label: "更新信息源", state: "running", message: "模拟更新中", log: "模拟读取信息源" };
-  const history = { id: 899, action: "participate_triple", label: "模拟参与结果", state: "success", message: "模拟完成", log: "模拟结果：成功 1，失败 0" };
+  const history = { id: 899, action: "participate_sequential", label: "模拟参与结果", state: "success", message: "模拟完成", log: "模拟结果：成功 1，失败 0" };
   const entries: any[] = [{ ...active, id: "active", job_id: active.id }];
   const submitted: string[] = [];
   const snapshot = () => ({ entries, current_job: active, jobs: [active, history], pause_reason: "" });
@@ -25,7 +25,7 @@ test("page actions enqueue while busy and logs own queue controls and history", 
     expect(new URL(route.request().url()).searchParams.get("enqueue")).toBe("true");
     const { action } = route.request().postDataJSON();
     submitted.push(action);
-    const entry = { id: action, label: action === "participate_triple" ? "参与未参加活动" : "更新信息源（等待）", state: "queued", job_id: null };
+    const entry = { id: action, label: action === "participate_sequential" ? "参与未参加活动" : "更新信息源（等待）", state: "queued", job_id: null };
     entries.push(entry);
     await route.fulfill({ json: { ok: true, job: active, queue_entry: entry } });
   });
@@ -71,9 +71,9 @@ test("page actions enqueue while busy and logs own queue controls and history", 
   await page.locator("#discovery-start").click();
   await expect.poll(() => submitted.length).toBe(2);
   await page.locator('[data-section="activities"]').click();
-  await expect(page.locator('[data-action="participate_triple"]')).toBeEnabled();
-  await page.locator('[data-action="participate_triple"]').click();
-  await expect.poll(() => submitted).toEqual(["refresh_all", "control_discover", "participate_triple"]);
+  await expect(page.locator('[data-action="participate_sequential"]')).toBeEnabled();
+  await page.locator('[data-action="participate_sequential"]').click();
+  await expect.poll(() => submitted).toEqual(["refresh_all", "control_discover", "participate_sequential"]);
   await expect(page.locator("#section-activities")).toHaveClass(/active/);
   await expect(page.locator("#log-dock, #auto-dock, #auto-panel")).toHaveCount(0);
   await expect(page.locator("#section-logs #progress-banner")).toHaveCount(1);
