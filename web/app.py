@@ -48,6 +48,7 @@ from web.api_contract import API_CONTRACT_VERSION, ApiContractMiddleware, patch_
 from web.api_errors import AppError, ErrorCode, register_exception_handlers, require_llm_ready, require_login
 from web.auto_scheduler import auto_scheduler
 from web.job_runner import runner
+from web.usage_routes import router as usage_router
 from web.schemas import (
     ALLOWED_JOB_ACTIONS,
     AckAtUnreadRequest,
@@ -107,6 +108,7 @@ class AssetCacheMiddleware:
 app.add_middleware(AssetCacheMiddleware)
 app.add_middleware(ApiContractMiddleware)
 register_exception_handlers(app)
+app.include_router(usage_router)
 
 _JOB_REQUIRES_LOGIN = frozenset(
     {

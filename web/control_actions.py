@@ -2,6 +2,7 @@
 from __future__ import annotations
 import re
 import time
+from datetime import date
 from src.control_store import ControlError, digest, utc_now
 from src.log_redact import redact_obj
 
@@ -285,8 +286,13 @@ def diagnose(targets):
                 config = load_llm_config()
                 if not config:
                     raise ControlError("LLM_NOT_READY", "未保存LLM配置")
+                from src.usage_stats import record_llm_request
                 with httpx.Client(timeout=8, follow_redirects=False) as client:
-                    response = client.get(config.base_url.rstrip("/") + "/models", headers={"Authorization": "Bearer " + config.api_key})
+                    day = date.today()
+                    try:
+                        response = client.get(config.base_url.rstrip("/") + "/models", headers={"Authorization": "Bearer " + config.api_key})
+                    finally:
+                        record_llm_request(config, day, completion=False)
                 value = {"ok": response.status_code < 400, "http_status": response.status_code}
             rows.append({"target": target, "elapsed_ms": int((time.monotonic()-started)*1000), **value})
         except Exception as exc:

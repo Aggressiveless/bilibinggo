@@ -13,6 +13,43 @@ class SchemaMeta(SQLModel, table=True):
     version: int = Field(default=1)
 
 
+class BilibiliUsageDay(SQLModel, table=True):
+    __tablename__ = "bilibili_usage_days"
+
+    day: str = Field(primary_key=True)
+    requests: int = 0
+
+
+class LlmUsageDay(SQLModel, table=True):
+    __tablename__ = "llm_usage_days"
+
+    day: str = Field(primary_key=True)
+    model_key: str = Field(primary_key=True)
+    requests: int = 0
+    completions: int = 0
+    token_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    reported_calls: int = 0
+    reported_cny_nanos: int = 0
+    reported_usd_nanos: int = 0
+    estimable_calls: int = 0
+    estimable_input: int = 0
+    estimable_cached_input: int = 0
+    estimable_output: int = 0
+
+
+class LlmUsageRate(SQLModel, table=True):
+    __tablename__ = "llm_usage_rates"
+
+    model_key: str = Field(primary_key=True)
+    currency: str
+    input_rate: str
+    cached_input_rate: Optional[str] = None
+    output_rate: str
+
+
 class ActivityRow(SQLModel, table=True):
     __tablename__ = "activities"
     __table_args__ = (
