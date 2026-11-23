@@ -37,9 +37,9 @@ python packaging/windows/generate_icon.py
 Write-Host "==> PyInstaller 构建"
 python -m PyInstaller packaging/windows/binggo.spec --noconfirm --clean
 
-$DistDir = Join-Path $Root "dist\Binggo"
-if (-not (Test-Path (Join-Path $DistDir "Binggo.exe"))) {
-    throw "未找到 dist\Binggo\Binggo.exe"
+$DistDir = Join-Path $Root "dist\Binggo-RepostFix"
+if (-not (Test-Path (Join-Path $DistDir "Binggo-RepostFix.exe"))) {
+    throw "未找到 dist\Binggo-RepostFix\Binggo-RepostFix.exe"
 }
 
 Write-Host "==> 生成便携版 ZIP"
@@ -51,17 +51,15 @@ Binggo 便携版（Windows）
 版本：$AppVersion
 
 1. 解压本 ZIP 到任意文件夹（路径尽量不要有中文）
-2. 双击 Binggo.exe
-3. 浏览器会自动打开 http://127.0.0.1:8181
+2. 双击 Binggo-RepostFix.exe
+3. 浏览器会自动打开 http://127.0.0.1:8182
 4. 按页面提示扫码登录、配置 LLM（转发抽奖需要）
 
-数据默认保存在：%APPDATA%\Binggo
-若希望数据放在本文件夹，可创建 BinggoPortable.cmd，内容：
-  set BINGGO_PORTABLE=1
-  start "" "%~dp0Binggo.exe"
+数据保存在程序目录下的 user-data 文件夹。升级时请保留此文件夹。
+覆盖程序前请等待任务结束并退出旧程序；发布包不包含个人配置或历史数据。
 
 本安装包未做商业代码签名；首次运行若被 SmartScreen 拦截，请选择「仍要运行」。
-再次双击 Binggo.exe 可重新打开控制台（若已在运行会直接打开浏览器）。
+再次双击 Binggo-RepostFix.exe 可重新打开控制台（若已在运行会直接打开浏览器）。
 "@
 Set-Content -Path (Join-Path $DistDir "使用说明.txt") -Value $ReadmePortable -Encoding UTF8
 

@@ -9,7 +9,7 @@
 
 安装包**未做商业代码签名**；首次运行若被 SmartScreen 拦截，请选择「仍要运行」。
 
-**覆盖安装前**请先完全退出 Binggo（任务管理器结束所有 `Binggo.exe`，含后台 `--serve` 进程），否则可能提示「拒绝访问」无法替换程序。安装程序会自动尝试结束相关进程。
+**覆盖安装前**请先完全退出 Binggo（任务管理器结束所有 `Binggo-RepostFix.exe`，含后台 `--serve` 进程），否则可能提示「拒绝访问」无法替换程序。安装程序会自动尝试结束相关进程。
 
 ## 开发者本地构建
 
@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 
 产物：
 
-- `dist\Binggo\` — 程序目录（含 `Binggo.exe`）
+- `dist\Binggo-RepostFix\` — 程序目录（含 `Binggo-RepostFix.exe`）
 - `dist\Binggo-Portable-win64.zip` — 便携压缩包
 - `dist\Binggo-Setup-win64.exe` — 安装包（需 Inno Setup 6）
 
@@ -48,27 +48,10 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 
 也可在 Actions 页手动 **Run workflow** 下载构建产物（不上传 Release）。
 
-## 环境变量
+## 数据与端口
 
-| 变量 | 说明 |
-|------|------|
-| `BINGGO_HOME` | 自定义数据目录（覆盖默认 `%APPDATA%\Binggo`） |
-| `BINGGO_PORTABLE=1` | 便携模式：数据放在 `Binggo.exe` 同目录 |
-| `BINGGO_SKIP_INNO=1` | 本地构建时跳过 Inno |
+此 fork 使用 `binggo_repair_launcher.py`，固定将配置和历史保存在程序旁的 `user-data`，与原版数据目录分开。默认控制台地址为 `http://127.0.0.1:8182`；可用 `BINGGO_CONTROL_PORT` 指定其他端口。
 
-## 数据目录与安全
+升级前等待当前任务结束，退出旧程序并备份整个 `user-data`，再覆盖程序文件。发布包不得包含个人 Cookie、模型密钥、数据库或历史记录。
 
-| 模式 | 数据根 | 说明 |
-|------|--------|------|
-| 安装包默认 | `%APPDATA%\Binggo` | 卸载**不删除**此目录 |
-| 便携 | exe 同目录 | 含 `config/cookies.txt`、`config/llm.env`；**勿整夹同步到公开盘** |
-| 自定义 | `BINGGO_HOME` | 覆盖以上默认 |
-
-密钥仅存本机明文文件；控制台只监听 `127.0.0.1:8181`，请勿改成局域网开放。
-
-## 技术说明
-
-- 启动器：`binggo_launcher.py` → PyInstaller 打包为 `Binggo.exe`
-- 界面：本机 `127.0.0.1:8181` + 自动打开浏览器
-- 重复双击：若已在运行，会直接打开浏览器而不会启动第二个实例
-- 版本 SSOT：`src/app_paths.__version__`（勿在 `installer.iss` 手写正式版本）
+`BINGGO_SKIP_INNO=1` 可跳过本地安装包构建。安装器与便携 ZIP 均使用 `Binggo-RepostFix.exe`。

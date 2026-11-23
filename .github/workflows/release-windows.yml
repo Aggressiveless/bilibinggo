@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   build-windows:
+    # 本地已上传并校验的包不再重建，避免覆盖资产后使 SHA256SUMS 失效。
+    if: github.event_name == 'workflow_dispatch' || !contains(join(github.event.release.assets.*.name, ','), 'Binggo-Portable-win64.zip')
     runs-on: windows-latest
     steps:
       - name: Checkout

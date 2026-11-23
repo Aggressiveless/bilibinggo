@@ -1,56 +1,25 @@
-Binggo 动态转发接口本地修复版
-版本：5.0.5+repostfix.2（基于官方 v5.0.5，非官方发布）
+﻿Binggo 6.0.0（Komerser fork）
 
-Windows 使用步骤
-1. 将 Windows ZIP 完整解压到一个新文件夹，例如 D:\A_Bonus\Binggo-RepostFix。不要覆盖原 Binggo 安装目录，也不要只复制 EXE。
-2. 双击 Binggo-RepostFix.exe。浏览器应打开 http://127.0.0.1:8182。
-3. 在概览确认版本为 5.0.5+repostfix.2。原版使用 8181，两个页面请区分。
-4. 此版使用程序旁的 user-data 文件夹，首次是空白数据，需要重新扫码登录。没有复制原版 Cookie、API Key 或活动库。
-5. 暂时不要启动定时调度或批量参与。选择一条你确实要参与的活动，点击一次参与。
-   参与按钮仍会执行该活动的关注、点赞、转发、评论等原有动作。
-6. 到 B 站个人动态确认实际转发已出现，并核对原活动的文案、评论等要求。
-   接口返回成功不等于已满足活动全部条件，也不代表必定中奖。
-7. 若提示“转发结果未确认”，先检查个人动态，不要立刻重试。
+下载：https://github.com/Komerser/bilibinggo/releases/tag/v6.0.0
+源码：https://github.com/Komerser/bilibinggo
+上游：https://github.com/luovicter-collab/bilibinggo
 
-数据与退出
-日志：user-data\data\logs\binggo.log。
-登录凭证：user-data\config\cookies.txt，仅保留本机，不要分享。
-本程序有后台服务。需要彻底退出时，在任务管理器中仅结束 Binggo-RepostFix.exe。
-原版安装和 %APPDATA%\Binggo 未被本修复版覆盖。
+首次使用
+1. 下载 Binggo-Portable-win64.zip 并完整解压。
+2. 双击 Binggo-RepostFix.exe，浏览器打开 http://127.0.0.1:8182 。
+3. 按页面提示登录并配置模型；用户配置与历史保存在程序旁的 user-data 文件夹。
 
-修复内容
-- 转发抽奖的外层文案明确列出关注、转发、点赞、评论且未要求收藏时，显示“活动未要求收藏，跳过”。
-- 无收藏入口时跳过收藏，明确要求收藏的活动继续校验收藏结果。
-- 从旧 dynamic_repost 接口迁移到 https://api.bilibili.com/x/dynamic/feed/create/dyn。
-- 使用 JSON dyn_req、web_repost_src，动态 ID 保持字符串；CSRF 放查询参数。
-- 沿用普通文本转发，不新增富文本 @ 用户解析能力。
-- 检查业务 code、data.result 或返回的新动态 ID；不再把含“已”“重复”的任意错误判成成功。
-- 转发提交 retries=0；网络超时、异常 HTTP、非 JSON 或含糊结果提示先人工核对，不自动重复提交。
-- 独立的启动器、8182 端口、单实例标识与 user-data 目录。
+升级
+1. 等待已有任务完成后退出旧程序。
+2. 备份原程序及整个 user-data 文件夹。
+3. 在原目录覆盖程序文件并保留 user-data；启动后即可继续使用原配置与历史。
+4. 请勿将含 Cookie、模型密钥及数据库的 user-data 上传公开仓库。
 
-验证结果（2026-11-21，日本时间）
-- 后端离线测试：427 passed，2 skipped；测试过程中阻断外网连接。
-- 前端测试：4 passed；类型检查与生产构建通过。
-- 打包后的 Windows EXE：/api/runtime 与首页 HTTP 200；确认版本、独立目录及 8182 端口。
-- 尚未使用真实账号发送动态；实际账号兼容性需按上述单条验证步骤确认。
-- 未修复更新数据源时具体 /opus/ 页面返回 404 的另一问题。
+主要更新
+- 动态转发接口修复与按活动要求收藏。
+- 抽奖线索检索、候选复核、增量导入，以及唯一新视频目标数量。
+- 检索停止后继续，保留去重结果、扫描游标和真实完成进度。
+- 自动顺序参与、统一任务队列、日志及概览用量统计。
+- MCP v2 控制与自动化契约。
 
-源码与重建
-源码包来自 https://github.com/luovicter-collab/bilibinggo 的 v5.0.5，加本地修复。
-修改差异见随附 repost-fix.patch。原始源码下载经 Git blob SHA-1 校验。
-构建使用 Windows x64、Python 3.11.13；依赖版本见 requirements-repair-lock.txt。
-在源码根目录打开 PowerShell，用 Windows Python 3.11 执行：
-  py -3.11 -m venv .repair-venv
-  .\.repair-venv\Scripts\python.exe -m pip install -r requirements-repair-lock.txt
-  Push-Location web\frontend
-  npm.cmd ci
-  npm.cmd run build
-  Pop-Location
-  .\.repair-venv\Scripts\python.exe -m pytest tests/ -q
-  .\.repair-venv\Scripts\python.exe -m PyInstaller packaging/windows/binggo.spec --noconfirm
-生成目录：dist\Binggo-RepostFix。请使用本说明的命令；原仓库 build.ps1 面向官方安装包命名。
-
-参考
-官方源码：https://github.com/luovicter-collab/bilibinggo/tree/v5.0.5
-相同报错：https://github.com/luovicter-collab/bilibinggo/issues/18
-新接口参考：https://github.com/shanmiteko/LotteryAutoScript/blob/accfb8ba5502688b96fcac6f47d58042b2fcadba/lib/net/bili.js
+完整说明见 CHANGELOG.md 和 GitHub Release。发布包未做商业代码签名。

@@ -2,9 +2,9 @@
 ; 正式构建必须通过 ISCC /DAppVersion=x.y.z 注入版本（SSOT: src/app_paths.__version__）
 
 #define AppName "Binggo"
-#define AppPublisher "bilibili_binggo"
-#define AppURL "https://github.com/luovicter-collab/bilibinggo"
-#define AppExeName "Binggo.exe"
+#define AppPublisher "Komerser / bilibinggo contributors"
+#define AppURL "https://github.com/Komerser/bilibinggo"
+#define AppExeName "Binggo-RepostFix.exe"
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
 #endif
@@ -28,7 +28,7 @@ WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#AppExeName}
 PrivilegesRequired=lowest
-AppMutex=Global\BilibiliBinggoDashboard
+AppMutex=Global\BilibiliBinggoRepostFixDashboard
 CloseApplications=force
 RestartApplications=yes
 
@@ -41,7 +41,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项:"; Flags: unchecked
 
 [Files]
-Source: "..\..\dist\Binggo\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\dist\Binggo-RepostFix\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"

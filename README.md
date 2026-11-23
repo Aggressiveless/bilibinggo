@@ -1,3 +1,5 @@
+> **Komerser fork · 6.0.0** — [更新内容](CHANGELOG.md) · [下载 6.0.0](https://github.com/Komerser/bilibinggo/releases/tag/v6.0.0)。Windows 程序为 `Binggo-RepostFix.exe`，默认端口 `8182`，数据位于程序旁的 `user-data`。本 fork 基于 [上游 bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
+
 <p align="center">
   <img src="docs/images/logo.svg" alt="Binggo" width="80" height="80">
 </p>
@@ -9,20 +11,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/luovicter-collab/bilibinggo/releases/latest"><img src="https://img.shields.io/github/v/release/luovicter-collab/bilibinggo?style=flat-square" alt="Release"></a>
-  <a href="https://github.com/luovicter-collab/bilibinggo/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/luovicter-collab/bilibinggo/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
-  <a href="https://github.com/luovicter-collab/bilibinggo/stargazers"><img src="https://img.shields.io/github/stars/luovicter-collab/bilibinggo?style=flat-square" alt="Stars"></a>
+  <a href="https://github.com/Komerser/bilibinggo/releases/latest"><img src="https://img.shields.io/github/v/release/Komerser/bilibinggo?style=flat-square" alt="Release"></a>
+  <a href="https://github.com/Komerser/bilibinggo/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Komerser/bilibinggo/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+  <a href="https://github.com/Komerser/bilibinggo/stargazers"><img src="https://img.shields.io/github/stars/Komerser/bilibinggo?style=flat-square" alt="Stars"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/luovicter-collab/bilibinggo/releases/latest"><b>下载</b></a>
+  <a href="https://github.com/Komerser/bilibinggo/releases/latest"><b>下载</b></a>
   &nbsp;·&nbsp;
   <a href="https://luovicter-collab.github.io/bilibinggo/"><b>官网</b></a>
   &nbsp;·&nbsp;
   <a href="docs/console.md"><b>文档</b></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/luovicter-collab/bilibinggo/issues"><b>反馈</b></a>
+  <a href="https://github.com/Komerser/bilibinggo/issues"><b>反馈</b></a>
 </p>
 
 Binggo 从 UP 合集与监控用户动态发现进行中的抽奖活动，在本地 Web 控制台登录、更新与参与（含三连批量）。Cookie、活动库与参与记录只保存在你的电脑上；控制台仅监听 `127.0.0.1`，不往云端同步账号数据。
@@ -50,7 +52,7 @@ Binggo 从 UP 合集与监控用户动态发现进行中的抽奖活动，在本
 | Windows | `Binggo-Setup-win64.exe`（推荐）、`Binggo-Portable-win64.zip` |
 | macOS | `Binggo-macOS-arm64.dmg`、`Binggo-macOS-arm64.zip` |
 
-👉 **[Latest release](https://github.com/luovicter-collab/bilibinggo/releases/latest)**
+👉 **[Latest release](https://github.com/Komerser/bilibinggo/releases/latest)**
 
 > Windows 未商业签名、macOS 未公证时，首次运行需按系统提示选择「仍要运行」或右键 **打开**。Intel Mac 请用源码运行。
 
@@ -74,7 +76,7 @@ Binggo 从 UP 合集与监控用户动态发现进行中的抽奖活动，在本
 Python **3.12+**，Node.js **20+**（仅构建前端时需要）。
 
 ```bash
-git clone https://github.com/luovicter-collab/bilibinggo.git && cd bilibinggo
+git clone https://github.com/Komerser/bilibinggo.git && cd bilibinggo
 pip install -r requirements.txt
 cd web/frontend && npm ci && npm run build && cd ../..
 python scripts/run_dashboard.py
@@ -84,7 +86,7 @@ python scripts/run_dashboard.py
 
 ## Changelog
 
-版本与更新说明见 **[GitHub Releases](https://github.com/luovicter-collab/bilibinggo/releases)**。
+版本与更新说明见 **[GitHub Releases](https://github.com/Komerser/bilibinggo/releases)**。
 
 ## Star History
 
