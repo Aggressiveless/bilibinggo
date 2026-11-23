@@ -36,6 +36,21 @@ interface Candidate {
   triple_requirement: "required" | "optional" | "not_mentioned" | "unknown";
 }
 
+const videoStates = { pending: "待检测", rejected: "检测不合格", ready: "待导入", handled: "已处理" };
+const modelStates = { lottery: "有抽奖", not_lottery: "未发现抽奖", uncertain: "证据不足" };
+type VideoState = keyof typeof videoStates;
+
+interface VideoRecord {
+  bvid: string;
+  title: string;
+  first_seen: string;
+  last_seen: string;
+  status: VideoState;
+  repeat_count: number;
+  repeat_count_incomplete: boolean;
+  reasons: { message: string; model_reason?: string; model_assessment?: keyof typeof modelStates; kind?: string; count: number }[];
+}
+
 interface DiscoveryStatus {
   job: DiscoveryJob | null;
   queue_job?: DiscoveryJob | null;
@@ -52,6 +67,7 @@ interface DiscoveryStatus {
   };
   bv_count?: number;
   pending_selection?: number;
+  video_checks?: { total: number; counts: Partial<Record<VideoState, number>> };
   candidates?: Candidate[];
   filter?: { id?: string; settings?: FilterSettings; matched?: number; total?: number; unknown_metadata?: number };
   resume_available: boolean;
@@ -132,6 +148,13 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
   }
   setText("discovery-badge", badge);
   setText("discovery-status", message);
+  const videoSummary = element("discovery-video-summary");
+  if (videoSummary) videoSummary.hidden = !status.video_checks?.total;
+  if (status.video_checks?.total) {
+    const counts = status.video_checks.counts;
+    const labels = (Object.keys(videoStates) as VideoState[]).filter((key) => counts[key]);
+    setText("discovery-video-summary-counts", labels.map((key) => `${videoStates[key]} ${counts[key]} 条`).join(" · "));
+  }
   const queue = status.queue;
   const queuePanel = element("discovery-queue");
   if (queuePanel) queuePanel.hidden = !queue?.total;
@@ -350,7 +373,10 @@ export function bindDiscovery() {
     submit("/api/discovery/import", { job_id: snapshot.job.job_id, selection: "filtered", filter_id: snapshot.filter?.id });
   });
   bindCoinBalance();
-  bindSourceViews();
+  const openVideoRecords = bindSourceViews();
+  element("discovery-open-video-checks")?.addEventListener("click", () => {
+    if (snapshot.job) openVideoRecords?.(snapshot.job.job_id);
+  });
   refresh();
   window.setInterval(refresh, 3000);
   window.addEventListener("pageshow", () => refresh());
@@ -394,20 +420,23 @@ function bindSourceViews() {
   const pagination = element("discovery-video-pages");
   const prev = element<HTMLButtonElement>("discovery-video-prev");
   const next = element<HTMLButtonElement>("discovery-video-next");
-  if (!body || !table || !pagination || !prev || !next) return;
+  const all = element<HTMLButtonElement>("discovery-video-all");
+  const videosButton = document.querySelector<HTMLButtonElement>('[data-source-view="videos"]');
+  if (!body || !table || !pagination || !prev || !next || !all || !videosButton) return;
   const pageSize = 50;
   let offset = 0;
   let total = 0;
-  let loading = false;
+  let jobId: number | null = null;
+  let requestId = 0;
   const load = async (start: number) => {
-    if (loading) return;
-    loading = true;
+    const request = ++requestId;
     prev.disabled = next.disabled = true;
     setText("discovery-video-status", "正在读取 BV 记录…");
     try {
-      const result = await fetchJSON<{ total: number; items: { bvid: string; first_seen: string; last_seen: string }[] }>(
-        `/api/discovery/videos?offset=${start}&limit=${pageSize}`,
+      const result = await fetchJSON<{ total: number; items: VideoRecord[] }>(
+        `/api/discovery/videos?offset=${start}&limit=${pageSize}${jobId === null ? "" : `&job_id=${jobId}`}`,
       );
+      if (request !== requestId) return;
       offset = start;
       total = result.total;
       body.replaceChildren(...result.items.map((item) => {
@@ -416,33 +445,86 @@ function bindSourceViews() {
         link.href = `https://www.bilibili.com/video/${encodeURIComponent(item.bvid)}`;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
-        link.textContent = item.bvid;
-        row.insertCell().append(link);
-        row.insertCell().textContent = new Date(item.first_seen).toLocaleString();
-        row.insertCell().textContent = new Date(item.last_seen).toLocaleString();
+        link.textContent = item.title || item.bvid;
+        const identity = row.insertCell();
+        identity.append(link);
+        if (item.title) {
+          const bv = document.createElement("span");
+          bv.className = "video-record-detail";
+          bv.textContent = item.bvid;
+          identity.append(bv);
+        }
+        const resultCell = row.insertCell();
+        const status = document.createElement("strong");
+        status.dataset.videoState = item.status;
+        status.textContent = videoStates[item.status] || videoStates.pending;
+        resultCell.append(status);
+        const reasons = (item.reasons || []).map((reason) => {
+          const detail = document.createElement("span");
+          detail.className = "video-record-detail";
+          const model = reason.model_assessment ? modelStates[reason.model_assessment] : "";
+          const scope = reason.kind === "video_comment" ? "视频" : "关联动态";
+          detail.textContent = `${reason.message}${reason.count > 1 ? `（${reason.count} 个）` : ""}`
+            + (reason.model_reason ? `。模型（${scope}${model ? ` · ${model}` : ""}）${reason.model_reason}` : "");
+          return detail;
+        });
+        resultCell.append(...reasons.slice(0, 2));
+        if (reasons.length > 2) {
+          const more = document.createElement("details");
+          const toggle = document.createElement("summary");
+          toggle.textContent = `其余 ${reasons.length - 2} 项原因`;
+          more.append(toggle, ...reasons.slice(2));
+          resultCell.append(more);
+        }
+        const repeats = row.insertCell();
+        repeats.textContent = item.repeat_count_incomplete ? (item.repeat_count ? `≥ ${item.repeat_count}` : "未统计") : String(item.repeat_count ?? 0);
+        if (item.repeat_count_incomplete) repeats.title = "此视频的旧版重复抓取次数未统计";
+        const dates = row.insertCell();
+        for (const [label, value] of [["首次", item.first_seen], ["最近", item.last_seen]]) {
+          const date = document.createElement("span");
+          date.className = "video-record-detail";
+          date.textContent = `${label} ${new Date(value).toLocaleString()}`;
+          dates.append(date);
+        }
         return row;
       }));
       table.hidden = !result.items.length;
       pagination.hidden = total <= pageSize;
       setText("discovery-video-status", result.items.length
-        ? `共 ${total} 条 · 第 ${offset + 1}–${offset + result.items.length} 条` : "暂无已收录的视频。");
+        ? `${jobId === null ? "全部" : "本轮"}共 ${total} 条 · 第 ${offset + 1}–${offset + result.items.length} 条` : "暂无已收录的视频。");
     } catch {
-      setText("discovery-video-status", "暂时无法读取 BV 记录，点击「BV 记录」重试。");
+      if (request === requestId) setText("discovery-video-status", "暂时无法读取 BV 记录，点击「BV 记录」重试。");
     } finally {
-      loading = false;
-      prev.disabled = offset === 0;
-      next.disabled = offset + pageSize >= total;
+      if (request === requestId) {
+        prev.disabled = offset === 0;
+        next.disabled = offset + pageSize >= total;
+      }
     }
   };
-  buttons.forEach((button) => button.addEventListener("click", () => {
+  const show = (button: HTMLButtonElement) => {
     buttons.forEach((item) => {
       const active = item === button;
       item.setAttribute("aria-pressed", String(active));
       const panel = element(item.getAttribute("aria-controls") || "");
       if (panel) panel.hidden = !active;
     });
-    if (button.dataset.sourceView === "videos") void load(offset);
+  };
+  const openRecords = (job: number | null) => {
+    if (jobId !== job) {
+      offset = total = 0;
+      table.hidden = pagination.hidden = true;
+    }
+    jobId = job;
+    all.hidden = jobId === null;
+    show(videosButton);
+    void load(offset);
+  };
+  buttons.forEach((button) => button.addEventListener("click", () => {
+    if (button === videosButton) openRecords(null);
+    else show(button);
   }));
+  all.addEventListener("click", () => openRecords(null));
   prev.addEventListener("click", () => load(offset - pageSize));
   next.addEventListener("click", () => load(offset + pageSize));
+  return openRecords;
 }

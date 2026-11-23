@@ -46,6 +46,16 @@ class ControlStore:
                 CREATE TABLE IF NOT EXISTS discovery_videos (
                     bvid TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS discovery_video_metadata (
+                    bvid TEXT PRIMARY KEY, title TEXT NOT NULL, sightings INTEGER NOT NULL, legacy_history INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS discovery_video_sightings (
+                    bvid TEXT NOT NULL, page_id TEXT NOT NULL, PRIMARY KEY(bvid,page_id)
+                );
+                CREATE TABLE IF NOT EXISTS discovery_video_checks (
+                    job_id INTEGER NOT NULL, bvid TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job_id,bvid)
+                );
+                CREATE INDEX IF NOT EXISTS discovery_video_checks_latest ON discovery_video_checks(bvid,job_id DESC);
             """)
 
     def connect(self):
@@ -68,25 +78,59 @@ class ControlStore:
             rows = db.execute("SELECT payload FROM records WHERE kind=? ORDER BY key", (kind,)).fetchall()
         return [json.loads(row[0]) for row in rows]
 
-    def remember_discovery_videos(self, bvids) -> None:
+    def remember_discovery_videos(self, videos, *, page_id=None, backfill=False) -> None:
         now = utc_now()
+        rows = {}
+        for video in videos:
+            bvid, title = (video, "") if isinstance(video, str) else (video["bvid"], video.get("title", ""))
+            rows[bvid] = title or rows.get(bvid, "")
         with self.connect() as db:
-            db.executemany("INSERT INTO discovery_videos VALUES(?,?,?) ON CONFLICT(bvid) DO UPDATE SET last_seen=excluded.last_seen",
-                           [(bvid, now, now) for bvid in dict.fromkeys(bvids)])
+            for bvid, title in rows.items():
+                created = db.execute("INSERT OR IGNORE INTO discovery_videos VALUES(?,?,?)", (bvid, now, now)).rowcount
+                counted = bool(page_id and db.execute(
+                    "INSERT OR IGNORE INTO discovery_video_sightings VALUES(?,?)", (bvid, page_id),
+                ).rowcount)
+                if counted or (page_id is None and not backfill):
+                    db.execute("UPDATE discovery_videos SET last_seen=? WHERE bvid=?", (now, bvid))
+                db.execute("""
+                    INSERT INTO discovery_video_metadata VALUES(?,?,?,?) ON CONFLICT(bvid) DO UPDATE SET
+                    title=CASE WHEN excluded.title<>'' AND (discovery_video_metadata.title='' OR NOT ?)
+                               THEN excluded.title ELSE discovery_video_metadata.title END,
+                    sightings=discovery_video_metadata.sightings+excluded.sightings
+                """, (bvid, title, int(counted), int(not created or page_id is None), backfill))
+
+    def save_discovery_video_checks(self, job_id: int, checks: dict) -> None:
+        with self.connect() as db:
+            db.executemany("""
+                INSERT INTO discovery_video_checks VALUES(?,?,?)
+                ON CONFLICT(job_id,bvid) DO UPDATE SET payload=excluded.payload
+            """, [(job_id, bvid, json.dumps(check, ensure_ascii=False)) for bvid, check in checks.items()])
 
     def discovery_video_count(self) -> int:
         with self.connect() as db:
             return db.execute("SELECT count(*) FROM discovery_videos").fetchone()[0]
 
-    def list_discovery_videos(self, *, limit: int, offset: int) -> tuple[int, list[dict]]:
+    def list_discovery_videos(self, *, limit: int, offset: int, job_id=None) -> tuple[int, list[dict]]:
+        fields = """v.*, c.job_id, c.payload, coalesce(m.title,'') AS title,
+                    coalesce(m.sightings,0) AS sightings, coalesce(m.legacy_history,1) AS legacy_history"""
         with self.connect() as db:
             db.execute("BEGIN")
-            total = db.execute("SELECT count(*) FROM discovery_videos").fetchone()[0]
-            rows = db.execute(
-                "SELECT bvid, first_seen, last_seen FROM discovery_videos "
-                "ORDER BY last_seen DESC, bvid LIMIT ? OFFSET ?", (limit, offset),
-            ).fetchall()
-        return total, [dict(row) for row in rows]
+            if job_id is None:
+                total = db.execute("SELECT count(*) FROM discovery_videos").fetchone()[0]
+                rows = db.execute(f"""
+                    SELECT {fields} FROM discovery_videos v LEFT JOIN discovery_video_metadata m ON m.bvid=v.bvid
+                    LEFT JOIN discovery_video_checks c
+                    ON c.bvid=v.bvid AND c.job_id=(SELECT max(job_id) FROM discovery_video_checks WHERE bvid=v.bvid)
+                    ORDER BY v.last_seen DESC,v.bvid LIMIT ? OFFSET ?
+                """, (limit, offset)).fetchall()
+            else:
+                total = db.execute("SELECT count(*) FROM discovery_video_checks WHERE job_id=?", (job_id,)).fetchone()[0]
+                rows = db.execute(f"""
+                    SELECT {fields} FROM discovery_video_checks c JOIN discovery_videos v ON v.bvid=c.bvid
+                    LEFT JOIN discovery_video_metadata m ON m.bvid=v.bvid
+                    WHERE c.job_id=? ORDER BY c.rowid LIMIT ? OFFSET ?
+                """, (job_id, limit, offset)).fetchall()
+        return total, [{**dict(row), "payload": json.loads(row["payload"] or "{}")} for row in rows]
 
     def claim(self, key: str, parameters: dict) -> dict | None:
         fingerprint = digest(parameters)

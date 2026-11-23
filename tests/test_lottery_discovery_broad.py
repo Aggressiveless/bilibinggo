@@ -6,6 +6,8 @@ import httpx
 from src import lottery_discovery as d
 from src import lottery_discovery_broad as broad
 from src.bilibili_client import BilibiliClient
+from src.control_store import ControlStore
+from src.discovery_video_audit import display_video_check
 
 
 class PageClient:
@@ -168,11 +170,58 @@ def test_video_comment_candidates_are_not_counted_as_importable_dynamics():
     class CommentClient(PageClient):
         def read(self, url, params, **kwargs):
             if url == d.VIDEO_URL:
-                return {"code": 0, "data": {"desc": "本视频评论区留言，抽奖送键盘，2030年11月25日20:00截止"}}
+                return {"code": 0, "data": {"desc": "评论区留言，抽奖送键盘，2030年11月25日20:00截止"}}
             return super().read(url, params, **kwargs)
         def extract(self, text):
-            return {"prize": "键盘", "rules": "本视频评论区留言", "deadline": "2030年11月25日20:00截止"}
+            return {"prize": "键盘", "rules": "评论区留言", "deadline": "2030年11月25日20:00截止"}
     snapshots = []
     result = broad.discover_page(CommentClient(), ["抽奖"], video_limit=1, on_progress=snapshots.append)
     assert result["open"][0]["kind"] == "video_comment"
     assert snapshots[-1]["eligible"] == 0
+
+
+def test_audit_shares_dynamic_results_and_preserves_only_distinct_sightings(tmp_path, monkeypatch):
+    ids = [f"BV{index:010d}" for index in range(4)]
+    target = "1234567890123456789"
+
+    class AuditClient(PageClient):
+        def read(self, url, params, **kwargs):
+            if url == d.SEARCH_URL:
+                return {"code": 0, "data": {"result": [{"bvid": bv, "title": "<em>视频</em>&amp;标题"} for bv in ids]}}
+            if url == d.VIDEO_URL:
+                if params["bvid"] == ids[3]:
+                    raise httpx.ReadTimeout("details unavailable")
+                desc = d.opus_link(target) if params["bvid"] in ids[:2] else "普通视频"
+                return {"code": 0, "data": {"desc": desc}}
+            raise AssertionError(url)
+
+    inspected = []
+    def inspect(client, identifier, **kwargs):
+        inspected.append(identifier)
+        return {"dynamic_id": identifier, "kind": "dynamic", "url": d.opus_link(identifier),
+                "status": "open", "reason": "仍可参加", "model_reason": "明确给出参与方式和奖品",
+                "model_assessment": "lottery"}
+    monkeypatch.setattr(d, "inspect_dynamic", inspect)
+
+    store, client = ControlStore(tmp_path), AuditClient()
+    def run(job_id, resume=True):
+        return broad.discover_page(client, ["抽奖", "送键盘"], video_limit=4, resume=resume,
+            on_video_page=store.remember_discovery_videos,
+            on_progress=lambda snapshot: store.save_discovery_video_checks(job_id, snapshot["video_checks"]))
+
+    run(1)
+    run(2)
+    assert inspected == [target]
+    total, rows = store.list_discovery_videos(limit=50, offset=0, job_id=2)
+    assert total == 4
+    results = [display_video_check(row, known=set(), joined=set(), outcomes={}, now=0) for row in rows]
+    assert [row["status"] for row in results] == ["ready", "ready", "rejected", "pending"]
+    assert all(row["repeat_count"] == 1 and not row["repeat_count_incomplete"] for row in results)
+    assert results[0]["title"] == "视频&标题"
+    assert results[1]["reasons"][0]["model_reason"] == "明确给出参与方式和奖品"
+    assert "未送模型" in results[2]["reasons"][0]["message"]
+    assert "未能读取" in results[3]["reasons"][0]["message"]
+    imported = display_video_check(rows[0], known={target}, joined=set(), outcomes={target: "imported"}, now=0)
+    assert imported["status"] == "handled" and imported["reasons"][0]["message"] == "关联活动已导入"
+    run(3, resume=False)
+    assert store.list_discovery_videos(limit=1, offset=0)[1][0]["sightings"] == 4

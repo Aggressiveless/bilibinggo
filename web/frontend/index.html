@@ -518,6 +518,10 @@
               <div><strong id="discovery-bv-count">0</strong><span>累计收录 BV</span></div>
             </div>
             <p class="discovery-status" id="discovery-status" role="status" aria-live="polite">正在读取检索状态…</p>
+            <div class="discovery-video-summary" id="discovery-video-summary" hidden>
+              <span id="discovery-video-summary-counts"></span>
+              <button type="button" class="btn btn-secondary btn-compact" id="discovery-open-video-checks">查看本轮 BV 记录</button>
+            </div>
             <div class="discovery-queue" id="discovery-queue" hidden>
               <p class="discovery-status" id="discovery-queue-status" role="status"></p>
               <div id="discovery-selection" hidden>
@@ -566,11 +570,16 @@
           </article>
 
           <article class="panel" id="discovery-videos-panel" aria-labelledby="discovery-videos-heading" hidden>
-            <h2 class="section-title" id="discovery-videos-heading">BV 记录</h2>
-            <p class="section-desc" id="discovery-video-status" role="status"></p>
+            <div class="discovery-head">
+              <div>
+                <h2 class="section-title" id="discovery-videos-heading">BV 记录</h2>
+                <p class="section-desc" id="discovery-video-status" role="status"></p>
+              </div>
+              <button type="button" class="btn btn-secondary btn-compact" id="discovery-video-all" hidden>查看全部 BV</button>
+            </div>
             <div class="source-table-scroll" id="discovery-video-table" hidden>
-              <table class="source-table" aria-label="已收录视频">
-                <thead><tr><th scope="col">BV 号</th><th scope="col">首次收录</th><th scope="col">最近收录</th></tr></thead>
+              <table class="source-table discovery-video-list" aria-label="已收录视频">
+                <thead><tr><th scope="col">视频标题 / BV 号</th><th scope="col">检测状态与原因</th><th scope="col" title="同一 BV 在不同检索页再次出现的次数，续跑重放不重复计数">重复抓取</th><th scope="col">首次 / 最近收录</th></tr></thead>
                 <tbody id="discovery-video-items"></tbody>
               </table>
             </div>

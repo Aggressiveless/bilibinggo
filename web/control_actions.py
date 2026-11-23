@@ -153,7 +153,13 @@ def discover(service, job_id, params, event, progress=None):
     from src.lottery_discovery_broad import discover_page as find
     words = expand_keywords(params["keywords"]) if params.get("expand_keywords") else params["keywords"]
     comprehensive = params.get("mode") == "comprehensive_page"
+    saved_checks = {}
     def publish(snapshot):
+        checks = snapshot.get("video_checks", {})
+        changed = {bvid: check for bvid, check in checks.items() if saved_checks.get(bvid) != check}
+        if changed:
+            service.store.save_discovery_video_checks(job_id, redact_obj(changed))
+            saved_checks.update(changed)
         value = {"job_id": job_id, "candidates": discovery_candidates(snapshot["rows"]),
                  "errors": [{"message": str(v)} for v in snapshot["errors"][:100]], "stopped": False, "requests_used": snapshot["requests"], "keywords": words,
                  **{k: snapshot[k] for k in ("session_id", "resumed", "scan_completed", "verification_remaining")}}
@@ -173,7 +179,8 @@ def discover(service, job_id, params, event, progress=None):
             report = find(client, words, video_limit=params.get("video_limit", 36), now=int(time.time()),
                           comprehensive_page=comprehensive, joined_ids=joined, known_ids=known_activity_ids(), on_progress=publish,
                           candidate_limit=params.get("candidate_limit", 9), author_dynamic_limit=params.get("author_dynamic_limit", 2),
-                          resume=params.get("resume", True), on_video_page=service.store.remember_discovery_videos,
+                          resume=params.get("resume", True), replay_completed=params.get("replay_completed", True),
+                          on_video_page=service.store.remember_discovery_videos,
                           collect_followers=params.get("collect_followers", False))
             rows = discovery_candidates([row for category in ("open", "review", "closed", "joined") for row in report[category]])
             value = {"job_id": job_id, "candidates": rows, "errors": [{"message": str(v)} for v in report["errors"][:100]],

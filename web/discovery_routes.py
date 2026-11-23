@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 from typing import Literal
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.control_store import ControlError
+from src.discovery_video_audit import display_video_check
 from web.api_errors import AppError, ErrorCode
 from web.control_service import get_control_service
 from web.discovery_filters import pending_candidates, triple_requirement
@@ -57,6 +59,22 @@ class CoinBalanceSettings(BaseModel):
     refresh_after_coin: bool
 
 
+def video_records(service, *, limit, offset, job_id=None):
+    from src.activity_store import known_activity_ids
+    from src.participation_store import load_participations
+
+    total, rows = service.store.list_discovery_videos(limit=limit, offset=offset, job_id=job_id)
+    if not rows:
+        return total, []
+    known = known_activity_ids()
+    joined = {str(key) for key, value in load_participations().items() if value.user_status == "已参加"}
+    queue_outcomes = {job: (service.store.get("discovery_queue", str(job)) or {}).get("outcomes", {})
+                      for job in {row["job_id"] for row in rows} if job is not None}
+    now = time.time()
+    return total, [display_video_check(row, known=known, joined=joined,
+                                       outcomes=queue_outcomes.get(row["job_id"], {}), now=now) for row in rows]
+
+
 def discovery_status(service, job=None):
     bv_count = service.store.discovery_video_count()
     if job is None:
@@ -91,11 +109,14 @@ def discovery_status(service, job=None):
             "followers": details.get("followers"),
             "triple_requirement": triple_requirement(row),
         })
+    video_total, video_checks = video_records(service, limit=100, offset=0, job_id=job["job_id"])
+    video_summary = Counter(row["status"] for row in video_checks)
     return {"job": job, "keywords": report.get("keywords") or job.get("keywords") or ["转发抽奖"],
             "mode": job.get("discovery_mode", "standard"),
             "summary": summary, "bv_count": bv_count, "stop_message": raw.get("stopped", ""),
             "pending_selection": len(pending),
             "candidates": selectable,
+            "video_checks": {"total": video_total, "counts": dict(video_summary)},
             "filter": {key: val for key, val in preview.items() if key != "dynamic_ids"},
             "queue": queue_summary(service, job["job_id"], report),
             "queue_job": secondary,
@@ -110,8 +131,9 @@ def install_discovery(app):
         return discovery_status(get_control_service())
 
     @router.get("/videos")
-    def videos(offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)):
-        count, rows = get_control_service().store.list_discovery_videos(limit=limit, offset=offset)
+    def videos(offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100),
+               job_id: int | None = Query(default=None, ge=1)):
+        count, rows = video_records(get_control_service(), limit=limit, offset=offset, job_id=job_id)
         return {"total": count, "items": rows}
 
     @router.get("/coins")
@@ -130,7 +152,8 @@ def install_discovery(app):
         try:
             with service.lock:
                 params = {"keywords": request.keywords, "mode": request.mode, "video_limit": 36,
-                          "request_budget": None, "candidate_limit": 0, "resume": True, "collect_followers": True}
+                          "request_budget": None, "candidate_limit": 0, "resume": True, "replay_completed": False,
+                          "collect_followers": True}
                 job = service.start("control_discover", params, require_llm=True, source="ui")
                 return discovery_status(service, job)
         except ControlError as exc:

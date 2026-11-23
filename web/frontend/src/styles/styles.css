@@ -28,6 +28,17 @@
 .discovery-metrics strong { font-size: 23px; font-variant-numeric: tabular-nums; }
 .discovery-metrics span { font-size: 13px; color: var(--foreground-muted); }
 .discovery-status { margin: 0; color: var(--foreground-muted); font-size: 14px; overflow-wrap: anywhere; }
+.discovery-video-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; font-size: 14px; }
+.discovery-video-summary[hidden], #discovery-video-all[hidden] { display: none; }
+.source-table.discovery-video-list { min-width: 760px; }
+.discovery-video-list td { vertical-align: top; }
+.discovery-video-list td:nth-child(1) { width: 29%; }
+.discovery-video-list td:nth-child(2) { width: 43%; }
+.discovery-video-list td:nth-child(n+3) { white-space: nowrap; }
+.video-record-detail { display: block; margin-top: 4px; color: var(--foreground-muted); font-size: 13px; overflow-wrap: anywhere; }
+.discovery-video-list details { margin-top: 5px; font-size: 13px; }
+.discovery-video-list summary { cursor: pointer; }
+.discovery-video-list [data-video-state="ready"] { color: var(--accent-hover); }
 .discovery-queue { margin-top: 16px; }
 .discovery-import-actions { flex-wrap: wrap; }
 .source-subnav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }

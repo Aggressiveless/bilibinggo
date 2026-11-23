@@ -141,7 +141,8 @@ def test_model_evidence_must_exist_and_is_cached(monkeypatch, tmp_path):
 
     def chat(**kwargs):
         calls.append(kwargs)
-        return {"prize": "机械键盘", "deadline": "2030年1月1日20:00"}
+        return {"prize": "机械键盘", "deadline": "2030年1月1日20:00", "assessment": "uncertain",
+                "reason": "  原文没有说明\n报名截止时间  "}
 
     monkeypatch.setattr(discovery, "chat_json", chat)
     with discovery.DiscoveryClient(tmp_path / "cache.json", budget=1) as client:
@@ -149,6 +150,8 @@ def test_model_evidence_must_exist_and_is_cached(monkeypatch, tmp_path):
             fields = client.extract("在评论区留言抽机械键盘")
             assert fields["prize"] == "机械键盘"
             assert not fields["deadline"]
+            assert fields["model_reason"] == "原文没有说明 报名截止时间"
+            assert fields["model_assessment"] == "uncertain"
         assert client.request_count == 0
     assert len(calls) == 1
 

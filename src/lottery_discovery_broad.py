@@ -5,28 +5,88 @@ import hashlib
 import json
 import re
 import time
+import uuid
 from collections import defaultdict, deque
+from datetime import datetime
 
 import httpx
 
 from src import lottery_discovery as d
+from src.discovery_video_audit import audit_note, snapshot_video_checks, video_title
 
 AUTHOR_SEARCH_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space/search"
 AUTHOR_SEARCH_FEATURES = "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard"
 SESSION_TTL_SECONDS = 1800
 
 
+def _legacy_scan_notes(session, entries, finished):
+    def cached_data(url, params):
+        key = json.dumps([url, params], sort_keys=True, ensure_ascii=False)
+        entry = entries.get(key, {})
+        if 0 < entry.get("fetched_at", 0) <= finished < entry.get("expires", 0):
+            return (entry.get("value") or {}).get("data")
+        return None
+
+    notes = {}
+    for row in session["videos"][:session["scan_index"]]:
+        bvid = row["bvid"]
+        video = cached_data(d.VIDEO_URL, {"bvid": bvid})
+        if not video:
+            continue
+        title, owner = video.get("title"), (video.get("owner") or {}).get("mid")
+        texts = [str(title or row.get("title") or ""), str(video.get("desc") or "")]
+        notes[bvid] = {"title": video_title(title), "notes": []}
+        if video.get("aid") and owner:
+            replies = cached_data(d.REPLIES_URL, {"type": 1, "oid": video["aid"], "mode": 3})
+            if replies is None:
+                continue
+            texts.extend(d._owner_comments(replies, str(owner)))
+        text = "\n".join(texts)
+        if not any(pattern.search(text) for pattern in (d.DYNAMIC_RE, d.ARTICLE_RE, d.LOTTERY_RE)):
+            notes[bvid]["notes"].append(audit_note("rejected", "缓存的标题、简介和可读作者评论未见抽奖线索或入口，未送模型"))
+    return notes
+
+
 def restore_video_index(store, cache_path):
-    if store.get("discovery_meta", "video_index_restored"):
+    if store.get("discovery_meta", "video_audit_restored"):
         return
     cache = d._read_cache(cache_path)
-    pages = [session.get("videos", []) for session in cache.get("broad_sessions", {}).values()]
+    sessions = cache.get("broad_sessions", {})
+    pages = [session.get("videos", []) for session in sorted(sessions.values(), key=lambda s: s.get("last_used_at", 0), reverse=True)]
     for key, entry in cache.get("entries", {}).items():
         if key.startswith(json.dumps([d.SEARCH_URL])[:-1] + ","):
             pages.append(((entry.get("value") or {}).get("data") or {}).get("result") or [])
-    store.remember_discovery_videos(str(row["bvid"]) for page in pages for row in page
-                                    if d.BV_RE.fullmatch(str(row.get("bvid") or "")))
-    store.put("discovery_meta", "video_index_restored", {"done": True})
+    titles = {}
+    for page in pages:
+        for row in page:
+            bvid = str(row.get("bvid") or "")
+            if d.BV_RE.fullmatch(bvid) and not titles.get(bvid):
+                titles[bvid] = video_title(row.get("title"))
+    store.remember_discovery_videos(({"bvid": bvid, "title": title} for bvid, title in titles.items()), backfill=True)
+    # A cached cursor can only explain the job that last wrote it.
+    remaining = set(sessions)
+    for job in store.list_jobs(limit=1000) if remaining else []:
+        if job["action"] != "control_discover" or not job.get("finished_at"):
+            continue
+        result = job.get("result") or {}
+        key = result.get("session_id")
+        if key not in remaining:
+            continue
+        session = sessions[key]
+        finished = datetime.fromisoformat(job["finished_at"]).timestamp()
+        if session.get("capture_id") or abs(finished - session.get("last_used_at", 0)) > 60:
+            continue
+        report = store.get("discovery", str(job["job_id"])) or {}
+        saved = {row["dynamic_id"]: row["raw"] for row in report.get("candidates", []) if row.get("dynamic_id")}
+        rows = [saved.get(row.get("dynamic_id"), row) for row in session.get("rows", [])]
+        checked_at = (report.get("raw") or {}).get("checked_at")
+        if checked_at and not result.get("resumed"):
+            session = {**session, "scan_notes": _legacy_scan_notes(session, cache.get("entries", {}), finished)}
+        store.save_discovery_video_checks(job["job_id"], snapshot_video_checks(session, rows, legacy=True))
+        remaining.remove(key)
+        if not remaining:
+            break
+    store.put("discovery_meta", "video_audit_restored", {"done": True})
 
 
 def search_author_lotteries(client, uid: str, *, limit=2):
@@ -68,21 +128,23 @@ def _fair_order(tasks):
 
 def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_page=True,
                   candidate_limit=9, known_ids=None, joined_ids=None, author_dynamic_limit=2,
-                  resume=True, on_progress=None, on_video_page=None, collect_followers=False):
+                  resume=True, replay_completed=True, on_progress=None, on_video_page=None, collect_followers=False):
     now = int(time.time()) if now is None else now
     known_ids, joined_ids = set(known_ids or []), set(joined_ids or [])
     cache = getattr(client, "cache", {})
     sessions = cache.setdefault("broad_sessions", {})
     key = hashlib.sha256(json.dumps([6, keywords, video_limit, comprehensive_page, author_dynamic_limit], ensure_ascii=False).encode()).hexdigest()[:24]
     previous = sessions.get(key)
-    resumed = bool(resume and previous and previous.get("expires_at", 0) > time.time())
+    resumed = bool(resume and previous and previous.get("expires_at", 0) > time.time()
+                   and (replay_completed or not previous.get("done")))
     state = previous if resumed else {"session_id": key, "expires_at": time.time() + SESSION_TTL_SECONDS,
         "search_index": 0, "videos": [], "scan_index": 0, "source_index": 0, "verify_index": 0,
         "source_tasks": [], "tasks": [], "rows": [], "errors": [], "author_queries": {},
-        "phase": "search", "done": False, "verified": 0}
+        "phase": "search", "done": False, "verified": 0, "capture_id": uuid.uuid4().hex}
     sessions[key] = state
-    if on_video_page and state["videos"]:
-        on_video_page(row["bvid"] for row in state["videos"])
+    legacy = state.setdefault("legacy_scan", "capture_id" not in state)
+    capture_id = state.setdefault("capture_id", uuid.uuid4().hex)
+    scan_notes = state.setdefault("scan_notes", {})
     # Bound storage without dropping this run's cursor.
     for old in sorted([k for k in sessions if k != key], key=lambda k: sessions[k].get("expires_at", 0))[:-3]:
         del sessions[old]
@@ -120,18 +182,34 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             "eligible": sum(r["status"] == "open" and r.get("kind") == "dynamic" for r in rows), "rows": rows, "errors": state["errors"],
             "cache_hits": getattr(client, "cache_hits", 0), "llm_requests": getattr(client, "llm_requests", 0),
             "llm_cache_hits": getattr(client, "llm_cache_hits", 0), "session_id": key, "resumed": resumed,
-            "scan_completed": scan_completed(), "verification_remaining": len(state["tasks"]) - state["verify_index"]})
+            "scan_completed": scan_completed(), "verification_remaining": len(state["tasks"]) - state["verify_index"],
+            "video_checks": snapshot_video_checks(state, rows, legacy=legacy)})
+
+    def attach_source(existing, duplicate):
+        sources = existing.setdefault("source_videos", [existing["source_video"]])
+        for url in duplicate.get("source_videos", [duplicate["source_video"]]):
+            if url not in sources:
+                sources.append(url)
 
     def add_task(task):
         identifier = task.get("dynamic_id")
-        if identifier and any(t.get("dynamic_id") == identifier for t in state["tasks"]):
+        existing = next((t for t in state["tasks"] if identifier and t.get("dynamic_id") == identifier), None)
+        if existing:
+            attach_source(existing, task)
             return
         if len(state["tasks"]) < 400:
             state["tasks"].append(task)
+        else:
+            for url in task.get("source_videos", [task["source_video"]]):
+                detail = scan_notes.setdefault(url.rsplit("/", 1)[-1], {"title": "", "notes": []})
+                detail["notes"].append(audit_note("pending", "达到本轮候选上限，部分入口未核验"))
 
     def add_source(task):
         identity = (task["kind"], task.get("uid") or task.get("cv_id"))
-        if not any((t["kind"], t.get("uid") or t.get("cv_id")) == identity for t in state["source_tasks"]):
+        existing = next((t for t in state["source_tasks"] if (t["kind"], t.get("uid") or t.get("cv_id")) == identity), None)
+        if existing:
+            attach_source(existing, task)
+        else:
             state["source_tasks"].append(task)
 
     try:
@@ -145,12 +223,13 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             if d.api_code(response) != 0 or not isinstance(response.get("data"), dict):
                 raise RuntimeError(f"视频搜索未返回有效结果（业务码 {d.api_code(response)}）")
             seen = {row["bvid"] for row in state["videos"]}
-            page = (response.get("data") or {}).get("result") or []
+            page = [row for row in response["data"].get("result") or [] if d.BV_RE.fullmatch(str(row.get("bvid") or ""))]
             if on_video_page:
-                on_video_page(str(row["bvid"]) for row in page if d.BV_RE.fullmatch(str(row.get("bvid") or "")))
+                on_video_page(({"bvid": row["bvid"], "title": video_title(row.get("title"))} for row in page),
+                              page_id=f"{capture_id}:{state['search_index']}")
             for row in page:
-                identifier = str(row.get("bvid") or "")
-                if d.BV_RE.fullmatch(identifier) and identifier not in seen and len(state["videos"]) < video_limit:
+                identifier = row["bvid"]
+                if identifier not in seen and len(state["videos"]) < video_limit:
                     state["videos"].append(row)
                     seen.add(identifier)
             state["search_index"] += 1
@@ -162,20 +241,25 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             row = state["videos"][state["scan_index"]]
             bvid = row["bvid"]
             url = f"https://www.bilibili.com/video/{bvid}"
-            emit(f"扫描视频 {state['scan_index'] + 1}/{len(state['videos'])}：{re.sub('<[^>]+>', '', str(row.get('title') or bvid))[:60]}")
+            emit(f"扫描视频 {state['scan_index'] + 1}/{len(state['videos'])}：{video_title(row.get('title'))[:60] or bvid}")
+            detail = scan_notes[bvid] = {"title": "", "notes": []}
             try:
                 response = client.read(d.VIDEO_URL, {"bvid": bvid}, referer=url, ttl=900)
                 video = response.get("data") or {}
                 if not video:
                     raise RuntimeError("视频详情不可读")
+                detail["title"] = video_title(video.get("title"))
                 owner = video.get("owner") or {}
                 texts = [str(video.get("title") or row.get("title") or ""), str(video.get("desc") or "")]
                 if video.get("aid") and owner.get("mid"):
                     try:
                         replies = client.read(d.REPLIES_URL, {"type": 1, "oid": video["aid"], "mode": 3}, referer=url, ttl=900, wbi=True)
+                        if d.api_code(replies) != 0:
+                            raise RuntimeError(f"评论接口返回业务码 {d.api_code(replies)}")
                         texts.extend(d._owner_comments(replies.get("data") or {}, str(owner["mid"])))
                     except (httpx.HTTPError, RuntimeError, ValueError) as exc:
                         state["errors"].append(f"{bvid}: 评论不可读：{str(exc)[:150]}")
+                        detail["notes"].append(audit_note("pending", "作者评论未能读取，核验资料不完整"))
                 text = "\n".join(texts)
                 identifiers = sorted(set(d.DYNAMIC_RE.findall(text)), key=int, reverse=True)
                 for identifier in identifiers[:24]:
@@ -183,16 +267,23 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                 articles = sorted(set(d.ARTICLE_RE.findall(text)), key=int, reverse=True)
                 for cv in articles[:2]:
                     add_source({"kind": "article", "cv_id": cv, "source_video": url})
-                home = bool(d._home_participation_hint(text) or
-                            d.LOTTERY_RE.search(text) and not (identifiers or articles or d.VIDEO_COMMENT_RE.search(text)))
+                lottery = bool(d.LOTTERY_RE.search(text))
+                explicit_home = d._home_participation_hint(text)
+                video_comment = lottery and bool(d.COMMENT_ENTRY_RE.search(text) or d.VIDEO_COMMENT_RE.search(text) and d.COMMENT_RE.search(text))
+                home = explicit_home or lottery and not (identifiers or articles or video_comment)
                 if home and str(owner.get("mid") or "").isdigit():
                     add_source({"kind": "author", "uid": str(owner["mid"]), "owner": owner,
                                 "source_video": url, "text": text[:4800]})
-                if d.LOTTERY_RE.search(text) and d.COMMENT_RE.search(text) and not (identifiers or articles or home):
+                elif home:
+                    detail["notes"].append(audit_note("pending", "有抽奖线索，但缺少发布者 UID，无法检索主页"))
+                if video_comment and not (identifiers or articles or explicit_home):
                     add_task({"kind": "video_comment", "source_video": url, "text": text[:4800],
                               "published": video.get("pubdate") or row.get("pubdate") or 0, "owner": owner})
+                elif not (identifiers or articles or home or detail["notes"]):
+                    detail["notes"].append(audit_note("rejected", "标题、简介和可读的作者评论里未发现抽奖线索或入口，未送模型"))
             except (httpx.HTTPError, RuntimeError, ValueError) as exc:
                 state["errors"].append(f"{bvid}: {str(exc)[:200]}")
+                detail["notes"].append(audit_note("pending", "视频详情未能读取，无法核验"))
             state["scan_index"] += 1
         emit(f"整页扫描完成：{state['scan_index']} 个视频，开始解析入口")
 
@@ -204,21 +295,31 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                     article_url = f"https://www.bilibili.com/read/cv{source['cv_id']}"
                     emit(f"解析合集专栏 cv{source['cv_id']}")
                     response = client.read(d.ARTICLE_URL, {"id": int(source["cv_id"])}, referer=article_url, ttl=600)
+                    if d.api_code(response) != 0 or not response.get("data"):
+                        raise RuntimeError("专栏内容不可读")
                     links = d.extract_opus_links_from_article(response.get("data") or {})
-                    for identifier in sorted(set(d.DYNAMIC_RE.findall("\n".join(links))), key=int, reverse=True)[:24]:
+                    identifiers = sorted(set(d.DYNAMIC_RE.findall("\n".join(links))), key=int, reverse=True)[:24]
+                    if not identifiers:
+                        source["audit"] = audit_note("rejected", "关联专栏中没有可识别的抽奖动态链接")
+                    for identifier in identifiers:
                         add_task({"kind": "dynamic", "dynamic_id": identifier, "source_video": source["source_video"],
+                                  "source_videos": source.get("source_videos", [source["source_video"]]),
                                   "source_article": article_url, "found_via": "article_link"})
                 else:
                     uid = source["uid"]
                     emit(f"作者 {uid} 主页搜索“抽奖”，取最近 {author_dynamic_limit} 条原创动态")
                     items, metadata = search_author_lotteries(client, uid, limit=author_dynamic_limit)
                     state["author_queries"][uid] = metadata
+                    if not items:
+                        source["audit"] = audit_note("rejected", "发布者主页搜索未返回相关的原创抽奖动态")
                     for item in items:
                         add_task({"kind": "dynamic", "dynamic_id": str(item["id_str"]), "item": item,
                                   "source_video": source["source_video"], "source_text": source["text"],
+                                  "source_videos": source.get("source_videos", [source["source_video"]]),
                                   "source_home": metadata["search_url"], "home_group": uid, "found_via": "publisher_home"})
             except (httpx.HTTPError, RuntimeError, ValueError) as exc:
                 state["errors"].append(f"入口解析失败：{str(exc)[:200]}")
+                source["audit"] = audit_note("pending", "关联专栏读取失败" if source["kind"] == "article" else "发布者主页检索失败")
             state["source_index"] += 1
         if state["verify_index"] == 0:
             state["tasks"] = _fair_order(state["tasks"])
@@ -240,7 +341,9 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                            "publisher": owner.get("name") or "", "publisher_uid": str(owner.get("mid") or ""),
                            "prize": fields.get("prize", ""), **d.assess_candidate(fields, now=now, published=task["published"])}
                 else:
-                    row = d.inspect_dynamic(client, identifier, now=now, item=task.get("item"))
+                    def note_skip(status, reason):
+                        task["audit"] = audit_note(status, reason)
+                    row = d.inspect_dynamic(client, identifier, now=now, item=task.get("item"), on_skip=note_skip)
                 if row:
                     row.update(source_video=task["source_video"], found_via=task.get("found_via", "video_comment"),
                         source_chain=[{"source": task["source_video"]},
@@ -252,7 +355,9 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                     state["rows"].append(row)
                     added_open += int(row["status"] == "open" and row["kind"] == "dynamic")
             except (httpx.HTTPError, RuntimeError, ValueError) as exc:
-                state["errors"].append(f"候选 {identifier}: {str(exc)[:200]}")
+                state["errors"].append(f"候选 {identifier or task['source_video']}: {str(exc)[:200]}")
+                reason = "模型请求失败或未返回有效结果" if isinstance(exc, d.DiscoveryModelError) else "核验请求失败，未取得可用判定"
+                task["audit"] = audit_note("pending", reason)
             state["verify_index"] += 1
             state["verified"] += 1
             if candidate_limit and added_open >= candidate_limit:
