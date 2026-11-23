@@ -4546,6 +4546,17 @@ html.sidebar-init-collapsed .system-btn {
 }
 
 .action-cell { min-width: 100px; white-space: nowrap; }
+.activity-share-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.activity-share-actions .btn { white-space: nowrap; }
+@media (max-width: 720px) {
+  .activities-panel .panel-head:has(.activity-share-actions) { flex-wrap: wrap; }
+  .activity-share-actions { justify-content: flex-start; }
+}
 .action-cell .btn {
   min-width: 64px;
   white-space: nowrap;

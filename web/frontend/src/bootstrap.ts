@@ -5,6 +5,7 @@
 import { state } from "./state";
 import { bindOnboardingPanel, loadAccount, loadAccountExtras, logoutAccount, requestLogoutConfirm, syncProjectState } from "./account/index";
 import { bindFilterPills, loadActivities, loadSummary } from "./activities/index";
+import { bindActivitySharing } from "./activities/share";
 import { sidebarLogoutBtn, sidebarRefreshBtn } from "./dom";
 import { bindActionButtons, startPolling } from "./jobs/index";
 import { bindTaskLogs } from "./jobs/task-logs";
@@ -26,6 +27,7 @@ export async function init() {
   bindNavigation();
   bindTaskLogs(startPolling);
   bindFilterPills();
+  bindActivitySharing();
   bindParticipateSettings();
   bindSettingsDirtyTracking();
   bindLlmApiKeyToggle();

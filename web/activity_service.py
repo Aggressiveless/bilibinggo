@@ -292,11 +292,12 @@ def _filtered_activity_rows(
     q: str | None = None,
     sort: str | None = None,
     order: str | None = None,
+    items: list[dict] | None = None,
 ) -> list[dict[str, Any]]:
-    enriched = _load_activities_payload()
+    if items is None:
+        items = [item for item in (_load_activities_payload().get("activities") or []) if isinstance(item, dict)]
     action_map = _load_participation_actions()
     participations = load_participations()
-    items = [item for item in (enriched.get("activities") or []) if isinstance(item, dict)]
 
     normalized: list[dict[str, Any]] = []
     draw_window_value = (draw_window or "").strip().lower()

@@ -38,6 +38,7 @@ from src.user_settings import (
 from src.watch_sync import MAX_WINDOW_SECONDS, OUTPUT_PATH as WATCH_OUTPUT_PATH, compute_sync_window
 from src.watch_users import add_watch_user, get_watch_users_payload, remove_watch_user, seed_from_candidates_if_empty
 from web.account_service import ack_at_unread_notice, clear_login_cookie, get_account_extras, get_account_profile
+from web.activity_share import router as activity_share_router
 from web.activity_service import (
     ACTIVITY_PAGE_SIZE,
     get_summary,
@@ -110,6 +111,7 @@ app.add_middleware(AssetCacheMiddleware)
 app.add_middleware(ApiContractMiddleware)
 register_exception_handlers(app)
 app.include_router(usage_router)
+app.include_router(activity_share_router)
 
 _JOB_REQUIRES_LOGIN = frozenset(
     {

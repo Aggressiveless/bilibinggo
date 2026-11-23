@@ -16,7 +16,7 @@ export function openAppConfirm({
   eyebrow = "",
   title = "",
   desc = "",
-  bullets = [],
+  bullets = [] as string[],
   confirmLabel = "确认",
   cancelLabel = "取消",
   secondaryLabel = "",
