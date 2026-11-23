@@ -46,8 +46,8 @@ from web.activity_service import (
 )
 from web.api_contract import API_CONTRACT_VERSION, ApiContractMiddleware, patch_openapi_schema
 from web.api_errors import AppError, ErrorCode, register_exception_handlers, require_llm_ready, require_login
-from web.auto_scheduler import auto_scheduler
 from web.job_runner import runner
+from web.task_queue import QUEUEABLE_ACTIONS, get_task_queue, install_task_queue
 from web.schemas import (
     ALLOWED_JOB_ACTIONS,
     AckAtUnreadRequest,
@@ -148,6 +148,7 @@ from web.control_routes import install_control
 install_control(app)
 from web.discovery_routes import install_discovery
 install_discovery(app)
+install_task_queue(app)
 
 
 @app.get("/api/watch-users", tags=["stable"])
@@ -271,7 +272,7 @@ def api_triple_participate_targets(
 
 
 @app.post("/api/jobs", response_model=JobStartOut, tags=["stable"])
-def api_start_job(request: JobRequest) -> dict[str, Any]:
+def api_start_job(request: JobRequest, enqueue: bool = False) -> dict[str, Any]:
     if request.action not in ALLOWED_JOB_ACTIONS:
         raise AppError(ErrorCode.UNSUPPORTED_ACTION, "暂不支持该操作")
     account = get_account_profile()
@@ -290,6 +291,10 @@ def api_start_job(request: JobRequest) -> dict[str, Any]:
         dynamic_id = str(params.get("dynamic_id") or "").strip()
         if not is_valid_dynamic_id(dynamic_id):
             raise AppError(ErrorCode.VALIDATION_ERROR, "活动 ID 无效")
+    if enqueue and request.action in QUEUEABLE_ACTIONS:
+        entry = get_task_queue().submit(request.action, params)
+        current = runner.resolve_job_status(entry["job_id"]) if entry["job_id"] else runner.get_status()
+        return {"ok": True, "job": current.to_dict(), "queue_entry": entry}
     if runner.try_start(request.action, params, source="ui") is None:
         raise AppError(ErrorCode.JOB_BUSY, "已有任务正在运行")
     return {"ok": True, "job": runner.get_status().to_dict()}
@@ -365,42 +370,17 @@ def api_diagnostics_bundle(job_id: int | None = Query(default=None)) -> dict[str
     bundle = build_diagnostics_bundle(
         job_id=job_id,
         current_job=runner.get_status().to_dict(),
-        auto_status=auto_scheduler.get_status(),
+        auto_status={},
     )
     return {"ok": True, "filename": bundle["filename"], "text": bundle["text"]}
 
 
 @app.get("/api/events", tags=["streaming"])
 def api_events():
-    """SSE：job.* + auto.* 进程级事件流（协议见方向二）。"""
+    """SSE：进程级任务事件流。"""
     from web.sse import sse_response
 
-    return sse_response(
-        job_snapshot=runner.get_status().to_dict(),
-        auto_snapshot=auto_scheduler.get_status(),
-    )
-
-
-@app.get("/api/auto/status", tags=["stable"])
-def api_auto_status() -> dict[str, Any]:
-    return auto_scheduler.get_status()
-
-
-@app.post("/api/auto/start", tags=["stable"])
-def api_auto_start() -> dict[str, Any]:
-    try:
-        return auto_scheduler.start()
-    except RuntimeError as exc:
-        text = str(exc)
-        if "已在运行" in text:
-            raise AppError(ErrorCode.AUTO_ALREADY_RUNNING, text) from exc
-        raise AppError(ErrorCode.INTERNAL, text) from exc
-
-
-@app.post("/api/auto/stop", tags=["stable"])
-def api_auto_stop() -> dict[str, Any]:
-    """只停止定时点击调度器，不会取消抽奖端正在运行的任务。"""
-    return auto_scheduler.stop(reason="用户在监视面板停止")
+    return sse_response(job_snapshot=runner.get_status().to_dict())
 
 
 def _build_settings_payload() -> dict[str, Any]:

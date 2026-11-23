@@ -6,15 +6,16 @@ import { state } from "../state";
 import { fetchJSON } from "../api/client";
 import { isLlmConfigured, requireSetup, scrollToLlmSettings, syncProjectState } from "../account/index";
 import { buildActivityFilterJobParams, loadActivities, loadSummary, renderTripleParticipateBar } from "../activities/index";
-import { ACTION_LABELS, COMMENT_OPTIONAL_PATTERNS, FORWARD_REQUIRED_ACTIONS, INTERACT_REQUIRED_ACTIONS, JOB_RESULT_AUTO_DISMISS_MS, JOB_RESULT_EXIT_MS, PARTICIPATE_ACTIVE_KEYWORDS, PARTICIPATE_DONE_KEYWORDS, PARTICIPATE_FAIL_KEYWORDS, PARTICIPATE_PENDING_KEYWORDS, PARTICIPATE_STEP_LABELS, REFRESH_ALL_DS_COUNT, REFRESH_ALL_PIPELINE, REFRESH_ALL_PIPELINE_SUBSTEPS, REFRESH_WATCH_PIPELINE, RESERVE_REQUIRED_ACTIONS, RESERVE_STEP_LABELS, SYNC_TOAST_ACTIONS, jobLog, jobMessage, jobResultActions, jobResultBanner, jobResultBody, jobResultEyebrow, jobResultHint, jobResultIcon, jobResultProgress, jobResultSummary, jobResultTitle, logDock, logDockBadge, logDockPanel, logDockToggle, progressBanner, progressChip, progressDetail, progressFill, progressFillGlow, progressLabel, progressPercent, progressPercentSuffix, progressRing, progressSteps, progressTrack, qrcodeClose, qrcodeFrame, qrcodeImg, qrcodeModal, qrcodeOverlay, qrcodeOverlayIcon, qrcodeOverlayText, qrcodeStatus, qrcodeTitle, sidebarLoginBtn } from "../dom";
+import { ACTION_LABELS, COMMENT_OPTIONAL_PATTERNS, FORWARD_REQUIRED_ACTIONS, INTERACT_REQUIRED_ACTIONS, JOB_RESULT_EXIT_MS, PARTICIPATE_ACTIVE_KEYWORDS, PARTICIPATE_DONE_KEYWORDS, PARTICIPATE_FAIL_KEYWORDS, PARTICIPATE_PENDING_KEYWORDS, PARTICIPATE_STEP_LABELS, REFRESH_ALL_DS_COUNT, REFRESH_ALL_PIPELINE, REFRESH_ALL_PIPELINE_SUBSTEPS, REFRESH_WATCH_PIPELINE, RESERVE_REQUIRED_ACTIONS, RESERVE_STEP_LABELS, jobLog, jobMessage, jobResultActions, jobResultBanner, jobResultBody, jobResultEyebrow, jobResultHint, jobResultIcon, jobResultSummary, jobResultTitle, progressBanner, progressChip, progressDetail, progressFill, progressFillGlow, progressLabel, progressPercent, progressPercentSuffix, progressRing, progressSteps, progressTrack, qrcodeClose, qrcodeFrame, qrcodeImg, qrcodeModal, qrcodeOverlay, qrcodeOverlayIcon, qrcodeOverlayText, qrcodeStatus, qrcodeTitle, sidebarLoginBtn } from "../dom";
 import { startRealtime } from "../realtime/sse";
 import { confirmRefreshAll } from "../shell/confirm";
 import { switchSection } from "../shell/nav";
 import { dismissRunningToasts, showToast } from "../shell/toast";
 import { formatJobProgressDisplay, formatProgressDetail, formatProgressTitle, formatToastDetail } from "../utils/format";
-import { clearActionButtonLoading, flashActivityRows, flashSourceRow, prefersReducedMotion, pulseWatchSyncCard, setButtonLoading, setSourceRowUpdating } from "../utils/motion";
+import { clearActionButtonLoading, flashActivityRows, flashSourceRow, pulseWatchSyncCard, setButtonLoading, setSourceRowUpdating } from "../utils/motion";
 import { escapeHtml, sanitizeUserText, truncateText } from "../utils/text";
 import { loadWatchUsers } from "../watch/index";
+import { notifyTaskQueueChanged, showTaskNotice } from "./task-logs";
 
 let qrcodeLastFocus = null;
 
@@ -140,7 +141,7 @@ export function classifyFailureText(message, action, log = "") {
     severity: "error",
     title: "执行失败",
     message: displayMessage,
-    hint: "若持续失败，可查看右下角任务日志了解详情。",
+    hint: "若持续失败，可查看侧栏的「日志」了解详情。",
     actions: [{ id: "retry", label: "重试" }],
     retryable: true,
   };
@@ -153,6 +154,12 @@ export function classifyJobFailure(job) {
 export function notifyJobStartError(error, action, params = {}) {
   const message = sanitizeUserText(error?.message || error);
   const code = String(error?.code || "");
+  if (action !== "login") {
+    const failure = classifyFailureText(message, action);
+    showTaskNotice(failure.message, failure.hint);
+    switchSection("logs");
+    return;
+  }
   if (code === "AUTH_REQUIRED" || message.includes("请先扫码登录")) {
     showToast("请先扫码登录", "info", "完成登录与 LLM 配置后才能使用项目功能");
     return;
@@ -377,77 +384,6 @@ export async function cancelLoginJob() {
   } catch (error) {
     showToast(sanitizeUserText(error.message || error), "error");
   }
-}
-
-export function syncLogDockTone(job) {
-  if (!logDock) return;
-  const jobState = job?.state || "idle";
-  let tone = "idle";
-  if (jobState === "running") tone = "running";
-  else if (jobState === "success") tone = "success";
-  else if (jobState === "error") tone = "error";
-
-  logDock.dataset.tone = tone;
-  logDock.classList.toggle("is-idle", tone === "idle");
-  logDock.classList.toggle("is-running", tone === "running");
-  logDock.classList.toggle("is-success", tone === "success");
-  logDock.classList.toggle("is-error", tone === "error");
-
-  const statusEl = document.getElementById("log-dock-status");
-  if (statusEl) {
-    const labels = { idle: "空闲", running: "运行中", success: "已完成", error: "失败" };
-    statusEl.textContent = labels[tone] || "空闲";
-    statusEl.className = `log-dock-status is-${tone}`;
-  }
-  if (logDockBadge) {
-    logDockBadge.hidden = tone !== "running";
-    logDockBadge.textContent = "运行中";
-  }
-}
-
-export function scrollJobLogToBottom({ showHint = false } = {}) {
-  const box = document.getElementById("job-log");
-  const hint = document.getElementById("log-dock-pin-hint");
-  const body = document.getElementById("log-dock-body");
-  if (!box) return;
-  box.scrollTop = box.scrollHeight;
-  body?.classList.toggle("is-pinned", Boolean(showHint));
-  if (hint) {
-    hint.hidden = !showHint;
-    if (showHint && !prefersReducedMotion()) {
-      hint.classList.remove("is-hint-pop");
-      void hint.offsetWidth;
-      hint.classList.add("is-hint-pop");
-    }
-  }
-}
-
-export function setLogDockOpen(open) {
-  state.logDockOpen = open;
-  if (!logDockPanel || !logDockToggle) return;
-  logDockPanel.classList.toggle("is-open", open);
-  logDockPanel.setAttribute("aria-hidden", String(!open));
-  logDockToggle.hidden = open;
-  logDockToggle.setAttribute("aria-expanded", String(open));
-  logDock?.classList.toggle("open", open);
-  if (open) {
-    if (!prefersReducedMotion()) {
-      logDockPanel.classList.remove("is-entering");
-      void logDockPanel.offsetWidth;
-      logDockPanel.classList.add("is-entering");
-    }
-    scrollJobLogToBottom({ showHint: logDock?.classList.contains("is-running") });
-  } else {
-    logDockPanel.classList.remove("is-entering");
-    document.getElementById("log-dock-body")?.classList.remove("is-pinned");
-    const hint = document.getElementById("log-dock-pin-hint");
-    if (hint) hint.hidden = true;
-  }
-}
-
-export function toggleLogDock(forceOpen) {
-  const next = typeof forceOpen === "boolean" ? forceOpen : !state.logDockOpen;
-  setLogDockOpen(next);
 }
 
 export function participateStepLabelsForType(lotteryType) {
@@ -711,20 +647,6 @@ export function hideParticipationResult(immediate = false) {
   }, JOB_RESULT_EXIT_MS);
 }
 
-export function scheduleParticipationResultDismiss(delayMs = JOB_RESULT_AUTO_DISMISS_MS) {
-  if (state.jobResultTimer) {
-    window.clearTimeout(state.jobResultTimer);
-  }
-  state.jobResultTimer = window.setTimeout(() => hideParticipationResult(), delayMs);
-}
-
-export function restartParticipationResultProgress() {
-  if (!jobResultProgress) return;
-  jobResultProgress.style.animation = "none";
-  void jobResultProgress.offsetWidth;
-  jobResultProgress.style.animation = "";
-}
-
 export function renderParticipationStepResults(result) {
   const actions = result?.actions || [];
   if (!actions.length) {
@@ -813,6 +735,7 @@ export function showParticipationResult(job) {
 
   jobResultBanner.className = `job-result-banner ${tone}`;
   jobResultBanner.hidden = false;
+  jobResultBanner.dataset.jobId = String(job.id);
   if (jobResultIcon) jobResultIcon.textContent = icon;
   if (jobResultEyebrow) jobResultEyebrow.textContent = isTriple ? "三连参与结果" : "参与结果";
   if (jobResultTitle) jobResultTitle.textContent = title;
@@ -847,8 +770,6 @@ export function showParticipationResult(job) {
   jobResultBanner.classList.remove("is-hiding");
   void jobResultBanner.offsetWidth;
   jobResultBanner.classList.add("is-visible");
-  restartParticipationResultProgress();
-  scheduleParticipationResultDismiss();
 }
 
 export function renderTripleParticipateProgress(job) {
@@ -1027,7 +948,7 @@ export function calcJobProgressPercent(job) {
 }
 
 export function setButtonsDisabled(disabled) {
-  document.querySelectorAll("[data-action]").forEach((button) => {
+  document.querySelectorAll('[data-action="login"]').forEach((button) => {
     button.disabled = disabled;
   });
 }
@@ -1109,13 +1030,8 @@ export function updateProgressUI(job) {
 export function updateJobUI(job) {
   jobMessage.textContent = sanitizeUserText(job.message) || "暂无任务";
   jobLog.textContent = sanitizeUserText(job.log) || "";
-  syncLogDockTone(job);
-  if (job.state === "running") {
-    toggleLogDock(true);
-    scrollJobLogToBottom({ showHint: true });
-  } else if (state.logDockOpen) {
-    scrollJobLogToBottom({ showHint: false });
-  }
+  if (document.getElementById("section-logs")?.classList.contains("active")) jobLog.scrollTop = jobLog.scrollHeight;
+  if (job.state === "running" && jobResultBanner?.dataset.jobId !== String(job.id)) hideParticipationResult(true);
   setButtonsDisabled(job.state === "running");
   updateProgressUI(job);
 }
@@ -1143,18 +1059,19 @@ export async function startJob(action, params = {}) {
       /* 继续发起新任务 */
     }
   }
-  if (action === "participate" || action === "participate_triple") {
-    hideParticipationResult(true);
-    state.smoothJobPercent = 0;
-    state.activeJobKey = "";
-  }
-  toggleLogDock(true);
-  // 错误提示由调用方 notifyJobStartError 统一处理，避免重复 toast
-  await fetchJSON("/api/jobs", {
+  const path = action === "login" ? "/api/jobs" : "/api/jobs?enqueue=true";
+  const response = await fetchJSON(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, params }),
   });
+  const entry = response.queue_entry;
+  notifyTaskQueueChanged();
+  if (entry?.state === "queued" || entry?.state === "error") {
+    showTaskNotice(entry.state === "queued" ? `已排队 · ${entry.label}` : entry.message);
+    if (entry.state === "error") switchSection("logs");
+    return false;
+  }
   if (action === "login") {
     state.qrcodeDismissed = false;
     state.lastQrcodeRefresh = 0;
@@ -1165,6 +1082,7 @@ export async function startJob(action, params = {}) {
   updateJobUI(current);
   startRealtime();
   startPolling();
+  return true;
 }
 
 export function collectFinishedDynamicIds(job) {
@@ -1190,37 +1108,16 @@ export async function handleJobCompletion(job) {
     await new Promise((resolve) => window.setTimeout(resolve, 450));
   }
 
-  if (isParticipation && (job.state === "success" || job.state === "error")) {
-    if (job.result?.skipped) {
-      if (!job.result?.from_auto) {
-        showToast(sanitizeUserText(job.message) || "当前没有可参与活动，已跳过", "info");
-      }
-    } else {
-      showParticipationResult(job);
-    }
-  } else if (job.state === "success") {
-    if (SYNC_TOAST_ACTIONS.has(job.action)) {
-      const detail = formatToastDetail(job);
-      showToast(sanitizeUserText(job.message) || "任务完成", "success", detail);
-    }
-  } else if (job.state === "cancelled") {
-    showToast(sanitizeUserText(job.message) || "任务已取消", "info");
-  } else if (job.state === "error") {
-    if (job.action === "login" && !state.qrcodeDismissed) {
-      renderQrcodeLoginState({
-        ...job,
-        result: { ...(job.result || {}), login_phase: "error" },
-        message: sanitizeUserText(job.message) || "登录失败，请重试",
-      });
-    } else {
-      const failure = classifyJobFailure(job);
-      if (failure.severity === "info") {
-        showToast(failure.message, "info", failure.hint || formatToastDetail(job));
-      } else {
-        showFailureToast(failure, job);
-      }
-    }
+  if (isParticipation && !job.result?.skipped && (job.state === "success" || job.state === "error")) {
+    showParticipationResult(job);
+  } else if (job.action === "login" && job.state === "error" && !state.qrcodeDismissed) {
+    renderQrcodeLoginState({
+      ...job,
+      result: { ...(job.result || {}), login_phase: "error" },
+      message: sanitizeUserText(job.message) || "登录失败，请重试",
+    });
   }
+  notifyTaskQueueChanged();
 
   const finishedDynamicIds = collectFinishedDynamicIds(job);
   try {
@@ -1276,7 +1173,11 @@ export function bindActionButtons() {
             return;
           }
         }
-        await startJob(action, params);
+        if (!(await startJob(action, params))) {
+          setButtonLoading(button, false);
+          if (action === "refresh_source") setSourceRowUpdating(params.source_id, false);
+          if (action === "participate_triple") renderTripleParticipateBar(state.tripleTargets);
+        }
       } catch (error) {
         notifyJobStartError(error, action, params);
         setButtonLoading(button, false);

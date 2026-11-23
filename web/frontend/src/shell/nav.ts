@@ -2,8 +2,9 @@
 /* eslint-disable */
 /** Migrated from web/static/app.js — logic preserved. */
 
-import { logDockToggle, qrcodeModal } from "../dom";
-import { hideQrcodeModal, toggleLogDock, trapQrcodeFocus } from "../jobs/index";
+import { qrcodeModal } from "../dom";
+import { hideQrcodeModal, trapQrcodeFocus } from "../jobs/index";
+import { notifyTaskQueueChanged } from "../jobs/task-logs";
 import { playActivitiesEnter, playOverviewEnter, playSourcesEnter, prefersReducedMotion } from "../utils/motion";
 import { loadWatchUsers } from "../watch/index";
 
@@ -42,6 +43,7 @@ export function activateSection(sectionId) {
   if (sectionId === "sources") {
     loadWatchUsers().catch(() => {});
   }
+  if (sectionId === "logs") notifyTaskQueueChanged();
 }
 
 export function switchSection(sectionId) {
@@ -81,8 +83,6 @@ export function bindNavigation() {
   document.getElementById("sidebar-toggle")?.addEventListener("click", () => {
     document.getElementById("sidebar")?.classList.toggle("open");
   });
-  logDockToggle?.addEventListener("click", () => toggleLogDock(true));
-  document.getElementById("log-dock-collapse")?.addEventListener("click", () => toggleLogDock(false));
   document.getElementById("qrcode-close")?.addEventListener("click", () => hideQrcodeModal(true));
   document.getElementById("qrcode-backdrop")?.addEventListener("click", () => hideQrcodeModal(true));
   document.addEventListener("keydown", (event) => {

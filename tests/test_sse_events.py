@@ -48,13 +48,13 @@ def test_api_events_content_type() -> None:
     client = TestClient(app)
 
     def finite_frames(**kwargs):
+        assert kwargs["auto_snapshot"] is None
         yield format_sse("job.snapshot", {"id": None, "state": "idle"}, event_id=1)
         return
 
     with patch("web.app.runner.get_status", return_value=JobStatus()), patch(
-        "web.app.auto_scheduler.get_status",
-        return_value={"state": "idle", "logs": []},
-    ), patch("web.sse.iter_sse_frames", side_effect=finite_frames):
+        "web.sse.iter_sse_frames", side_effect=finite_frames,
+    ):
         response = client.get("/api/events")
         assert response.status_code == 200
         assert "text/event-stream" in response.headers.get("content-type", "")

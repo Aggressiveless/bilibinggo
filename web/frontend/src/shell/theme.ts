@@ -2,9 +2,8 @@
 /* eslint-disable */
 /** Migrated from web/static/app.js — logic preserved. */
 
-import { state } from "../state";
-import { JOB_RESULT_HOVER_DISMISS_MS, jobResultBanner, jobResultClose, jobResultProgress } from "../dom";
-import { hideParticipationResult, scheduleParticipationResultDismiss } from "../jobs/index";
+import { jobResultClose } from "../dom";
+import { hideParticipationResult } from "../jobs/index";
 import { prefersReducedMotion } from "../utils/motion";
 
 export function initSystemPreferences() {
@@ -30,19 +29,6 @@ export function initSystemPreferences() {
     sidebarMobileMq.addListener(syncSidebarViewport);
   }
   jobResultClose?.addEventListener("click", () => hideParticipationResult());
-  jobResultBanner?.addEventListener("mouseenter", () => {
-    if (jobResultBanner.hidden || jobResultBanner.classList.contains("is-hiding")) return;
-    if (state.jobResultTimer) {
-      window.clearTimeout(state.jobResultTimer);
-      state.jobResultTimer = null;
-    }
-    if (jobResultProgress) jobResultProgress.style.animationPlayState = "paused";
-  });
-  jobResultBanner?.addEventListener("mouseleave", () => {
-    if (jobResultBanner.hidden || jobResultBanner.classList.contains("is-hiding")) return;
-    if (jobResultProgress) jobResultProgress.style.animationPlayState = "running";
-    scheduleParticipationResultDismiss(JOB_RESULT_HOVER_DISMISS_MS);
-  });
 }
 
 export const SIDEBAR_ANIM_MS = 400;

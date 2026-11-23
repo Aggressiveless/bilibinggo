@@ -857,12 +857,14 @@ def run_action(
                 },
             }
 
+        serial = bool(params.get("_queued_serial"))
+        execution_order = "依次" if serial else "并行"
         logger.info("三连参与开始：%s", ", ".join(target_titles))
         triple_target_items = build_triple_target_preview(targets)["items"]
         progress(
             step=0,
             total=total_steps,
-            message=f"准备并行三连参与 {len(targets)} 个活动…",
+            message=f"准备{execution_order}参与 {len(targets)} 个活动…",
             log_append="目标活动：" + "、".join(target_titles),
             result_patch={"targets": triple_target_items},
         )
@@ -979,35 +981,52 @@ def run_action(
 
         results: list[dict[str, Any]] = []
         _emit_triple_progress()
-        with ThreadPoolExecutor(max_workers=PARTICIPATE_TRIPLE_WORKERS) as executor:
-            # 每个 future 各自 copy_context：同一 Context 不能被多线程并发 enter
-            future_to_id = {
-                executor.submit(
-                    contextvars.copy_context().run,
-                    _participate_triple_target,
-                    target,
-                ): str(target.get("dynamic_id") or "")
-                for target in targets
-            }
-            try:
-                for future in as_completed(future_to_id):
-                    dynamic_id = future_to_id[future]
+        if serial:
+            for target in targets:
+                dynamic_id = str(target.get("dynamic_id") or "")
+                try:
+                    results.append(_participate_triple_target(target))
+                except Exception as exc:
+                    task_states[dynamic_id] = f"失败：{exc}"
+                    _mark_other_tasks_stopped(dynamic_id, reason="已停止（其他活动失败）")
+                    _emit_triple_progress(log_append=f"{dynamic_id}：{exc}")
+                    raise
+                progress(
+                    step=_overall_progress_step(),
+                    total=total_steps,
+                    message=_progress_snapshot(),
+                    result_patch={"items": [item["payload"] for item in results], "joined": len(results)},
+                )
+        else:
+            with ThreadPoolExecutor(max_workers=PARTICIPATE_TRIPLE_WORKERS) as executor:
+                # 每个 future 各自 copy_context：同一 Context 不能被多线程并发 enter
+                future_to_id = {
+                    executor.submit(
+                        contextvars.copy_context().run,
+                        _participate_triple_target,
+                        target,
+                    ): str(target.get("dynamic_id") or "")
+                    for target in targets
+                }
+                try:
+                    for future in as_completed(future_to_id):
+                        dynamic_id = future_to_id[future]
+                        if cancel_event and cancel_event.is_set():
+                            raise ValueError("任务已取消")
+                        try:
+                            results.append(future.result())
+                        except Exception as exc:
+                            with progress_lock:
+                                task_states[dynamic_id] = f"失败：{exc}"
+                            _mark_other_tasks_stopped(dynamic_id, reason="已停止（其他活动失败）")
+                            _emit_triple_progress(log_append=f"{dynamic_id}：失败")
+                            for pending in future_to_id:
+                                pending.cancel()
+                            raise
+                finally:
                     if cancel_event and cancel_event.is_set():
-                        raise ValueError("任务已取消")
-                    try:
-                        results.append(future.result())
-                    except Exception as exc:
-                        with progress_lock:
-                            task_states[dynamic_id] = f"失败：{exc}"
-                        _mark_other_tasks_stopped(dynamic_id, reason="已停止（其他活动失败）")
-                        _emit_triple_progress(log_append=f"{dynamic_id}：失败")
-                        for pending in future_to_id:
-                            pending.cancel()
-                        raise
-            finally:
-                if cancel_event and cancel_event.is_set():
-                    _mark_other_tasks_stopped("", reason="已取消")
-                    _emit_triple_progress()
+                        _mark_other_tasks_stopped("", reason="已取消")
+                        _emit_triple_progress()
 
         refresh_local_activity_statuses()
         results.sort(key=lambda item: target_ids.index(item["dynamic_id"]))

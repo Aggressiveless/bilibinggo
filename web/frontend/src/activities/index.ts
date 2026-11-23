@@ -241,7 +241,7 @@ export function renderTripleParticipateBar(data) {
   }
 
   if (!setupOk) {
-    if (descEl) descEl.textContent = "完成登录与 LLM 配置后，可一键并行参与最多 3 个活动";
+    if (descEl) descEl.textContent = "完成登录与 LLM 配置后，可依次参与最多 3 个活动";
     targetsEl.innerHTML = `<span class="triple-participate-empty">需先完成登录与 LLM 配置</span>`;
     btn.disabled = true;
     labelEl.textContent = "三连参与";
@@ -249,9 +249,9 @@ export function renderTripleParticipateBar(data) {
   }
 
   if (count <= 0) {
-    if (descEl) descEl.textContent = "当前筛选列表下没有可参与的未参加活动";
+    if (descEl) descEl.textContent = jobRunning ? "可排队，执行时按当前筛选条件重新检查活动" : "当前筛选列表下没有可参与的未参加活动";
     targetsEl.innerHTML = `<span class="triple-participate-empty">暂无可参与目标</span>`;
-    btn.disabled = true;
+    btn.disabled = !jobRunning;
     labelEl.textContent = "三连参与";
     return;
   }
@@ -265,8 +265,8 @@ export function renderTripleParticipateBar(data) {
         : "";
     descEl.textContent =
       count === 1
-        ? `将并行参与当前列表最前面的 1 个未参加活动${sortHint}`
-        : `将并行参与当前列表最前面的 ${Math.min(count, 3)} 个未参加活动${sortHint}`;
+        ? `执行时参与当前筛选下最前面的 1 个未参加活动${sortHint}`
+        : `执行时依次参与当前筛选下最前面的 ${Math.min(count, 3)} 个未参加活动${sortHint}`;
   }
   targetsEl.innerHTML = items
     .map(
@@ -278,8 +278,8 @@ export function renderTripleParticipateBar(data) {
       </span>`
     )
     .join("");
-  btn.disabled = jobRunning;
-  labelEl.textContent = count >= 3 ? "三连参与 (3)" : `三连参与 (${count})`;
+  btn.disabled = false;
+  labelEl.textContent = `${jobRunning ? "排队参与" : "三连参与"} (${Math.min(count, 3)})`;
 }
 
 export function buildActivityFilterJobParams() {

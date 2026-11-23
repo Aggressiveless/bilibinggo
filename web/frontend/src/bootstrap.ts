@@ -5,9 +5,9 @@
 import { state } from "./state";
 import { bindOnboardingPanel, loadAccount, loadAccountExtras, logoutAccount, requestLogoutConfirm, syncProjectState } from "./account/index";
 import { bindFilterPills, loadActivities, loadSummary } from "./activities/index";
-import { bindAutoDock, fetchAutoStatus, setAutoDockOpen } from "./auto/index";
 import { sidebarLogoutBtn, sidebarRefreshBtn } from "./dom";
-import { bindActionButtons, setLogDockOpen, startPolling } from "./jobs/index";
+import { bindActionButtons, startPolling } from "./jobs/index";
+import { bindTaskLogs } from "./jobs/task-logs";
 import { startRealtime } from "./realtime/sse";
 import { bindLlmApiKeyToggle, bindParticipateSettings, bindSettingsDirtyTracking, loadSettings, refreshLlmSettings, resetParticipateText, saveLlmSettings, saveParticipateText, testLlmSettings } from "./settings/index";
 import { bindNavigation } from "./shell/nav";
@@ -22,10 +22,8 @@ import { bindDiscovery } from "./discovery/index";
 
 export async function init() {
   initSystemPreferences();
-  setLogDockOpen(false);
-  setAutoDockOpen(false);
   bindNavigation();
-  bindAutoDock();
+  bindTaskLogs(startPolling);
   bindFilterPills();
   bindParticipateSettings();
   bindSettingsDirtyTracking();
@@ -41,7 +39,6 @@ export async function init() {
   try {
     const job = await loadSummary();
     if (job) state.currentJob = job;
-    await fetchAutoStatus().catch(() => {});
     loadWatchUsers().catch(() => {});
     await loadActivities();
     startRealtime();

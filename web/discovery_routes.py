@@ -31,6 +31,14 @@ class DiscoveryStartRequest(BaseModel):
         return words
 
 
+def discovery_job_params(request: DiscoveryStartRequest):
+    if request.mode == "comprehensive_page" and len(request.keywords) != 1:
+        raise AppError(ErrorCode.VALIDATION_ERROR, "综合排序每轮检索一个关键词")
+    return {"keywords": request.keywords, "mode": request.mode, "video_limit": 36,
+            "request_budget": None, "candidate_limit": 0, "resume": True, "replay_completed": False,
+            "collect_followers": True}
+
+
 class DiscoveryStopRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: int = Field(ge=1)
@@ -144,15 +152,22 @@ def install_discovery(app):
         return coin_balance(get_control_service().store, refresh_after_coin=request.refresh_after_coin)
 
     @router.post("/start")
-    def start(request: DiscoveryStartRequest):
-        if request.mode == "comprehensive_page" and len(request.keywords) != 1:
-            raise AppError(ErrorCode.VALIDATION_ERROR, "综合排序每轮检索一个关键词")
+    def start(request: DiscoveryStartRequest, enqueue: bool = False):
+        params = discovery_job_params(request)
         service = get_control_service()
+        if enqueue:
+            from src.llm_settings import is_llm_ready
+            from web.task_queue import get_task_queue
+
+            if not service.account()["credentials_present"]:
+                raise AppError(ErrorCode.AUTH_REQUIRED, "请先扫码登录")
+            if not is_llm_ready():
+                raise AppError(ErrorCode.LLM_NOT_READY, "请先完成 LLM 配置与连接测试")
+            entry = get_task_queue().submit("control_discover", params)
+            job = service.job(entry["control_job_id"]) if entry["control_job_id"] else None
+            return {**discovery_status(service, job), "queue_entry": entry}
         try:
             with service.lock:
-                params = {"keywords": request.keywords, "mode": request.mode, "video_limit": 36,
-                          "request_budget": None, "candidate_limit": 0, "resume": True, "replay_completed": False,
-                          "collect_followers": True}
                 job = service.start("control_discover", params, require_llm=True, source="ui")
                 return discovery_status(service, job)
         except ControlError as exc:

@@ -21,65 +21,6 @@
   </script>
 </head>
 <body>
-  <div class="progress-banner" id="progress-banner" hidden>
-    <div class="progress-banner-shell">
-      <div class="progress-banner-glow" aria-hidden="true"></div>
-      <div class="progress-banner-inner">
-        <div class="progress-banner-head">
-          <div class="progress-banner-meta">
-            <div class="progress-ring" aria-hidden="true">
-              <svg class="progress-ring-svg" viewBox="0 0 36 36">
-                <circle class="progress-ring-track" cx="18" cy="18" r="15.5" />
-                <circle class="progress-ring-fill" id="progress-ring" cx="18" cy="18" r="15.5" />
-              </svg>
-            </div>
-            <div class="progress-banner-copy">
-              <span class="progress-chip" id="progress-chip">运行中</span>
-              <h2 class="progress-title" id="progress-label">任务运行中…</h2>
-            </div>
-          </div>
-          <div class="progress-percent-wrap">
-            <span class="progress-percent" id="progress-percent">0</span>
-            <span class="progress-percent-suffix">%</span>
-          </div>
-        </div>
-        <div class="progress-track-wrap">
-          <div
-            class="progress-track"
-            id="progress-track"
-            role="progressbar"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow="0"
-            aria-labelledby="progress-label"
-          >
-            <div class="progress-fill" id="progress-fill"></div>
-            <div class="progress-fill-glow" id="progress-fill-glow" aria-hidden="true"></div>
-            <div class="progress-fill-shine" id="progress-fill-shine" aria-hidden="true"></div>
-          </div>
-        </div>
-        <p class="progress-detail" id="progress-detail"></p>
-        <div class="progress-pipeline" id="progress-steps" hidden></div>
-      </div>
-    </div>
-  </div>
-  <div class="job-result-banner" id="job-result-banner" hidden>
-    <div class="job-result-shell">
-      <div class="job-result-head">
-        <div class="job-result-icon" id="job-result-icon" aria-hidden="true">✓</div>
-        <div class="job-result-copy">
-          <p class="job-result-eyebrow" id="job-result-eyebrow">参与结果</p>
-          <h2 class="job-result-title" id="job-result-title">任务完成</h2>
-          <p class="job-result-summary" id="job-result-summary"></p>
-          <p class="job-result-hint" id="job-result-hint" hidden></p>
-        </div>
-        <button type="button" class="job-result-close" id="job-result-close" aria-label="关闭">×</button>
-      </div>
-      <div class="job-result-actions" id="job-result-actions" hidden></div>
-      <div class="job-result-body" id="job-result-body"></div>
-      <div class="job-result-progress" id="job-result-progress" aria-hidden="true"></div>
-    </div>
-  </div>
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
   <div class="qrcode-modal" id="qrcode-modal" hidden>
@@ -114,88 +55,6 @@
     </div>
   </div>
 
-  <div class="auto-dock" id="auto-dock">
-    <button type="button" class="auto-dock-toggle" id="auto-dock-toggle" aria-expanded="false">
-      <span class="auto-dock-icon" aria-hidden="true">⏱</span>
-      <span class="auto-dock-label">定时点击</span>
-      <span class="auto-dock-toggle-meta" id="auto-dock-toggle-meta" hidden>—</span>
-      <span class="auto-dock-badge" id="auto-dock-badge" hidden>运行中</span>
-    </button>
-    <div class="auto-dock-panel" id="auto-dock-panel" aria-hidden="true">
-      <div class="auto-dock-head">
-        <div class="auto-dock-head-copy">
-          <p class="auto-dock-eyebrow">Auto Scheduler</p>
-          <p class="auto-dock-title">定时点击监视器</p>
-          <p class="auto-dock-message" id="auto-dock-status">尚未启动</p>
-        </div>
-        <button type="button" class="btn btn-secondary btn-compact btn-pill auto-dock-collapse" id="auto-dock-collapse" aria-label="收起">收起</button>
-      </div>
-      <div class="auto-dock-body">
-        <div class="auto-dock-hero">
-          <div class="auto-dock-hero-top">
-            <span class="auto-dock-meta-label">距下一刻度</span>
-            <span class="auto-dock-phase-chip" id="auto-dock-phase">等待中</span>
-          </div>
-          <strong class="auto-dock-countdown" id="auto-dock-countdown">—</strong>
-          <p class="auto-dock-hero-hint" id="auto-dock-hint">—</p>
-        </div>
-        <div class="auto-dock-summary">
-          <div class="auto-dock-summary-row">
-            <span class="auto-dock-meta-label">调度</span>
-            <strong class="auto-dock-job-value" id="auto-dock-scheduler">—</strong>
-          </div>
-          <div class="auto-dock-summary-divider" aria-hidden="true"></div>
-          <div class="auto-dock-summary-row">
-            <span class="auto-dock-meta-label">抽奖任务</span>
-            <strong class="auto-dock-job-value" id="auto-dock-job">—</strong>
-          </div>
-        </div>
-        <div class="auto-dock-pipeline-block">
-          <div class="auto-dock-pipeline-head">
-            <span class="auto-dock-meta-label">刷新批次</span>
-            <span class="auto-dock-pipeline-note">整点串行执行</span>
-          </div>
-          <div class="auto-dock-pipeline" id="auto-dock-pipeline"></div>
-        </div>
-        <div class="auto-dock-actions">
-          <button type="button" class="btn btn-primary btn-pill auto-dock-action-btn" id="auto-dock-start">启动调度</button>
-          <button type="button" class="btn btn-primary btn-pill auto-dock-action-btn" id="auto-dock-stop" hidden>停止调度</button>
-        </div>
-        <div class="auto-dock-fatal" id="auto-dock-fatal" hidden>
-          <p class="auto-dock-fatal-title">已停机</p>
-          <p class="auto-dock-fatal-text" id="auto-dock-fatal-text"></p>
-        </div>
-        <p class="auto-dock-safety">仅点击四个按钮 · 撞车即停 · 不取消抽奖任务</p>
-      </div>
-    </div>
-  </div>
-
-  <div class="log-dock is-idle" id="log-dock" data-tone="idle">
-    <button type="button" class="log-dock-toggle" id="log-dock-toggle" aria-expanded="false">
-      <span class="log-dock-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>
-      </span>
-      <span class="log-dock-label">任务日志</span>
-      <span class="log-dock-badge" id="log-dock-badge" hidden>运行中</span>
-    </button>
-    <div class="log-dock-panel" id="log-dock-panel" aria-hidden="true">
-      <div class="log-dock-head">
-        <div class="log-dock-head-copy">
-          <div class="log-dock-title-row">
-            <p class="log-dock-title">任务日志</p>
-            <span class="log-dock-status is-idle" id="log-dock-status">空闲</span>
-          </div>
-          <p class="log-dock-message" id="job-message">暂无任务</p>
-        </div>
-        <button type="button" class="btn btn-ghost btn-compact btn-pill log-dock-collapse" id="log-dock-collapse" aria-label="收起">收起</button>
-      </div>
-      <div class="log-dock-body" id="log-dock-body">
-        <pre class="log-box" id="job-log"></pre>
-        <span class="log-dock-pin-hint" id="log-dock-pin-hint" hidden>已跟随最新日志</span>
-      </div>
-    </div>
-  </div>
-
   <div class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-inner">
@@ -225,6 +84,13 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l2.2 6.8H21l-5.5 4 2.1 6.7L12 16.5 6.4 20.5l2.1-6.7L3 9.8h6.8L12 3z"/></svg>
           </span>
           <span class="nav-label sidebar-fade">活动</span>
+        </button>
+        <button type="button" class="nav-item" data-section="logs" title="日志" aria-label="日志">
+          <span class="nav-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+          </span>
+          <span class="nav-label sidebar-fade">日志</span>
+          <span id="task-nav-count" class="task-nav-count" hidden></span>
         </button>
       </nav>
 
@@ -675,7 +541,7 @@
               <div class="triple-participate-lead">
                 <p class="triple-participate-eyebrow">快捷操作</p>
                 <h3 class="triple-participate-title">三连参与</h3>
-                <p class="triple-participate-desc" id="triple-participate-desc">并行参与当前列表最前面的 3 个未参加活动（预约抽奖：关注 + 预约，互动/转发走对应步骤）</p>
+                <p class="triple-participate-desc" id="triple-participate-desc">依次参与当前列表最前面的 3 个未参加活动（预约抽奖：关注 + 预约，互动/转发走对应步骤）</p>
               </div>
               <div class="triple-participate-targets" id="triple-participate-targets" aria-live="polite"></div>
               <button
@@ -733,6 +599,100 @@
               </table>
             </div>
             <div class="pagination" id="pagination"></div>
+          </div>
+        </section>
+        <section class="view-section" id="section-logs" data-title="任务日志" data-subtitle="查看执行顺序、任务进度和结果。">
+          <div class="task-layout">
+            <div class="task-left">
+              <article class="panel task-panel">
+                <div class="task-panel-heading">
+                  <div><h2>任务队列</h2><p id="task-queue-summary" aria-live="polite">正在读取队列…</p></div>
+                  <button type="button" id="task-queue-resume" class="btn btn-primary btn-compact" hidden>继续队列</button>
+                </div>
+                <ol id="task-queue-list" class="task-list"></ol>
+                <p class="inline-feedback" id="task-queue-feedback" role="status" hidden></p>
+              </article>
+              <article class="panel task-panel">
+                <div class="task-panel-heading"><h2>最近任务</h2></div>
+                <ul id="task-history-list" class="task-list"></ul>
+              </article>
+            </div>
+            <aside class="panel task-panel task-log-sidebar" aria-label="任务日志明细">
+              <div class="task-panel-heading">
+                <h2 id="task-log-heading">当前任务</h2>
+                <button type="button" id="task-live-log" class="btn btn-secondary btn-compact" hidden>回到当前任务</button>
+              </div>
+              <div id="task-notice" class="task-notice" role="status" hidden>
+                <p id="task-notice-message"></p>
+                <p id="task-notice-detail"></p>
+              </div>
+              <div id="task-log-live">
+                <p id="job-message" class="task-job-message">暂无任务</p>
+              <div class="progress-banner" id="progress-banner" hidden>
+                <div class="progress-banner-shell">
+                  <div class="progress-banner-glow" aria-hidden="true"></div>
+                  <div class="progress-banner-inner">
+                    <div class="progress-banner-head">
+                      <div class="progress-banner-meta">
+                        <div class="progress-ring" aria-hidden="true">
+                          <svg class="progress-ring-svg" viewBox="0 0 36 36">
+                            <circle class="progress-ring-track" cx="18" cy="18" r="15.5" />
+                            <circle class="progress-ring-fill" id="progress-ring" cx="18" cy="18" r="15.5" />
+                          </svg>
+                        </div>
+                        <div class="progress-banner-copy">
+                          <span class="progress-chip" id="progress-chip">运行中</span>
+                          <h2 class="progress-title" id="progress-label">任务运行中…</h2>
+                        </div>
+                      </div>
+                      <div class="progress-percent-wrap">
+                        <span class="progress-percent" id="progress-percent">0</span>
+                        <span class="progress-percent-suffix">%</span>
+                      </div>
+                    </div>
+                    <div class="progress-track-wrap">
+                      <div
+                        class="progress-track"
+                        id="progress-track"
+                        role="progressbar"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                        aria-labelledby="progress-label"
+                      >
+                        <div class="progress-fill" id="progress-fill"></div>
+                        <div class="progress-fill-glow" id="progress-fill-glow" aria-hidden="true"></div>
+                        <div class="progress-fill-shine" id="progress-fill-shine" aria-hidden="true"></div>
+                      </div>
+                    </div>
+                    <p class="progress-detail" id="progress-detail"></p>
+                    <div class="progress-pipeline" id="progress-steps" hidden></div>
+                  </div>
+                </div>
+              </div>
+              <div class="job-result-banner" id="job-result-banner" hidden>
+                <div class="job-result-shell">
+                  <div class="job-result-head">
+                    <div class="job-result-icon" id="job-result-icon" aria-hidden="true">✓</div>
+                    <div class="job-result-copy">
+                      <p class="job-result-eyebrow" id="job-result-eyebrow">参与结果</p>
+                      <h2 class="job-result-title" id="job-result-title">任务完成</h2>
+                      <p class="job-result-summary" id="job-result-summary"></p>
+                      <p class="job-result-hint" id="job-result-hint" hidden></p>
+                    </div>
+                    <button type="button" class="job-result-close" id="job-result-close" aria-label="关闭">×</button>
+                  </div>
+                  <div class="job-result-actions" id="job-result-actions" hidden></div>
+                  <div class="job-result-body" id="job-result-body"></div>
+                  </div>
+              </div>
+                <pre class="log-box task-log-text" id="job-log"></pre>
+              </div>
+              <div id="task-log-history" hidden>
+                <p id="task-history-message" class="task-job-message"></p>
+                <pre class="log-box task-log-text" id="task-history-log"></pre>
+              </div>
+            </aside>
           </div>
         </section>
       </main>

@@ -153,10 +153,9 @@ def test_job_not_cancellable_error_code() -> None:
     _assert_error_shape(resp, code="JOB_NOT_CANCELLABLE", status=409)
 
 
-def test_auto_already_running_error_code() -> None:
-    with patch("web.app.auto_scheduler.start", side_effect=RuntimeError("调度器已在运行")):
-        resp = client.post("/api/auto/start")
-    _assert_error_shape(resp, code="AUTO_ALREADY_RUNNING", status=409)
+def test_retired_auto_endpoint() -> None:
+    resp = client.post("/api/auto/start")
+    assert resp.status_code == 404
 
 
 def test_qrcode_not_found_error_code() -> None:

@@ -475,10 +475,9 @@ class ControlService:
         return {"job_id": job_id, "participation_outcome": report["participation_outcome"], "actions": actions}
 
     def automation(self, name, args):
-        from web.auto_scheduler import auto_scheduler
         current = self.store.get("workflow", "current") or {"revision": "initial", "workflow": {}, "running": False, "reason": "not_configured"}
         if name == "automation_status":
-            return {**current, "legacy_scheduler": auto_scheduler.get_status(), "active_job_id": next((v["job_id"] for v in self.store.list_jobs(state="running")), None)}
+            return {**current, "active_job_id": next((v["job_id"] for v in self.store.list_jobs(state="running")), None)}
         if name == "automation_configure":
             if current.get("running"):
                 raise ControlError("JOB_BUSY", "先停止调度再修改配置")
@@ -490,7 +489,6 @@ class ControlService:
             self.store.put("workflow", "current", value)
             return value
         if name == "automation_stop":
-            auto_scheduler.stop(reason="MCP停止")
             current.update(running=False, reason="user_stopped")
             self.store.put("workflow", "current", current)
             return {**current, "active_job_id": next((v["job_id"] for v in self.store.list_jobs(state="running")), None)}
@@ -499,8 +497,6 @@ class ControlService:
             raise ControlError("VALIDATION_ERROR", "请先配置工作流")
         if current.get("running"):
             return current
-        if auto_scheduler.get_status().get("state") == "running":
-            raise ControlError("JOB_BUSY", "旧版定时调度正在运行")
         current.update(running=True, reason="started", boot_id=BOOT_ID)
         self.store.put("workflow", "current", current)
         threading.Thread(target=self.workflow_loop, daemon=True, name="control-workflow").start()

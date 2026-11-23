@@ -3,8 +3,8 @@
 /** Migrated from web/static/app.js — logic preserved. */
 
 import { state } from "../state";
-import { ensureAutoCountdown, ensureAutoPolling, mergeAutoLogs, renderAutoDock } from "../auto/index";
 import { appendJobLogChunk, applyRunningJobView, finishJobOnce, mergeJobProgress, startPolling, stopJobPolling, updateJobUI } from "../jobs/index";
+import { notifyTaskQueueChanged } from "../jobs/task-logs";
 
 export const SSE_WATCHDOG_MS = 45000;
 
@@ -59,9 +59,6 @@ export function fallbackToPolling(reason) {
   }
   const job = state.currentJob;
   if (job?.state === "running") startPolling();
-  if (state.autoDockOpen || state.autoScheduler?.state === "running") {
-    ensureAutoPolling();
-  }
 }
 
 export function handleSseMessage(eventName, payload) {
@@ -83,6 +80,7 @@ export function handleSseMessage(eventName, payload) {
       job.finished_at = null;
       job.message = payload.message || "任务已启动";
       state.lastFinishedJobKey = "";
+      notifyTaskQueueChanged();
     }
     if (job.state === "running") {
       applyRunningJobView(job);
@@ -94,16 +92,19 @@ export function handleSseMessage(eventName, payload) {
   }
 
   if (eventName === "job.progress") {
+    if (payload.id && state.currentJob?.id !== payload.id) return;
     applyRunningJobView(mergeJobProgress(payload));
     return;
   }
 
   if (eventName === "job.log") {
-    if (payload?.chunk) appendJobLogChunk(String(payload.chunk));
+    if (payload?.chunk && (!payload.id || state.currentJob?.id === payload.id)) appendJobLogChunk(String(payload.chunk));
     return;
   }
 
   if (eventName === "job.terminal") {
+    notifyTaskQueueChanged();
+    if (state.currentJob?.id > payload.id) return;
     const job = {
       ...(state.currentJob || {}),
       ...payload,
@@ -114,25 +115,6 @@ export function handleSseMessage(eventName, payload) {
     return;
   }
 
-  if (eventName === "auto.snapshot") {
-    if (Array.isArray(payload.logs)) {
-      state.autoLogs = mergeAutoLogs(state.autoLogs, payload.logs);
-    }
-    renderAutoDock({ ...payload, logs: state.autoLogs });
-    return;
-  }
-
-  if (eventName === "auto.log") {
-    const row = {
-      ts: payload.log_ts || "",
-      level: payload.level || "info",
-      message: payload.message || "",
-    };
-    state.autoLogs = mergeAutoLogs(state.autoLogs, [row]);
-    if (state.autoScheduler) {
-      renderAutoDock({ ...state.autoScheduler, logs: state.autoLogs });
-    }
-  }
 }
 
 export function startRealtime() {
@@ -154,12 +136,7 @@ export function startRealtime() {
           const payload = JSON.parse(ev.data || "{}");
           state.sseHealthy = true;
           handleSseMessage(name, payload);
-          // SSE 恢复后停掉 Job REST 轮询；Auto 倒计时保留
           if (state.polling) stopJobPolling();
-          if (state.autoPollTimer) {
-            window.clearInterval(state.autoPollTimer);
-            state.autoPollTimer = null;
-          }
         } catch (error) {
           console.error("SSE parse failed", name, error);
         }
@@ -172,20 +149,12 @@ export function startRealtime() {
       "job.progress",
       "job.log",
       "job.terminal",
-      "auto.snapshot",
-      "auto.log",
     ].forEach(bind);
     es.onopen = () => {
       state.sseHealthy = true;
       markSseActive();
       startSseWatchdog();
       stopJobPolling();
-      // 保留倒计时，仅停 REST 轮询
-      if (state.autoPollTimer) {
-        window.clearInterval(state.autoPollTimer);
-        state.autoPollTimer = null;
-      }
-      ensureAutoCountdown();
     };
     es.onerror = () => {
       if (state.sseHealthy) {
@@ -196,9 +165,6 @@ export function startRealtime() {
       closeEventSource();
       const job = state.currentJob;
       if (job?.state === "running") startPolling();
-      if (state.autoDockOpen || state.autoScheduler?.state === "running") {
-        ensureAutoPolling();
-      }
       if (!state.sseReconnectTimer) {
         state.sseReconnectTimer = window.setTimeout(() => {
           state.sseReconnectTimer = null;

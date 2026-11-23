@@ -2,6 +2,7 @@ import { fetchJSON } from "../api/client";
 import { requireSetup } from "../account/index";
 import { loadActivities, loadSummary } from "../activities/index";
 import { notifyJobStartError, startPolling } from "../jobs/index";
+import { notifyTaskQueueChanged, showTaskNotice } from "../jobs/task-logs";
 import { showToast } from "../shell/toast";
 
 interface DiscoveryJob {
@@ -67,6 +68,7 @@ interface VideoRecord {
 
 interface DiscoveryStatus {
   job: DiscoveryJob | null;
+  queue_entry?: { state: string; label: string; message: string };
   queue_job?: DiscoveryJob | null;
   queue?: { total: number; imported: number; existing: number; expired: number; skipped: number; remaining: number; message: string };
   keywords: string[];
@@ -321,9 +323,15 @@ export function bindDiscovery() {
     revision += 1;
     render();
     try {
-      apply(await fetchJSON<DiscoveryStatus>(path, {
+      const status = await fetchJSON<DiscoveryStatus>(path, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }));
+      });
+      apply(status);
+      notifyTaskQueueChanged();
+      const entry = status.queue_entry;
+      if (entry?.state === "queued" || entry?.state === "error") {
+        showTaskNotice(entry.state === "queued" ? `已排队 · ${entry.label}` : entry.message);
+      }
       loadSummary().then((job) => { if (job?.state === "running") startPolling(); }).catch(() => {});
     } catch (error) {
       notifyJobStartError(error, "control_discover");
@@ -347,7 +355,7 @@ export function bindDiscovery() {
       input.focus();
       return;
     }
-    submit("/api/discovery/start", { keywords: words, mode: mode.value });
+    submit("/api/discovery/start?enqueue=true", { keywords: words, mode: mode.value });
   });
   input.addEventListener("input", render);
   mode.addEventListener("change", render);
