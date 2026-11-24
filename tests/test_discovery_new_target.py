@@ -222,7 +222,9 @@ def test_browser_queue_reports_actual_target_progress(isolated_home, monkeypatch
     monkeypatch.setattr("web.control_actions.discovery_client", lambda *a, **kw: nullcontext(client))
     service.store.remember_discovery_videos([bv(i) for i in range(existing)])
     api = TestClient(app)
-    response = api.post("/api/discovery/start?enqueue=true", json={"keywords": ["抽奖"], "target_new_videos": 100})
+    response = api.post("/api/discovery/start?enqueue=true", json={
+        "keywords": ["抽奖", "GTA6，PS5"], "keyword_match": "combined", "target_new_videos": 100,
+    })
     assert response.status_code == 200, response.text
     deadline = time.monotonic() + 8
     while runner.is_running() and time.monotonic() < deadline:
@@ -233,6 +235,8 @@ def test_browser_queue_reports_actual_target_progress(isolated_home, monkeypatch
     assert job["progress_step"] == checked and job["progress_total"] == 100
     assert job["result"]["completion_reason"] == reason
     status = api.get("/api/discovery/current").json()
+    assert status["keywords"] == ["抽奖 GTA6 PS5"] and status["keyword_match"] == "combined"
+    assert {params["keyword"] for url, params in client.calls if url == d.SEARCH_URL} == {"抽奖 GTA6 PS5"}
     assert status["target_new_videos"] == 100
     assert status["summary"]["new_videos_checked"] == checked
     if checked < 100:

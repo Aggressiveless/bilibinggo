@@ -439,6 +439,13 @@
                 <input id="discovery-keywords" class="form-input" value="转发抽奖" maxlength="242" required aria-describedby="discovery-help" />
               </div>
               <div class="discovery-mode">
+                <label class="field-label" for="discovery-keyword-match">关键词用法</label>
+                <select id="discovery-keyword-match" class="form-input" aria-describedby="discovery-help">
+                  <option value="combined">组合搜索</option>
+                  <option value="separate">分别搜索</option>
+                </select>
+              </div>
+              <div class="discovery-mode">
                 <label class="field-label" for="discovery-mode">视频排序</label>
                 <select id="discovery-mode" class="form-input" aria-describedby="discovery-help">
                   <option value="standard">最新发布</option>
@@ -455,7 +462,7 @@
                 <button type="button" class="btn btn-secondary btn-pill" id="discovery-review-deferred" hidden>补查低信号视频</button>
               </div>
             </form>
-            <p class="caption" id="discovery-help">最多 3 个关键词，用逗号分隔。检索会运行到候选核验完成。</p>
+            <p class="caption" id="discovery-help">组合搜索会把输入的词作为一个查询发给 B 站。</p>
             <div class="discovery-metrics" aria-label="检索统计">
               <div><strong id="discovery-videos">0</strong><span id="discovery-videos-label">本次已检索新视频</span></div>
               <div><strong id="discovery-duplicates">0</strong><span>已跳过重复 BV</span></div>

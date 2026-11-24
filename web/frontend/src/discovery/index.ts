@@ -72,6 +72,7 @@ interface DiscoveryStatus {
   queue_job?: DiscoveryJob | null;
   queue?: { total: number; imported: number; existing: number; expired: number; skipped: number; remaining: number; message: string };
   keywords: string[];
+  keyword_match?: "combined" | "separate" | null;
   mode?: "standard" | "comprehensive_page";
   target_new_videos?: number;
   summary: {
@@ -217,6 +218,7 @@ export function bindDiscovery() {
   const form = element<HTMLFormElement>("discovery-form");
   const input = element<HTMLInputElement>("discovery-keywords");
   const mode = element<HTMLSelectElement>("discovery-mode");
+  const keywordMatch = element<HTMLSelectElement>("discovery-keyword-match");
   const targetInput = element<HTMLInputElement>("discovery-target");
   const stop = element<HTMLButtonElement>("discovery-stop");
   const importButton = element<HTMLButtonElement>("discovery-import");
@@ -229,7 +231,7 @@ export function bindDiscovery() {
   const filterFields = element<HTMLFieldSetElement>("discovery-filter-fields");
   const previewButton = element<HTMLButtonElement>("discovery-preview");
   const filteredImport = element<HTMLButtonElement>("discovery-import-filtered");
-  if (!form || !input || !mode || !targetInput || !stop || !importButton || !selectedButton || !selectionPanel || !candidateBody ||
+  if (!form || !input || !mode || !keywordMatch || !targetInput || !stop || !importButton || !selectedButton || !selectionPanel || !candidateBody ||
       !selectAll || !filterPanel || !filterForm || !filterFields || !previewButton || !filteredImport) return;
   let snapshot: DiscoveryStatus = { job: null, keywords: ["转发抽奖"], summary: {}, resume_available: false };
   let submitting = false;
@@ -241,7 +243,13 @@ export function bindDiscovery() {
   let shownCandidates = "";
   const selected = new Set<string>();
 
-  const keywords = () => [...new Set(input.value.split(/[,，\n]/).map((word) => word.trim()).filter(Boolean))];
+  const keywords = () => {
+    if (keywordMatch.value === "combined") {
+      const query = input.value.replace(/[,，、\s]+/g, " ").trim();
+      return query ? [query] : [];
+    }
+    return [...new Set(input.value.split(/[,，、\n]/).map((word) => word.trim()).filter(Boolean))];
+  };
   const filterSettings = (): FilterSettings => ({
     coins: (filterForm.elements.namedItem("coins") as HTMLSelectElement).value,
     min_followers: Number((filterForm.elements.namedItem("min_followers") as HTMLInputElement).value),
@@ -302,6 +310,7 @@ export function bindDiscovery() {
     const start = element<HTMLButtonElement>("discovery-start");
     if (start && !start.disabled && !sameSearch) start.textContent = "开始检索";
     mode.disabled = input.disabled;
+    keywordMatch.disabled = input.disabled;
     renderSelection();
     filterPanel.hidden = !snapshot.pending_selection;
     filterFields.disabled = input.disabled;
@@ -311,9 +320,12 @@ export function bindDiscovery() {
     setText("discovery-filter-result", matchesPreview()
       ? `匹配 ${snapshot.filter?.matched || 0} / ${snapshot.filter?.total || 0} 条 · 发布者资料未知 ${snapshot.filter?.unknown_metadata || 0} 条`
       : issue || "调整条件后预览匹配数量，再确认加入。");
-    setText("discovery-help", mode.value === "comprehensive_page"
-      ? "搜索 1 个关键词，按综合排序持续翻页；已有和本轮重复 BV 均跳过，不计入目标。"
-      : "最多 3 个关键词，用逗号分隔。按最新发布持续翻页；已有和本轮重复 BV 均跳过，不计入目标。");
+    const queries = keywords();
+    setText("discovery-help", keywordMatch.value === "combined"
+      ? `作为一个查询发给 B 站${queries.length ? `「${queries[0]}」` : "，例如「GTA6 PS5 抽奖」"}。`
+      : mode.value === "comprehensive_page"
+        ? "综合排序每轮只运行一个查询。把多个词一起搜，请选择组合搜索。"
+        : "用逗号分隔最多 3 个查询。程序按顺序搜索，达到总目标后停止。");
   };
   const apply = (value: DiscoveryStatus) => {
     if (value.job?.job_id !== snapshot.job?.job_id) selected.clear();
@@ -335,6 +347,8 @@ export function bindDiscovery() {
     if (!initialized || value.job?.state === "running") {
       input.value = value.keywords.join("，");
       mode.value = value.mode || "standard";
+      keywordMatch.value = value.keyword_match ||
+        (value.keywords.length > 1 && (value.resume_available || value.job?.state === "running") ? "separate" : "combined");
       targetInput.value = String(value.target_new_videos || value.summary.target_new_videos || 100);
     }
     initialized = true;
@@ -381,13 +395,14 @@ export function bindDiscovery() {
     event.preventDefault();
     if (submitting || activeJob(snapshot)?.state === "running" || !requireSetup("control_discover")) return;
     const words = keywords();
-    if (!words.length || words.length > 3 || words.some((word) => word.length > 80)) {
-      showToast("请输入 1–3 个关键词，每个不超过 80 字", "info");
+    const combined = keywordMatch.value === "combined";
+    if (!words.length || words.length > 3 || words.some((word) => word.length > (combined ? 242 : 80))) {
+      showToast(combined ? "请输入不超过 242 字的组合查询" : "请输入 1–3 个独立查询词，每个不超过 80 字", "info");
       input.focus();
       return;
     }
     if (mode.value === "comprehensive_page" && words.length !== 1) {
-      showToast("综合排序每轮检索一个关键词", "info");
+      showToast("综合排序每轮只运行一个查询，请使用组合搜索", "info");
       input.focus();
       return;
     }
@@ -397,10 +412,11 @@ export function bindDiscovery() {
       targetInput.focus();
       return;
     }
-    submit("/api/discovery/start?enqueue=true", { keywords: words, mode: mode.value, target_new_videos: target });
+    submit("/api/discovery/start?enqueue=true", { keywords: words, keyword_match: keywordMatch.value, mode: mode.value, target_new_videos: target });
   });
   input.addEventListener("input", render);
   mode.addEventListener("change", render);
+  keywordMatch.addEventListener("change", render);
   targetInput.addEventListener("input", render);
   stop.addEventListener("click", () => {
     const job = activeJob(snapshot);

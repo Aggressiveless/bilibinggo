@@ -9,7 +9,7 @@ test("new-video target survives reload, shows duplicate skips and never calls a 
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/start")) {
       starts++;
-      expect(route.request().postDataJSON()).toEqual({ keywords: ["转发抽奖"], mode: "standard", target_new_videos: 175 });
+      expect(route.request().postDataJSON()).toEqual({ keywords: ["转发抽奖"], keyword_match: "combined", mode: "standard", target_new_videos: 175 });
       snapshot = { ...snapshot, target_new_videos: 175,
         job: { job_id: 88, state: "running", cancel_requested: false, progress: { message: "翻页检索中" } },
         summary: { target_new_videos: 175, new_videos_checked: 72, videos_checked: 72, duplicates_skipped: 48 } };

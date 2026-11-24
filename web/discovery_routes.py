@@ -1,12 +1,13 @@
 """Browser controls for the same discovery jobs used by MCP."""
 from __future__ import annotations
 
+import re
 import time
 from collections import Counter
 from typing import Literal
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.control_store import ControlError
 from src.discovery_video_audit import display_video_check
@@ -20,22 +21,30 @@ from web.coin_balance import coin_balance
 class DiscoveryStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     keywords: list[str] = Field(default_factory=lambda: ["转发抽奖"], min_length=1, max_length=3)
+    keyword_match: Literal["combined", "separate"] = "separate"
     mode: Literal["standard", "comprehensive_page"] = "standard"
     target_new_videos: int = Field(default=100, ge=1, le=10000, strict=True)
 
-    @field_validator("keywords")
-    @classmethod
-    def clean_keywords(cls, values):
-        words = list(dict.fromkeys(word.strip() for word in values))
-        if any(not word or len(word) > 80 for word in words):
-            raise ValueError("请输入 1–3 个关键词，每个不超过 80 字")
-        return words
+    @model_validator(mode="after")
+    def clean_keywords(self):
+        if self.keyword_match == "combined":
+            query = re.sub(r"[,，、\s]+", " ", " ".join(self.keywords)).strip()
+            if not query or len(query) > 242:
+                raise ValueError("请输入不超过 242 字的组合查询")
+            self.keywords = [query]
+        else:
+            words = list(dict.fromkeys(word.strip() for word in self.keywords))
+            if any(not word or len(word) > 80 for word in words):
+                raise ValueError("请输入 1–3 个独立查询词，每个不超过 80 字")
+            self.keywords = words
+        return self
 
 
 def discovery_job_params(request: DiscoveryStartRequest):
     if request.mode == "comprehensive_page" and len(request.keywords) != 1:
-        raise AppError(ErrorCode.VALIDATION_ERROR, "综合排序每轮检索一个关键词")
+        raise AppError(ErrorCode.VALIDATION_ERROR, "综合排序每轮只运行一个查询，请使用组合搜索")
     return {"keywords": request.keywords, "mode": request.mode, "video_limit": request.target_new_videos,
+            "keyword_match": request.keyword_match,
             "target_new_videos": request.target_new_videos,
             "request_budget": None, "candidate_limit": 0, "resume": True, "replay_completed": False,
             "collect_followers": True}
@@ -122,6 +131,7 @@ def discovery_status(service, job=None):
     video_total, video_checks = video_records(service, limit=100, offset=0, job_id=job["job_id"])
     video_summary = Counter(row["status"] for row in video_checks)
     return {"job": job, "keywords": report.get("keywords") or job.get("keywords") or ["转发抽奖"],
+            "keyword_match": job.get("keyword_match"),
             "mode": job.get("discovery_mode", "standard"),
             "target_new_videos": job.get("target_new_videos"),
             "summary": summary, "bv_count": bv_count, "stop_message": raw.get("stopped", ""),

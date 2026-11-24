@@ -135,6 +135,7 @@ class ControlService:
         metadata = {"source": source}
         if action == "control_discover":
             metadata["keywords"] = (params or {}).get("keywords", [])
+            metadata["keyword_match"] = (params or {}).get("keyword_match")
             metadata["discovery_mode"] = (params or {}).get("mode", "standard")
             metadata["target_new_videos"] = (params or {}).get("target_new_videos")
         elif action == "control_discovery_filter" or (action == "control_import" and (params or {}).get("queue_verified")):

@@ -173,7 +173,7 @@ def discover(service, job_id, params, event, progress=None):
     if review_deferred and (not checkpoint_state or checkpoint_state.get("capture_id") != params.get("_capture_id")):
         raise ControlError("VALIDATION_ERROR", "待复核的检索进度已不可用")
     review_params = {key: params[key] for key in (
-        "keywords", "mode", "video_limit", "target_new_videos", "author_dynamic_limit",
+        "keywords", "keyword_match", "mode", "video_limit", "target_new_videos", "author_dynamic_limit",
         "expand_keywords", "candidate_limit", "collect_followers",
     ) if key in params}
     review_context = {"checkpoint_id": checkpoint_id, "params": review_params}

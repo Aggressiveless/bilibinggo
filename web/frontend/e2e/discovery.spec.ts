@@ -1,6 +1,30 @@
 import { expect, test } from "./offline-test";
 import { gotoOverview, setE2EState } from "./helpers";
 
+test("combined queries are sent together and separate mode is explicit", async ({ page, request }) => {
+  await setE2EState(request, { account: "logged_in", llm: "ready" });
+  const previous = { job: { job_id: 40, state: "success" }, keywords: ["抽奖", "GTA6", "PS5"],
+    summary: {}, resume_available: false };
+  const submitted: unknown[] = [];
+  await page.route("**/api/discovery/current", route => route.fulfill({ json: previous }));
+  await page.route("**/api/discovery/start?**", route => {
+    submitted.push(route.request().postDataJSON());
+    return route.fulfill({ json: previous });
+  });
+  await gotoOverview(page);
+  await page.locator('[data-section="sources"]').click();
+  await expect(page.getByLabel("关键词用法")).toHaveValue("combined");
+  await expect(page.locator("#discovery-help")).toContainText("抽奖 GTA6 PS5");
+  await page.locator("#discovery-start").click();
+  await expect.poll(() => submitted.length).toBe(1);
+  expect(submitted[0]).toMatchObject({ keywords: ["抽奖 GTA6 PS5"], keyword_match: "combined" });
+  await page.getByLabel("关键词用法").selectOption("separate");
+  await expect(page.locator("#discovery-help")).toContainText("按顺序搜索");
+  await page.locator("#discovery-start").click();
+  await expect.poll(() => submitted.length).toBe(2);
+  expect(submitted[1]).toMatchObject({ keywords: ["抽奖", "GTA6", "PS5"], keyword_match: "separate" });
+});
+
 test("deferred videos can be reviewed from the completed search", async ({ page, request }) => {
   await setE2EState(request, { account: "logged_in", llm: "ready" });
   let snapshot: any = { job: null, keywords: ["转发抽奖"], summary: {}, resume_available: false };
@@ -34,7 +58,7 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/start")) {
       starts += 1;
-      expect(route.request().postDataJSON()).toEqual({ keywords: ["转发抽奖"], mode: "comprehensive_page", target_new_videos: 100 });
+      expect(route.request().postDataJSON()).toEqual({ keywords: ["转发抽奖"], keyword_match: "combined", mode: "comprehensive_page", target_new_videos: 100 });
       snapshot = { ...snapshot, mode: "comprehensive_page", job: { job_id: starts, state: "running", cancel_requested: false,
         progress: { message: "扫描视频 2/36" } }, summary: { videos_checked: 2, requests_used: 5, verification_remaining: 8 } };
     } else if (path.endsWith("/stop")) {
