@@ -169,7 +169,7 @@ class ControlService:
         current = runner.get_status()
         if current.id is None:
             return None
-        with self.store.connect() as db:
+        with self.store.transaction() as db:
             found = db.execute("SELECT id FROM control_jobs WHERE owner='app' AND backend_id=?", (current.id,)).fetchall()
         for row in found:
             if self.store.job_record(row[0])[2]["boot_id"] == BOOT_ID:
@@ -545,7 +545,7 @@ def persist_runner_event(event, data):
     service = _instances.get(user_home().resolve())
     if service is None or data.get("id") is None:
         return
-    with service.store.connect() as db:
+    with service.store.transaction() as db:
         rows = db.execute("SELECT id,payload FROM control_jobs WHERE owner='app' AND backend_id=?", (data["id"],)).fetchall()
     for row in rows:
         if json.loads(row[1])["boot_id"] == BOOT_ID:

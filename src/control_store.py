@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,7 @@ class ControlStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "control.db"
         self.lock = threading.RLock()
-        with self.connect() as db:
+        with self.transaction() as db:
             db.executescript("""
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS records(kind TEXT, key TEXT, payload TEXT NOT NULL,
@@ -63,18 +64,27 @@ class ControlStore:
         db.row_factory = sqlite3.Row
         return db
 
+    @contextmanager
+    def transaction(self):
+        db = self.connect()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
     def put(self, kind: str, key: str, value: dict) -> None:
-        with self.connect() as db:
+        with self.transaction() as db:
             db.execute("INSERT INTO records VALUES(?,?,?) ON CONFLICT(kind,key) DO UPDATE SET payload=excluded.payload",
                        (kind, key, json.dumps(value, ensure_ascii=False)))
 
     def get(self, kind: str, key: str) -> dict | None:
-        with self.connect() as db:
+        with self.transaction() as db:
             row = db.execute("SELECT payload FROM records WHERE kind=? AND key=?", (kind, key)).fetchone()
         return json.loads(row[0]) if row else None
 
     def records(self, kind: str) -> list[dict]:
-        with self.connect() as db:
+        with self.transaction() as db:
             rows = db.execute("SELECT payload FROM records WHERE kind=? ORDER BY key", (kind,)).fetchall()
         return [json.loads(row[0]) for row in rows]
 
@@ -84,7 +94,7 @@ class ControlStore:
         for video in videos:
             bvid, title = (video, "") if isinstance(video, str) else (video["bvid"], video.get("title", ""))
             rows[bvid] = title or rows.get(bvid, "")
-        with self.connect() as db:
+        with self.transaction() as db:
             for bvid, title in rows.items():
                 created = db.execute("INSERT OR IGNORE INTO discovery_videos VALUES(?,?,?)", (bvid, now, now)).rowcount
                 counted = bool(page_id and db.execute(
@@ -100,24 +110,24 @@ class ControlStore:
                 """, (bvid, title, int(counted), int(not created or page_id is None), backfill))
 
     def save_discovery_video_checks(self, job_id: int, checks: dict) -> None:
-        with self.connect() as db:
+        with self.transaction() as db:
             db.executemany("""
                 INSERT INTO discovery_video_checks VALUES(?,?,?)
                 ON CONFLICT(job_id,bvid) DO UPDATE SET payload=excluded.payload
             """, [(job_id, bvid, json.dumps(check, ensure_ascii=False)) for bvid, check in checks.items()])
 
     def discovery_video_count(self) -> int:
-        with self.connect() as db:
+        with self.transaction() as db:
             return db.execute("SELECT count(*) FROM discovery_videos").fetchone()[0]
 
     def discovery_video_ids(self) -> set[str]:
-        with self.connect() as db:
+        with self.transaction() as db:
             return {row[0] for row in db.execute("SELECT bvid FROM discovery_videos")}
 
     def list_discovery_videos(self, *, limit: int, offset: int, job_id=None) -> tuple[int, list[dict]]:
         fields = """v.*, c.job_id, c.payload, coalesce(m.title,'') AS title,
                     coalesce(m.sightings,0) AS sightings, coalesce(m.legacy_history,1) AS legacy_history"""
-        with self.connect() as db:
+        with self.transaction() as db:
             db.execute("BEGIN")
             if job_id is None:
                 total = db.execute("SELECT count(*) FROM discovery_videos").fetchone()[0]
@@ -138,7 +148,7 @@ class ControlStore:
 
     def claim(self, key: str, parameters: dict) -> dict | None:
         fingerprint = digest(parameters)
-        with self.connect() as db:
+        with self.transaction() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT digest,result FROM operations WHERE key=?", (key,)).fetchone()
             if row:
@@ -151,7 +161,7 @@ class ControlStore:
         return None
 
     def complete(self, key: str, result: dict) -> None:
-        with self.connect() as db:
+        with self.transaction() as db:
             db.execute("UPDATE operations SET result=? WHERE key=?", (json.dumps(result, ensure_ascii=False), key))
 
     def new_job(self, action: str, boot_id: str, *, owner="app", metadata=None) -> dict:
@@ -159,7 +169,7 @@ class ControlStore:
                    "result": None, "can_cancel": False, "cancel_requested": False,
                    "created_at": utc_now(), "finished_at": None,
                    "progress": {"step": 0, "total": 0, "message": "任务已接收"}, **(metadata or {})}
-        with self.connect() as db:
+        with self.transaction() as db:
             cursor = db.execute("INSERT INTO control_jobs(owner,payload) VALUES(?,?)", (owner, json.dumps(payload)))
             payload["job_id"] = cursor.lastrowid
             db.execute("UPDATE control_jobs SET payload=? WHERE id=?", (json.dumps(payload), cursor.lastrowid))
@@ -167,11 +177,11 @@ class ControlStore:
         return payload
 
     def bind_job(self, job_id: int, backend_id: int) -> None:
-        with self.connect() as db:
+        with self.transaction() as db:
             db.execute("UPDATE control_jobs SET backend_id=? WHERE id=?", (backend_id, job_id))
 
     def job_record(self, job_id: int) -> tuple[str, int | None, dict]:
-        with self.connect() as db:
+        with self.transaction() as db:
             row = db.execute("SELECT owner,backend_id,payload FROM control_jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             raise ControlError("NOT_FOUND", "未找到该控制任务")
@@ -185,24 +195,24 @@ class ControlStore:
                 return payload
             if updated["state"] != "running" and not updated.get("finished_at"):
                 updated["finished_at"] = utc_now()
-            with self.connect() as db:
+            with self.transaction() as db:
                 db.execute("UPDATE control_jobs SET payload=? WHERE id=?", (json.dumps(updated, ensure_ascii=False), job_id))
             self.event(job_id, {"kind": "updated", "job": updated})
             return updated
 
     def list_jobs(self, *, before=2147483647, limit=50, state=None):
-        with self.connect() as db:
+        with self.transaction() as db:
             rows = db.execute("SELECT payload FROM control_jobs WHERE id<? ORDER BY id DESC LIMIT ?", (before, 1000)).fetchall()
         values = [json.loads(row[0]) for row in rows]
         return [v for v in values if state is None or v["state"] == state][:limit]
 
     def event(self, job_id: int, value: dict):
-        with self.connect() as db:
+        with self.transaction() as db:
             db.execute("INSERT INTO events(job_id,payload) VALUES(?,?)", (job_id, json.dumps({"ts": utc_now(), **value}, ensure_ascii=False)))
 
     def events(self, job_id: int, after=0, limit=100):
         self.job_record(job_id)
-        with self.connect() as db:
+        with self.transaction() as db:
             rows = db.execute("SELECT seq,payload FROM events WHERE job_id=? AND seq>? ORDER BY seq LIMIT ?", (job_id, after, limit)).fetchall()
         return {"events": [{"seq": r[0], **json.loads(r[1])} for r in rows],
                 "next_seq": rows[-1][0] if rows else after, "cursor_expired": False}
