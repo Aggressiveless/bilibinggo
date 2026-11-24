@@ -32,7 +32,7 @@
 .discovery-metrics span { font-size: 13px; color: var(--foreground-muted); }
 .discovery-status { margin: 0; color: var(--foreground-muted); font-size: 14px; overflow-wrap: anywhere; }
 .discovery-video-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; font-size: 14px; }
-.discovery-video-summary[hidden], #discovery-video-all[hidden] { display: none; }
+.discovery-video-summary[hidden], #discovery-video-all[hidden], #discovery-review-deferred[hidden] { display: none; }
 .source-table.discovery-video-list { min-width: 760px; }
 .discovery-video-list td { vertical-align: top; }
 .discovery-video-list td:nth-child(1) { width: 29%; }

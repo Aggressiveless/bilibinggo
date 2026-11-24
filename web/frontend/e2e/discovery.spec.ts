@@ -1,6 +1,30 @@
 import { expect, test } from "./offline-test";
 import { gotoOverview, setE2EState } from "./helpers";
 
+test("deferred videos can be reviewed from the completed search", async ({ page, request }) => {
+  await setE2EState(request, { account: "logged_in", llm: "ready" });
+  let snapshot: any = { job: null, keywords: ["转发抽奖"], summary: {}, resume_available: false };
+  await page.route("**/api/discovery/current", route => route.fulfill({ json: snapshot }));
+  await page.route("**/api/discovery/review-deferred", route => {
+    expect(route.request().postDataJSON()).toEqual({ job_id: 41 });
+    snapshot = { ...snapshot, job: { job_id: 42, state: "running" }, review_deferred_available: false };
+    return route.fulfill({ json: snapshot });
+  });
+  await gotoOverview(page);
+  await page.locator('[data-section="sources"]').click();
+  const review = page.locator("#discovery-review-deferred");
+  await expect(review).toBeHidden();
+  snapshot = { ...snapshot, job: { job_id: 41, state: "success" }, review_deferred_available: true,
+    summary: { completion_reason: "target_reached", deferred_videos: 3, comment_reads_saved: 2 } };
+  await page.reload();
+  await page.locator('[data-section="sources"]').click();
+  await expect(review).toHaveText("补查低信号视频（3）");
+  await expect(page.locator("#discovery-status")).toContainText("省去 2 次评论读取");
+  await review.click();
+  await expect(review).toBeHidden();
+  await expect(page.locator("#discovery-stop")).toBeEnabled();
+});
+
 test("users start, stop, reload and resume discovery", async ({ page, request }) => {
   await setE2EState(request, { account: "logged_in", llm: "ready" });
   let snapshot: any = { job: null, keywords: ["转发抽奖"], summary: {}, candidates: [], resume_available: false };

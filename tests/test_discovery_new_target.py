@@ -134,6 +134,78 @@ def test_saved_batch_survives_loss_of_discovery_client(tmp_path):
     assert [(url, data["bvid"]) for url, data in client.calls] == [(d.VIDEO_URL, bv(i)) for i in range(16, 24)]
 
 
+def test_web_screening_keeps_deferred_videos_available_for_review(isolated_home, monkeypatch):
+    from web.app import app
+    from web.control_service import get_control_service
+    from web.job_runner import JobRunner
+
+    target = "1234567890123456789"
+    runner = JobRunner()
+    service = get_control_service()
+    monkeypatch.setattr("web.job_runner.runner", runner)
+    monkeypatch.setattr("web.app.runner", runner)
+    monkeypatch.setattr(service, "account", lambda: {"credentials_present": True})
+    monkeypatch.setattr("src.llm_settings.is_llm_ready", lambda: True)
+
+    reads, model_inputs = [], []
+    class Client:
+        def __init__(self):
+            self.cache = {}
+            self.request_count = 0
+        def read(self, url, params, **kwargs):
+            self.request_count += 1
+            reads.append((url, params))
+            if url == d.SEARCH_URL:
+                data = {"numPages": 1, "result": [{"bvid": bv(i)} for i in range(3)]}
+            elif url == d.VIDEO_URL:
+                index = int(params["bvid"][2:])
+                texts = [f"抽奖入口：{d.opus_link(target)}", "今天去散步", f"抽奖入口：{d.opus_link(target)}\n评论区还有说明"]
+                data = {"aid": index + 1, "title": texts[index], "owner": {"mid": 42}}
+            else:
+                assert url == d.REPLIES_URL
+                data = {}
+            return {"code": 0, "data": data}
+        def extract(self, text, **kwargs):
+            model_inputs.append(text.strip())
+            return {"model_assessment": "not_lottery"}
+        def save(self):
+            pass
+
+    monkeypatch.setattr("web.control_actions.discovery_client", lambda *a, **kw: nullcontext(Client()))
+    checked = []
+    def inspect(_client, identifier, **kwargs):
+        checked.append(identifier)
+        return {"dynamic_id": identifier, "kind": "dynamic", "url": d.opus_link(identifier), "status": "open"}
+    monkeypatch.setattr(d, "inspect_dynamic", inspect)
+
+    api = TestClient(app)
+    def finish():
+        until = time.monotonic() + 5
+        while time.monotonic() < until:
+            state = api.get("/api/task-queue").json()
+            if not any(item["state"] in {"queued", "running", "starting"} for item in state["entries"]):
+                return api.get("/api/discovery/current").json()
+            time.sleep(.03)
+        pytest.fail("The discovery queue did not finish")
+
+    initial = api.post("/api/discovery/start?enqueue=true", json={"keywords": ["抽奖"], "target_new_videos": 3})
+    assert initial.status_code == 200, initial.text
+    first = finish()
+    assert first["job"]["state"] == "success" and first["summary"]["eligible"] == 1
+    assert first["review_deferred_available"] and first["summary"]["deferred_videos"] == 1
+    assert first["summary"]["comment_reads_saved"] == 1
+    assert [params["oid"] for url, params in reads if url == d.REPLIES_URL] == [2, 3]
+    assert checked == [target] and not model_inputs
+
+    reads.clear()
+    review = api.post("/api/discovery/review-deferred", json={"job_id": first["job"]["job_id"]})
+    assert review.status_code == 200, review.text
+    second = finish()
+    assert second["job"]["state"] == "success" and second["summary"]["eligible"] == 1
+    assert not second["review_deferred_available"] and second["summary"]["deferred_videos"] == 0
+    assert checked == [target] and not reads and model_inputs == ["今天去散步"]
+
+
 @pytest.mark.parametrize("existing,checked,reason", [(20, 100, "target_reached"), (140, 12, "search_exhausted")])
 def test_browser_queue_reports_actual_target_progress(isolated_home, monkeypatch, existing, checked, reason):
     from web.app import app

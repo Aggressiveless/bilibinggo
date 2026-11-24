@@ -20,6 +20,29 @@ SESSION_TTL_SECONDS = 1800
 CHECKPOINT_BATCH_SIZE = 8
 CHECKPOINT_INTERVAL_SECONDS = 20
 LARGE_CREATOR_FOLLOWERS = 100_000
+_VIDEO_CLUE_RE = re.compile(
+    r"抽|奖|福利|福袋|评论区|置顶|主页|动态|报名|参与|粉丝|领取|赠|送|给|揪|留言|转发|截止|"
+    r"名单|红包|名额|入口|传送门|链接|看图|截图|二维码|私信|规则|giveaway|raffle|sweepstake|roll",
+    re.I,
+)
+_DIRECT_ENTRY_RE = re.compile(r"抽奖入口|抽奖传送门|抽奖动态|报名入口|参与入口|抽奖.{0,8}(?:见|看|前往)动态")
+_COMMENT_CUE_RE = re.compile(r"评论区|评论|置顶评论|留言|留评|盖楼")
+
+
+def has_video_clue(text: str) -> bool:
+    return any(pattern.search(text) for pattern in (
+        _VIDEO_CLUE_RE, d.HOME_RE, d.DATE_RE, d.DYNAMIC_RE, d.SHORT_LINK_RE, d.ARTICLE_RE,
+    ))
+
+
+def has_direct_video_entry(text: str) -> bool:
+    if _COMMENT_CUE_RE.search(text):
+        return False
+    for line in text.splitlines():
+        for label in _DIRECT_ENTRY_RE.finditer(line):
+            if d.DYNAMIC_RE.match(line[label.end():].lstrip(" ：:\t-→")):
+                return True
+    return False
 
 
 def _legacy_scan_notes(session, entries, finished):
@@ -132,7 +155,8 @@ def _fair_order(tasks):
 def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_page=True,
                   candidate_limit=9, known_ids=None, joined_ids=None, author_dynamic_limit=2,
                   resume=True, replay_completed=True, on_progress=None, on_video_page=None, collect_followers=False,
-                  target_new_videos=None, known_bvids=None, checkpoint_state=None, checkpoint_batches=False):
+                  target_new_videos=None, known_bvids=None, checkpoint_state=None, checkpoint_batches=False,
+                  review_deferred=False, screen_videos=False):
     now = int(time.time()) if now is None else now
     known_ids, joined_ids = set(known_ids or []), set(joined_ids or [])
     known_bvids = set(known_bvids or [])
@@ -147,7 +171,9 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
     saved_checkpoint = checkpoint_state and checkpoint_state.get("session_id") == key
     previous = checkpoint_state if saved_checkpoint else sessions.get(key)
     resumed = bool(resume and previous and (saved_checkpoint or previous.get("expires_at", 0) > time.time())
-                   and (replay_completed or not previous.get("done")))
+                   and (review_deferred or replay_completed or not previous.get("done")))
+    if review_deferred and not resumed:
+        raise ValueError("本轮的复核进度已不可用，请重新检索")
     state = previous if resumed else {"session_id": key, "expires_at": time.time() + SESSION_TTL_SECONDS,
         "search_index": 0, "videos": [], "scan_index": 0, "source_index": 0, "verify_index": 0,
         "source_tasks": [], "tasks": [], "rows": [], "errors": [], "author_queries": {},
@@ -156,6 +182,9 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
     legacy = state.setdefault("legacy_scan", "capture_id" not in state)
     capture_id = state.setdefault("capture_id", uuid.uuid4().hex)
     scan_notes = state.setdefault("scan_notes", {})
+    deferred = state.setdefault("deferred_video_sources", [])
+    if review_deferred:
+        state.setdefault("review_task_limit", len(state["tasks"]) + 400)
     # Bound storage without dropping this run's cursor.
     for old in sorted([k for k in sessions if k != key], key=lambda k: sessions[k].get("expires_at", 0))[:-3]:
         del sessions[old]
@@ -226,6 +255,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             "cache_hits": getattr(client, "cache_hits", 0), "llm_requests": getattr(client, "llm_requests", 0),
             "llm_cache_hits": getattr(client, "llm_cache_hits", 0), "session_id": key, "resumed": resumed,
             "scan_completed": scan_completed(), "verification_remaining": len(state["tasks"]) - state["verify_index"],
+            "deferred_videos": len(deferred), "comment_reads_saved": state.get("comment_reads_saved", 0),
             "video_checks": snapshot_video_checks(state, rows, legacy=legacy, video_range=video_range),
             **({"checkpoint_state": state, "video_page": video_page} if checkpoint_batches else {}),
             **target_stats()})
@@ -237,14 +267,19 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             if url not in sources:
                 sources.append(url)
 
+    targets_by_id = {item["dynamic_id"]: item for item in state["tasks"] if item.get("dynamic_id")}
+    sources_by_key = {(item["kind"], item["key"]): item for item in state["source_tasks"]}
+
     def add_task(task):
         identifier = task.get("dynamic_id")
-        existing = next((t for t in state["tasks"] if identifier and t.get("dynamic_id") == identifier), None)
+        existing = targets_by_id.get(identifier)
         if existing:
             attach_source(existing, task)
             return
-        if len(state["tasks"]) < 400:
+        if len(state["tasks"]) < state.get("review_task_limit", 400):
             state["tasks"].append(task)
+            if identifier:
+                targets_by_id[identifier] = task
         else:
             for url in task.get("source_videos", [task["source_video"]]):
                 detail = scan_notes.setdefault(url.rsplit("/", 1)[-1], {"title": "", "notes": []})
@@ -252,7 +287,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
 
     def add_source(task):
         identity = (task["kind"], task["key"])
-        existing = next((t for t in state["source_tasks"] if (t["kind"], t["key"]) == identity), None)
+        existing = sources_by_key.get(identity)
         if existing:
             attach_source(existing, task)
             for target in state["tasks"]:
@@ -260,6 +295,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                     attach_source(target, task)
         else:
             state["source_tasks"].append(task)
+            sources_by_key[identity] = task
 
     def queue_author(source):
         uid = source.get("uid", "")
@@ -331,10 +367,12 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                 elif kind == "video":
                     emit(f"研判视频线索 {key_value}")
                     uid = source["uid"]
-                    fans = followers_for(uid)
+                    fans = None if screen_videos else followers_for(uid)
                     fields = client.extract(source["text"], source="视频标题、简介及作者评论", followers=fans)
                     model = fields.get("model_assessment")
                     confidence = fields.get("model_confidence") or 0
+                    if screen_videos and model == "uncertain" and (45 <= confidence < 65 or source["lottery_hint"]):
+                        fans = followers_for(uid)
                     popular = (fans or 0) >= LARGE_CREATOR_FOLLOWERS
                     credible = model in {"lottery", "entry", "collection"} or model == "uncertain" and confidence >= (45 if popular else 65)
                     suggest_home = credible or popular and source["lottery_hint"] and model != "not_lottery"
@@ -370,6 +408,12 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             state["source_index"] += 1
 
     try:
+        if review_deferred and deferred:
+            for source in deferred:
+                add_source(source)
+                scan_notes.get(source["key"], {}).pop("deferred", None)
+            deferred.clear()
+            state["done"] = False
         while state["search_index"] < len(keywords) and (target_new_videos is None or len(state["videos"]) < video_limit):
             state["phase"] = "search"
             word = keywords[state["search_index"]]
@@ -435,14 +479,17 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                 owner = video.get("owner") or {}
                 texts = [str(video.get("title") or row.get("title") or ""), str(video.get("desc") or "")]
                 if video.get("aid") and owner.get("mid"):
-                    try:
-                        replies = client.read(d.REPLIES_URL, {"type": 1, "oid": video["aid"], "mode": 3}, referer=url, ttl=900, wbi=True)
-                        if d.api_code(replies) != 0:
-                            raise RuntimeError(f"评论接口返回业务码 {d.api_code(replies)}")
-                        texts.extend(d._owner_comments(replies.get("data") or {}, str(owner["mid"])))
-                    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
-                        state["errors"].append(f"{bvid}: 评论不可读：{str(exc)[:150]}")
-                        detail["notes"].append(audit_note("pending", "作者评论未能读取，核验资料不完整"))
+                    if screen_videos and has_direct_video_entry("\n".join(texts)):
+                        state["comment_reads_saved"] = state.get("comment_reads_saved", 0) + 1
+                    else:
+                        try:
+                            replies = client.read(d.REPLIES_URL, {"type": 1, "oid": video["aid"], "mode": 3}, referer=url, ttl=900, wbi=True)
+                            if d.api_code(replies) != 0:
+                                raise RuntimeError(f"评论接口返回业务码 {d.api_code(replies)}")
+                            texts.extend(d._owner_comments(replies.get("data") or {}, str(owner["mid"])))
+                        except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+                            state["errors"].append(f"{bvid}: 评论不可读：{str(exc)[:150]}")
+                            detail["notes"].append(audit_note("pending", "作者评论未能读取，核验资料不完整"))
                 text = "\n".join(texts)
                 lottery = bool(d.LOTTERY_RE.search(text))
                 uid = str(owner.get("mid") or "")
@@ -458,7 +505,12 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                         add_task({**source, "kind": "video_comment", "text": text[:4800],
                                   "published": video.get("pubdate") or row.get("pubdate") or 0, "owner": owner})
                     elif text.strip():
-                        add_source({**source, "kind": "video", "key": bvid, "text": text[:8000]})
+                        task = {**source, "kind": "video", "key": bvid, "text": text[:8000]}
+                        if screen_videos and not has_video_clue(text):
+                            deferred.append(task)
+                            detail["deferred"] = True
+                        else:
+                            add_source(task)
                     elif not detail["notes"]:
                         detail["notes"].append(audit_note("pending", "视频标题、简介和作者评论均无可核验文字"))
             except (httpx.HTTPError, RuntimeError, ValueError) as exc:
@@ -558,6 +610,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
         "completion_reason": completion, "search_video_count": len(state["videos"]), "videos_checked": state["scan_index"],
         "session_id": key, "resumed": resumed, "scan_completed": scan_completed(), "resume_expires_at": state["expires_at"],
         "has_more": not state["done"], "verification_remaining": len(state["tasks"]) - state["verify_index"],
+        "deferred_videos": len(deferred), "comment_reads_saved": state.get("comment_reads_saved", 0),
         "sources_remaining": len(state["source_tasks"]) - state["source_index"], "author_queries": state["author_queries"],
         "cache_hits": getattr(client, "cache_hits", 0), "llm_requests": getattr(client, "llm_requests", 0),
         "llm_cache_hits": getattr(client, "llm_cache_hits", 0), "elapsed_seconds": round(time.monotonic() - started, 3),

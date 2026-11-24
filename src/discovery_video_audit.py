@@ -30,6 +30,8 @@ def snapshot_video_checks(state, rows, *, legacy=False, video_range=None):
         if data.get("title"):
             check["title"] = data["title"]
         check["notes"].extend(data.get("notes", []))
+        if data.get("deferred"):
+            check["notes"].append(audit_note("pending", "文字中没有明显抽奖信号，已暂缓模型复核"))
         if data.get("source_reason"):
             check["source_reason"] = data["source_reason"]
 

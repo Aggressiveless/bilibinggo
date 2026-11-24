@@ -85,6 +85,8 @@ interface DiscoveryStatus {
     new_videos_checked?: number;
     duplicates_skipped?: number;
     search_exhausted?: boolean;
+    deferred_videos?: number;
+    comment_reads_saved?: number;
   };
   bv_count?: number;
   pending_selection?: number;
@@ -92,6 +94,7 @@ interface DiscoveryStatus {
   candidates?: Candidate[];
   filter?: { id?: string; settings?: FilterSettings; matched?: number; total?: number; unknown_metadata?: number };
   resume_available: boolean;
+  review_deferred_available?: boolean;
   stop_message?: string;
 }
 
@@ -123,6 +126,7 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
   const filtering = running && job === status.queue_job && job.action === "control_discovery_filter";
   const start = element<HTMLButtonElement>("discovery-start");
   const stop = element<HTMLButtonElement>("discovery-stop");
+  const review = element<HTMLButtonElement>("discovery-review-deferred");
   const input = element<HTMLInputElement>("discovery-keywords");
   const targetInput = element<HTMLInputElement>("discovery-target");
   if (start) {
@@ -136,6 +140,11 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
   if (input) input.disabled = running || submitting;
   if (targetInput) targetInput.disabled = running || submitting;
   const summary = status.summary;
+  if (review) {
+    review.hidden = !status.review_deferred_available;
+    review.disabled = running || submitting;
+    review.textContent = `补查低信号视频（${summary.deferred_videos || 0}）`;
+  }
   setText("discovery-videos", summary.videos_checked || 0);
   setText("discovery-duplicates", summary.duplicates_skipped || 0);
   const target = summary.target_new_videos || status.target_new_videos;
@@ -183,6 +192,8 @@ export function renderDiscovery(status: DiscoveryStatus, submitting = false) {
         : `已找到 ${summary.eligible || 0} 条可参与活动。`;
     }
     if (status.resume_available) message += "进度已保存，使用相同关键词和排序可继续。";
+    if (status.review_deferred_available) message += `另有 ${summary.deferred_videos || 0} 条低信号视频可补查。`;
+    if (summary.comment_reads_saved) message += `按明确入口省去 ${summary.comment_reads_saved} 次评论读取。`;
   }
   setText("discovery-badge", badge);
   setText("discovery-status", message);
@@ -395,6 +406,10 @@ export function bindDiscovery() {
     const job = activeJob(snapshot);
     if (submitting || job?.state !== "running" || job.cancel_requested) return;
     submit("/api/discovery/stop", { job_id: job.job_id });
+  });
+  element<HTMLButtonElement>("discovery-review-deferred")?.addEventListener("click", () => {
+    if (submitting || !snapshot.job || !snapshot.review_deferred_available || !requireSetup("control_discover")) return;
+    submit("/api/discovery/review-deferred", { job_id: snapshot.job.job_id });
   });
   importButton.addEventListener("click", () => {
     if (importButton.disabled || !snapshot.job || !requireSetup("control_discover")) return;

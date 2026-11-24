@@ -32,7 +32,8 @@ def _can_retry(entry):
 
 def task_label(action, params):
     if action == "control_discover":
-        return "检索新视频 · " + "、".join(params["keywords"])
+        label = "补查低信号视频" if params.get("_review_deferred") else "检索新视频"
+        return label + " · " + "、".join(params["keywords"])
     if action in {"participate_triple", "participate_sequential"}:
         return "自动顺序参与"
     label = JOB_ACTION_LABELS.get(action, action)
@@ -168,6 +169,11 @@ class TaskQueue:
                 for waiting in self.entries:
                     if (waiting["state"] in _WAITING and waiting["action"] == action
                             and waiting["params"].get("dynamic_id") == params.get("dynamic_id")):
+                        return deepcopy(waiting)
+            if action == "control_discover" and params.get("_review_deferred"):
+                for waiting in self.entries:
+                    if (waiting["state"] in _WAITING and waiting["action"] == action
+                            and waiting["params"].get("_discovery_checkpoint_id") == params["_discovery_checkpoint_id"]):
                         return deepcopy(waiting)
             self.entries.append(entry)
             self._save()

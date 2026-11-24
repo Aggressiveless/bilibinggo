@@ -97,7 +97,7 @@ def discovery_status(service, job=None):
     summary = {**{key: value for key, value in raw.items() if key in {
         "completion_reason", "videos_checked", "search_video_count", "verification_remaining",
         "sources_remaining", "has_more", "requests", "resumed", "phase", "target_new_videos",
-        "new_videos_checked", "duplicates_skipped", "search_exhausted",
+        "new_videos_checked", "duplicates_skipped", "search_exhausted", "deferred_videos", "comment_reads_saved",
     }}, **(job.get("result") or {})}
     summary.setdefault("requests_used", report.get("requests_used", 0))
     summary.setdefault("verification_remaining", report.get("verification_remaining", 0))
@@ -131,7 +131,8 @@ def discovery_status(service, job=None):
             "filter": {key: val for key, val in preview.items() if key != "dynamic_ids"},
             "queue": queue_summary(service, job["job_id"], report),
             "queue_job": secondary,
-            "resume_available": bool(raw.get("has_more") and expires > time.time())}
+            "resume_available": bool(raw.get("has_more") and expires > time.time()),
+            "review_deferred_available": bool(can_select and raw.get("deferred_videos") and expires > time.time())}
 
 
 def install_discovery(app):
@@ -185,6 +186,31 @@ def install_discovery(app):
         if (job.get("result") or {}).get("completion_reason") not in {"search_complete", "target_reached", "search_exhausted"}:
             raise AppError(ErrorCode.VALIDATION_ERROR, "请先继续检索并完成核验")
         return job, report
+
+    @router.post("/review-deferred")
+    def review_deferred(request: DiscoveryStopRequest):
+        from src.llm_settings import is_llm_ready
+        from web.task_queue import get_task_queue
+
+        service = get_control_service()
+        if not service.account()["credentials_present"]:
+            raise AppError(ErrorCode.AUTH_REQUIRED, "请先扫码登录")
+        if not is_llm_ready():
+            raise AppError(ErrorCode.LLM_NOT_READY, "请先完成 LLM 配置与连接测试")
+        try:
+            job, report = selectable_report(service, request.job_id)
+            context = report.get("review_context") or {}
+            key = context.get("checkpoint_id")
+            state = service.store.discovery_checkpoint(key, max_age=7 * 86400) if key else None
+            if not state or state.get("capture_id") != context.get("capture_id") or not state.get("deferred_video_sources"):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "本轮没有可补查的低信号视频")
+            params = {**context["params"], "_review_deferred": True, "_discovery_checkpoint_id": key,
+                      "_capture_id": context["capture_id"], "resume": True, "replay_completed": False}
+            entry = get_task_queue().submit("control_discover", params)
+            current = service.job(entry["control_job_id"]) if entry["control_job_id"] else job
+            return {**discovery_status(service, current), "queue_entry": entry}
+        except ControlError as exc:
+            raise AppError(exc.code, str(exc)) from exc
 
     @router.post("/filter")
     def filter_activities(request: DiscoveryFilterRequest):

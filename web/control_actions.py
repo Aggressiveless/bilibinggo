@@ -84,6 +84,8 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
         if result.get("target_new_videos") and result.get("completion_reason") == "target_reached":
             prefix = "目标新视频检索完成"
         message = f"{prefix}：找到 {result['eligible']} 条可导入活动，检查 {result.get('videos_checked', 0)} 个视频"
+        if result.get("deferred_videos"):
+            message += f"，{result['deferred_videos']} 条低信号视频待复核"
     elif action == "control_discovery_filter":
         cancelled = bool(cancel_event and cancel_event.is_set())
         message = result.get("message") or f"筛选完成，匹配 {result['matched']} 条活动"
@@ -163,10 +165,20 @@ def discover(service, job_id, params, event, progress=None):
     words = expand_keywords(params["keywords"]) if params.get("expand_keywords") else params["keywords"]
     comprehensive = params.get("mode") == "comprehensive_page"
     target = params.get("target_new_videos")
-    checkpoint_id = params.get("_queue_checkpoint_id") or "direct:" + digest(
+    checkpoint_id = params.get("_discovery_checkpoint_id") or params.get("_queue_checkpoint_id") or "direct:" + digest(
         [words, params.get("video_limit", 36), comprehensive, params.get("author_dynamic_limit", 2), target]
     )
     checkpoint_state = service.store.discovery_checkpoint(checkpoint_id, max_age=7 * 86400)
+    review_deferred = bool(params.get("_review_deferred"))
+    if review_deferred and (not checkpoint_state or checkpoint_state.get("capture_id") != params.get("_capture_id")):
+        raise ControlError("VALIDATION_ERROR", "待复核的检索进度已不可用")
+    review_params = {key: params[key] for key in (
+        "keywords", "mode", "video_limit", "target_new_videos", "author_dynamic_limit",
+        "expand_keywords", "candidate_limit", "collect_followers",
+    ) if key in params}
+    review_context = {"checkpoint_id": checkpoint_id, "params": review_params}
+    stats_keys = ("target_new_videos", "new_videos_checked", "duplicates_skipped", "search_exhausted",
+                  "deferred_videos", "comment_reads_saved")
     saved_checks = {}
     def publish(snapshot):
         checks = snapshot.get("video_checks", {})
@@ -174,8 +186,10 @@ def discover(service, job_id, params, event, progress=None):
         value = {"job_id": job_id, "candidates": discovery_candidates(snapshot["rows"]),
                  "errors": [{"message": str(v)} for v in snapshot["errors"][:100]], "stopped": False, "requests_used": snapshot["requests"], "keywords": words,
                  **{k: snapshot[k] for k in ("session_id", "resumed", "scan_completed", "verification_remaining")}}
-        target_stats = {k: snapshot[k] for k in ("target_new_videos", "new_videos_checked", "duplicates_skipped", "search_exhausted") if k in snapshot}
+        target_stats = {k: snapshot[k] for k in stats_keys if k in snapshot}
         state = snapshot["checkpoint_state"]
+        review_context["capture_id"] = state.get("capture_id")
+        value["review_context"] = review_context
         value.update(raw={**target_stats, "has_more": not state["done"],
                           "resume_expires_at": int(time.time()) + 7 * 86400})
         service.store.save_discovery_checkpoint(
@@ -201,6 +215,7 @@ def discover(service, job_id, params, event, progress=None):
                           candidate_limit=params.get("candidate_limit", 9), author_dynamic_limit=params.get("author_dynamic_limit", 2),
                           resume=params.get("resume", True), replay_completed=params.get("replay_completed", True),
                           checkpoint_state=checkpoint_state, checkpoint_batches=True,
+                          review_deferred=review_deferred, screen_videos=target is not None,
                           collect_followers=params.get("collect_followers", False), **target_options)
             rows = discovery_candidates([row for category in ("open", "review", "closed", "joined", "rejected", "source")
                                          for row in report.get(category, [])])
@@ -208,6 +223,7 @@ def discover(service, job_id, params, event, progress=None):
                      "stopped": bool(report["stopped"]), "requests_used": report["requests"], "raw": report, "keywords": words,
                     **{k: report[k] for k in ("session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining")}}
             value["raw"]["resume_expires_at"] = int(time.time()) + 7 * 86400
+            value["review_context"] = review_context
             service.store.put("discovery", str(job_id), redact_obj(value))
         finally:
             try:
@@ -218,7 +234,7 @@ def discover(service, job_id, params, event, progress=None):
     return {"discovery_job_id": job_id, "candidates": len(rows), "eligible": sum(v["eligible"] for v in rows),
             "requests_used": client.request_count, "partial": bool(value["stopped"] or value["errors"] or report["has_more"]),
             "errors": value["errors"],
-            **{k: report[k] for k in ("target_new_videos", "new_videos_checked", "duplicates_skipped", "search_exhausted") if k in report},
+            **{k: report[k] for k in stats_keys if k in report},
             **{k: report[k] for k in ("videos_checked", "search_video_count", "completion_reason", "cache_hits", "llm_requests", "llm_cache_hits",
                                      "session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining",
                                      "min_interval_seconds", "elapsed_seconds")}}
