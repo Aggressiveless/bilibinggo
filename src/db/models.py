@@ -120,6 +120,13 @@ class SourceCheckpointRow(SQLModel, table=True):
     checked_at: Optional[int] = None
 
 
+class SourcePendingLinkRow(SQLModel, table=True):
+    __tablename__ = "source_pending_links"
+
+    source_id: str = Field(primary_key=True, max_length=32)
+    dynamic_id: str = Field(primary_key=True, max_length=32)
+
+
 class WatchMetaRow(SQLModel, table=True):
     __tablename__ = "watch_meta"
 

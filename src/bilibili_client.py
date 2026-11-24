@@ -81,6 +81,10 @@ class BilibiliAPIError(RuntimeError):
         super().__init__(f"API error {code}: {message}")
 
 
+class BilibiliRequestError(RuntimeError):
+    """A read failed at the transport or response format layer."""
+
+
 class BilibiliClient:
     def __init__(self, timeout: float = 25.0, *, warmup: bool = True) -> None:
         headers = dict(DEFAULT_HEADERS)
@@ -194,6 +198,8 @@ class BilibiliClient:
                 resp = self._http_get(url, params=req_params, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
+                if not isinstance(data, dict):
+                    raise BilibiliRequestError("响应不是 JSON 对象")
                 code = data.get("code")
                 if code in (0, None):
                     return data
@@ -211,7 +217,9 @@ class BilibiliClient:
                     time.sleep(2.0 * (attempt + 1))
                     continue
                 if isinstance(exc, httpx.RequestError):
-                    raise RuntimeError(f"网络请求失败: {exc}") from exc
+                    raise BilibiliRequestError(f"网络请求失败: {exc}") from exc
+                if isinstance(exc, json.JSONDecodeError):
+                    raise BilibiliRequestError("响应不是有效 JSON") from exc
                 raise
         if last_error:
             raise last_error
@@ -225,7 +233,10 @@ class BilibiliClient:
             try:
                 resp = self._http_get(url, params=params or {}, headers=headers)
                 resp.raise_for_status()
-                return resp.json()
+                data = resp.json()
+                if not isinstance(data, dict):
+                    raise BilibiliRequestError("响应不是 JSON 对象")
+                return data
             except (httpx.HTTPStatusError, httpx.RequestError) as exc:
                 last_error = exc
                 if attempt < retries and (
@@ -235,14 +246,14 @@ class BilibiliClient:
                     time.sleep(2.0 * (attempt + 1))
                     continue
                 if isinstance(exc, httpx.RequestError):
-                    raise RuntimeError(f"网络请求失败: {exc}") from exc
+                    raise BilibiliRequestError(f"网络请求失败: {exc}") from exc
                 raise
             except json.JSONDecodeError as exc:
                 last_error = exc
                 if attempt < retries:
                     time.sleep(2.0 * (attempt + 1))
                     continue
-                raise RuntimeError("响应不是有效 JSON") from exc
+                raise BilibiliRequestError("响应不是有效 JSON") from exc
         if last_error:
             raise last_error
         raise RuntimeError("请求失败")
@@ -358,7 +369,7 @@ class BilibiliClient:
                     time.sleep(1.5 * (attempt + 1))
                     continue
                 if isinstance(exc, httpx.RequestError):
-                    raise RuntimeError(f"网络请求失败: {exc}") from exc
+                    raise BilibiliRequestError(f"网络请求失败: {exc}") from exc
                 raise
         if last_error:
             raise last_error

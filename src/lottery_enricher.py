@@ -13,6 +13,7 @@ from src.forward_parser import (
     parse_forward_content,
 )
 from src.lottery_api import (
+    ActivityDetailUnavailable,
     fetch_notice_for_interact,
     fetch_notice_for_reserve,
     fetch_reserve_button_status,
@@ -163,11 +164,11 @@ def _validate_enriched(activity: EnrichedActivity) -> EnrichedActivity:
             f"活动 {activity.dynamic_id} 被标记为 skipped，仅允许充电抽奖: {activity.skip_reason}"
         )
     if not activity.repost_fetched:
-        raise RuntimeError(f"活动 {activity.dynamic_id} 缺少热度数据")
+        raise ActivityDetailUnavailable(f"活动 {activity.dynamic_id} 缺少热度数据")
     if activity.lottery_time is None:
         activity = _apply_default_lottery_time(activity)
     if not activity.prizes:
-        raise RuntimeError(f"活动 {activity.dynamic_id} 缺少奖品信息")
+        raise ActivityDetailUnavailable(f"活动 {activity.dynamic_id} 缺少奖品信息")
     return activity
 
 
@@ -321,7 +322,7 @@ def enrich_forward_activity(
             initial_detail_item=detail_item,
         )
     if len(content_text.strip()) < MIN_CONTENT_LEN:
-        raise RuntimeError(f"无法提取动态正文（可能为纯图）: {dynamic_id}")
+        raise ActivityDetailUnavailable(f"无法提取动态正文（可能为纯图）: {dynamic_id}")
 
     parsed = parse_forward_content(dynamic_id, content_text)
     if parsed.get("error"):
@@ -415,7 +416,7 @@ def enrich_activity(
         raise RuntimeError(f"不支持的抽奖类型: {lottery_type}")
 
     if not resolved:
-        raise RuntimeError(f"未获取到 lottery_notice 数据: {dynamic_id}")
+        raise ActivityDetailUnavailable(f"未获取到 lottery_notice 数据: {dynamic_id}")
 
     notice, business_type, business_id = resolved
     if business_type == UPOWER_BUSINESS_TYPE:
@@ -441,7 +442,7 @@ def enrich_activity(
     )
     activity = _apply_default_lottery_time(activity)
     if not activity.prizes:
-        raise RuntimeError(f"未获取到奖品信息: {dynamic_id}")
+        raise ActivityDetailUnavailable(f"未获取到奖品信息: {dynamic_id}")
     return _validate_enriched(ctx.attach_repost_count(activity))
 
 

@@ -33,6 +33,10 @@ _detail_api_lock = threading.Lock()
 _detail_api_enabled = True
 
 
+class ActivityDetailUnavailable(RuntimeError):
+    """The activity detail did not supply the required fields."""
+
+
 def is_detail_api_enabled() -> bool:
     return _detail_api_enabled
 

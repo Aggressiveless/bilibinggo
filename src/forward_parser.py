@@ -510,9 +510,7 @@ def fetch_dynamic_content_with_retry(
         if attempt < attempts - 1:
             time.sleep(CLASSIFY_CONTENT_BACKOFF_SEC[attempt])
     message = f"无法获取动态正文: {dynamic_id}"
-    if last_error:
-        raise RuntimeError(message) from last_error
-    raise RuntimeError(message)
+    raise DynamicContentFetchError(message, dynamic_id=dynamic_id) from last_error
 
 
 CLASSIFY_SYSTEM_PROMPT = """## 角色

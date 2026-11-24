@@ -13,6 +13,7 @@ from src.app_logging import get_logger
 from src.bilibili_client import BilibiliClient
 from src.bilibili_login import login_with_qrcode
 from src.fetch_activity_info import mark_enriched_joined
+from src.log_redact import redact_text
 from src.log_span import PhaseSpanTracker, log_span
 from src.lottery_actions import ActionResult
 from src.lottery_classifier import PARTICIPATABLE_TYPES
@@ -30,6 +31,7 @@ from src.sources import (
     ds7_dajinli,
 )
 from src.sources.common import CheckResult, commit_source_checkpoint, is_valid_dynamic_id
+from src.sources.pending_links import clear_processed_source_links, pending_activity_urls, stage_source_links
 from src.state_store import set_last_pipeline_persisted, set_watch_last_synced_at
 from src.status_refresh import refresh_local_activity_statuses
 from web.activity_service import (
@@ -232,8 +234,10 @@ def _make_refresh_all_pipeline_progress(
     *,
     ds_count: int,
     span_tracker: PhaseSpanTracker | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> Callable[[int, int, str], None]:
     def on_pipeline_progress(done: int, total: int, message: str) -> None:
+        _raise_if_cancelled(cancel_event)
         substep = _pipeline_substep_index(message)
         if span_tracker is not None:
             phase_name = _PIPELINE_PHASE_BY_SUBSTEP.get(substep)
@@ -242,7 +246,7 @@ def _make_refresh_all_pipeline_progress(
                 span_tracker.set_phase(phase, name=span_name)
         progress(
             step=ds_count + substep,
-            total=REFRESH_ALL_TOTAL,
+            total=ds_count + REFRESH_ALL_PIPELINE_SUBSTEPS,
             message=_format_subprogress_message(message, done, total),
         )
 
@@ -288,11 +292,13 @@ def _pipeline_log_lines(result: PipelineResult) -> list[str]:
     if result.skip_reasons:
         parts = [f"{reason} {count}" for reason, count in result.skip_reasons.items()]
         skip_detail = f"，跳过 {result.skipped_count} 条（{' / '.join(parts)}）"
+    deferred_detail = f"，待重试 {len(result.deferred)} 条" if result.deferred else ""
     return [
         f"【新链接流水线】候选 {result.new_link_count} 条，"
         f"分类通过 {result.classified_count} 条，"
         f"详情 {result.enriched_count} 条，"
-        f"入库 {result.persisted_count} 条{skip_detail}"
+        f"入库 {result.persisted_count} 条{skip_detail}{deferred_detail}",
+        *[f"【待重试】{item.dynamic_id} · {item.stage} · {item.reason}" for item in result.deferred],
     ]
 
 
@@ -403,261 +409,136 @@ def run_action(
             "result": {"login_phase": "success"},
         }
 
-    if action == "refresh_all":
-        ds_results: list[dict[str, Any]] = []
-        sources_updated = 0
+    if action in {"refresh_all", "refresh_source"}:
+        source_id = str(params.get("source_id") or "").strip() if action == "refresh_source" else None
+        if source_id is None:
+            handlers = DS_HANDLERS
+            label = "一键更新"
+        else:
+            handler = DS_HANDLER_BY_ID.get(source_id)
+            if not handler:
+                raise ValueError(f"未知数据源：{source_id}")
+            handlers = [(source_id, *handler)]
+            label = source_id
+
+        ds_count = len(handlers)
+        total = ds_count + REFRESH_ALL_PIPELINE_SUBSTEPS
         progress(
             step=0,
-            total=REFRESH_ALL_TOTAL,
-            message=f"正在并行检查 {len(DS_HANDLERS)} 个数据源…",
+            total=total,
+            message=f"正在检查 {source_id}…" if source_id else f"正在并行检查 {ds_count} 个数据源…",
         )
         _raise_if_cancelled(cancel_event)
 
-        ds_payloads: list[tuple[int, dict[str, Any], str, CheckResult]] = []
-        with ThreadPoolExecutor(max_workers=len(DS_HANDLERS)) as executor:
+        sources: dict[str, dict[str, Any]] = {}
+        checks: dict[str, CheckResult] = {}
+        source_errors: dict[str, str] = {}
+        with ThreadPoolExecutor(max_workers=ds_count) as executor:
             # 每个 future 各自 copy_context：同一 Context 不能被多线程并发 enter
             futures = {
                 executor.submit(
-                    contextvars.copy_context().run,
-                    _run_ds_check,
-                    index,
-                    source_id,
-                    check_update,
-                    save_result,
-                ): source_id
-                for index, (source_id, check_update, save_result) in enumerate(DS_HANDLERS, start=1)
+                    contextvars.copy_context().run, _run_ds_check, index, sid, check_update, save_result,
+                ): sid
+                for index, (sid, check_update, save_result) in enumerate(handlers, start=1)
             }
-            for future in as_completed(futures):
+            for done, future in enumerate(as_completed(futures), start=1):
                 _raise_if_cancelled(cancel_event)
-                source_id = futures[future]
+                sid = futures[future]
                 try:
-                    ds_payloads.append(future.result())
+                    _, payload, log_line, check = future.result()
                 except Exception as exc:
-                    raise RuntimeError(f"{source_id} 检查失败：{exc}") from exc
+                    reason = redact_text(str(exc)).replace("\n", " ").strip()[:300] or type(exc).__name__
+                    source_errors[sid] = reason
+                    source = {
+                        "source_id": sid, "updated": False, "link_count": 0, "saved": False, "error": reason,
+                    }
+                    status_text = "检查失败，其余项目继续"
+                    log_line = f"【{sid}】检查失败：{reason}"
+                    logger.warning("%s 检查失败：%s", sid, reason)
+                else:
+                    checks[sid] = check
+                    source = {key: payload[key] for key in ("source_id", "updated", "link_count", "saved")}
+                    status_text = payload["status_text"]
+                sources[sid] = source
+                log_lines.append(log_line)
+                progress(step=done, total=total, message=f"{sid}：{status_text}", log_append=log_line)
 
-        ds_payloads.sort(key=lambda item: item[0])
-        ds_check_results: list[CheckResult] = []
-        for index, payload, log_line, check_result in ds_payloads:
-            _raise_if_cancelled(cancel_event)
-            ds_check_results.append(check_result)
-            if payload.get("updated"):
-                sources_updated += 1
-            ds_results.append(
-                {
-                    "source_id": payload["source_id"],
-                    "updated": payload["updated"],
-                    "link_count": payload["link_count"],
-                    "saved": payload["saved"],
-                }
-            )
-            log_lines.append(log_line)
-            progress(
-                step=index,
-                total=REFRESH_ALL_TOTAL,
-                message=f"{payload['source_id']}：{payload['status_text']}",
-                log_append=log_line,
-            )
-
-        if sources_updated == 0:
-            skip_line = f"【跳过流水线】{len(DS_HANDLERS)} 个数据源均为同一专栏，跳过后续步骤"
-            log_lines.append(skip_line)
-            progress(
-                step=REFRESH_ALL_TOTAL,
-                total=REFRESH_ALL_TOTAL,
-                message="均无新专栏，已跳过整个流水线",
-                log_append=skip_line,
-            )
-            logger.info("一键更新：%s 个数据源均无新专栏，跳过流水线", len(DS_HANDLERS))
-            set_last_pipeline_persisted(action="refresh_all", persisted_count=0)
-            return {
-                "ok": True,
-                "message": f"检查完成：{len(DS_HANDLERS)} 个数据源均无新专栏，已跳过整个流水线",
-                "result": {
-                    "sources": ds_results,
-                    "sources_updated": 0,
-                    "pipeline_skipped": True,
-                    "new_link_count": 0,
-                    "persisted_count": 0,
-                },
-                "log": sanitize_log("\n".join(log_lines).strip()),
-            }
-
+        source_ids = [sid for sid, _, _ in handlers]
+        ds_checks = [checks[sid] for sid in source_ids if sid in checks]
+        sources_updated = sum(check.updated for check in ds_checks)
         _raise_if_cancelled(cancel_event)
-        pipeline_step = len(DS_HANDLERS) + 1
-        progress(step=pipeline_step, total=REFRESH_ALL_TOTAL, message="正在分类新链接…")
+        # Persist inputs before processing, so a restart or a newer source edition cannot lose them.
+        pending = stage_source_links(source_ids, ds_checks)
+        links = pending_activity_urls(pending)
 
-        pipeline_spans = PhaseSpanTracker(logger=logger, component="pipeline")
-        pipeline_error: str | None = None
-        try:
-            pipeline_result = run_refresh_all_pipeline(
-                ds_check_results,
-                on_progress=_make_refresh_all_pipeline_progress(
-                    progress,
-                    ds_count=len(DS_HANDLERS),
-                    span_tracker=pipeline_spans,
-                ),
-            )
-        except Exception as exc:
-            pipeline_error = type(exc).__name__
-            raise
-        finally:
-            pipeline_spans.close(error_kind=pipeline_error)
-        _raise_if_cancelled(cancel_event)
-        for check_result in ds_check_results:
-            commit_source_checkpoint(check_result)
-        invalidate_activity_cache()
-        for line in _pipeline_log_lines(pipeline_result):
-            log_lines.append(line)
-        progress(
-            step=REFRESH_ALL_TOTAL,
-            total=REFRESH_ALL_TOTAL,
-            message=pipeline_result.message or "流水线完成",
-            log_append=log_lines[-1] if log_lines else "",
-        )
+        if source_errors and not ds_checks and not links:
+            errors = "；".join(f"{sid}：{reason}" for sid, reason in source_errors.items())
+            raise RuntimeError(f"数据源检查失败：{errors}")
 
-        summary_parts = [
-            f"检查 {len(DS_HANDLERS)} 个数据源，{sources_updated} 个有新专栏",
-            f"新链接 {pipeline_result.new_link_count} 条",
-            f"新入库 {pipeline_result.persisted_count} 条",
-        ]
-        if pipeline_result.skip_reasons:
-            summary_parts.append(f"跳过 {pipeline_result.skipped_count} 条")
-
-        logger.info(
-            "一键更新完成：新链接 %s，入库 %s",
-            pipeline_result.new_link_count,
-            pipeline_result.persisted_count,
-        )
-        set_last_pipeline_persisted(
-            action="refresh_all",
-            persisted_count=pipeline_result.persisted_count,
-        )
-
-        return {
-            "ok": True,
-            "message": "一键更新完成：" + "，".join(summary_parts),
-            "result": {
-                "sources": ds_results,
-                "sources_updated": sources_updated,
-                "pipeline": pipeline_result.to_dict(),
-            },
-            "log": sanitize_log("\n".join(log_lines).strip()),
+        result: dict[str, Any] = {
+            "sources": [sources[sid] for sid in source_ids],
+            "sources_updated": sources_updated,
+            "source_errors": source_errors,
         }
+        if source_id is not None:
+            result.update(source_id=source_id, source=sources[source_id])
 
-    if action == "refresh_source":
-        source_id = str(params.get("source_id") or "").strip()
-        handler = DS_HANDLER_BY_ID.get(source_id)
-        if not handler:
-            raise ValueError(f"未知数据源：{source_id}")
-        check_update, save_result = handler
-
-        progress(
-            step=0,
-            total=REFRESH_SOURCE_TOTAL,
-            message=f"正在检查 {source_id}…",
-        )
-        _raise_if_cancelled(cancel_event)
-        _, payload, log_line, check_result = _run_ds_check(1, source_id, check_update, save_result)
-        _raise_if_cancelled(cancel_event)
-        log_lines.append(log_line)
-        progress(
-            step=1,
-            total=REFRESH_SOURCE_TOTAL,
-            message=f"{source_id}：{payload['status_text']}",
-            log_append=log_line,
-        )
-
-        if not check_result.updated:
-            skip_line = f"【跳过流水线】{source_id} 为同一专栏，跳过后续步骤"
-            log_lines.append(skip_line)
+        if links or sources_updated:
             progress(
-                step=REFRESH_SOURCE_TOTAL,
-                total=REFRESH_SOURCE_TOTAL,
-                message="无新专栏，已跳过流水线",
-                log_append=skip_line,
+                step=ds_count + 1,
+                total=total,
+                message="正在分类新链接…" if sources_updated else f"正在重试 {len(links)} 条待处理链接…",
             )
-            logger.info("%s 无新专栏，跳过流水线", source_id)
-            set_last_pipeline_persisted(action="refresh_source", persisted_count=0)
-            return {
-                "ok": True,
-                "message": f"{source_id} 检查完成：无新专栏，已跳过流水线",
-                "result": {
-                    "source_id": source_id,
-                    "source": {
-                        "source_id": payload["source_id"],
-                        "updated": payload["updated"],
-                        "link_count": payload["link_count"],
-                        "saved": payload["saved"],
-                    },
-                    "pipeline_skipped": True,
-                    "new_link_count": 0,
-                    "persisted_count": 0,
-                },
-                "log": sanitize_log("\n".join(log_lines).strip()),
-            }
+            spans = PhaseSpanTracker(logger=logger, component="pipeline")
+            pipeline_error: str | None = None
+            try:
+                pipeline = run_refresh_all_pipeline(
+                    ds_checks,
+                    pending_links=links,
+                    on_progress=_make_refresh_all_pipeline_progress(
+                        progress, ds_count=ds_count, span_tracker=spans, cancel_event=cancel_event,
+                    ),
+                )
+            except Exception as exc:
+                pipeline_error = type(exc).__name__
+                raise
+            finally:
+                spans.close(error_kind=pipeline_error)
+            _raise_if_cancelled(cancel_event)
+            if not pipeline.ok:
+                raise RuntimeError(pipeline.message or "活动链接流水线失败")
 
-        _raise_if_cancelled(cancel_event)
-        progress(step=2, total=REFRESH_SOURCE_TOTAL, message="正在分类新链接…")
-        pipeline_spans = PhaseSpanTracker(logger=logger, component="pipeline")
-        pipeline_error: str | None = None
-        try:
-            pipeline_result = run_refresh_all_pipeline(
-                [check_result],
-                on_progress=_make_refresh_all_pipeline_progress(
-                    progress,
-                    ds_count=1,
-                    span_tracker=pipeline_spans,
-                ),
-            )
-        except Exception as exc:
-            pipeline_error = type(exc).__name__
-            raise
-        finally:
-            pipeline_spans.close(error_kind=pipeline_error)
-        _raise_if_cancelled(cancel_event)
-        commit_source_checkpoint(check_result)
-        invalidate_activity_cache()
-        for line in _pipeline_log_lines(pipeline_result):
-            log_lines.append(line)
-        progress(
-            step=REFRESH_SOURCE_TOTAL,
-            total=REFRESH_SOURCE_TOTAL,
-            message=pipeline_result.message or "流水线完成",
-            log_append=log_lines[-1] if log_lines else "",
-        )
+            # 所有候选都已持久化，推进检查点后仍能重试。入库成功后才移除已处理候选。
+            for check in ds_checks:
+                commit_source_checkpoint(check)
+            clear_processed_source_links(pending, {item.dynamic_id for item in pipeline.deferred})
+            invalidate_activity_cache()
+            pipeline_logs = _pipeline_log_lines(pipeline)
+            log_lines.extend(pipeline_logs)
+            result["pipeline"] = pipeline.to_dict()
+            persisted = pipeline.persisted_count
+            summary = [f"{sources_updated} 个数据源有新专栏", f"新链接 {pipeline.new_link_count} 条", f"新入库 {persisted} 条"]
+            if pipeline.skipped_count:
+                summary.append(f"跳过 {pipeline.skipped_count} 条")
+            if pipeline.deferred:
+                summary.append(f"{len(pipeline.deferred)} 条待重试")
+        else:
+            persisted = 0
+            result.update(pipeline_skipped=True, new_link_count=0, persisted_count=0)
+            summary = ["无新专栏" if not source_errors else "已检查的来源无新专栏"]
+            pipeline_logs = ["【跳过流水线】没有新链接或待重试链接"]
+            log_lines.extend(pipeline_logs)
 
-        summary_parts = [
-            f"{source_id} 有新专栏",
-            f"新链接 {pipeline_result.new_link_count} 条",
-            f"新入库 {pipeline_result.persisted_count} 条",
-        ]
-        if pipeline_result.skip_reasons:
-            summary_parts.append(f"跳过 {pipeline_result.skipped_count} 条")
-
-        logger.info(
-            "%s 更新完成：新链接 %s，入库 %s",
-            source_id,
-            pipeline_result.new_link_count,
-            pipeline_result.persisted_count,
-        )
-        set_last_pipeline_persisted(
-            action="refresh_source",
-            persisted_count=pipeline_result.persisted_count,
-        )
-
+        if source_errors:
+            summary.append(f"{len(source_errors)} 个数据源检查失败")
+        message = f"{label}完成：" + "，".join(summary)
+        logger.info("%s", message)
+        set_last_pipeline_persisted(action=action, persisted_count=persisted)
+        progress(step=total, total=total, message=message, log_append="\n".join(pipeline_logs))
         return {
             "ok": True,
-            "message": f"{source_id} 更新完成：" + "，".join(summary_parts),
-            "result": {
-                "source_id": source_id,
-                "source": {
-                    "source_id": payload["source_id"],
-                    "updated": payload["updated"],
-                    "link_count": payload["link_count"],
-                    "saved": payload["saved"],
-                },
-                "pipeline": pipeline_result.to_dict(),
-            },
+            "message": message,
+            "result": result,
             "log": sanitize_log("\n".join(log_lines).strip()),
         }
 

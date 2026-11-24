@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from src.bilibili_client import BilibiliClient
 from src.forward_parser import classify_forward_lottery
+from src.llm_client import LlmRequestError
 from src.lottery_api import fetch_lottery_notice
 from src.pipeline.classify_fetch_context import ClassifyFetchContext
 from src.lottery_classifier import (
@@ -112,7 +113,7 @@ def classify_new_link(client: BilibiliClient, dynamic_id: str) -> ClassifyOutcom
 
     parsed = classify_forward_lottery(dynamic_id, content)
     if parsed.get("error"):
-        raise RuntimeError(f"LLM 分类失败 {dynamic_id}: {parsed.get('error')}")
+        raise LlmRequestError(f"LLM 分类失败 {dynamic_id}: {parsed.get('error')}")
 
     if parsed.get("is_lottery"):
         return _outcome_with_api_cache(

@@ -4,14 +4,22 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.activity_store import known_activity_ids
+from src.db.engine import reset_engine_for_tests
+from src.forward_parser import DynamicContentFetchError, fetch_dynamic_content_with_retry
+from src.lottery_api import ActivityDetailUnavailable
+from src.lottery_enricher import EnrichedActivity, PrizeTier
+from src.pipeline.classify_step import ClassifyOutcome
 from src.pipeline.refresh_all_pipeline import PipelineResult
-from src.sources.common import CheckResult, commit_source_checkpoint
+from src.sources.common import CheckResult, commit_source_checkpoint, opus_link
+from src.sources.pending_links import stage_source_links
 from src.state_store import get_last_container, get_last_cv_id, save_state
 from web.actions import run_action
 
@@ -193,3 +201,99 @@ def test_refresh_source_keeps_checkpoint_when_pipeline_fails(
             run_action("refresh_source", {"source_id": "DS-3"})
 
     assert get_last_container("DS-3") == "https://www.bilibili.com/read/cv888001"
+    assert stage_source_links(["DS-3"], []) == {"DS-3": ["1220000000000000001"]}
+
+
+def test_refresh_keeps_going_then_retries_only_pending_links(isolated_home, monkeypatch):
+    body_failure, request_failure, unavailable, detail_failure, healthy = (
+        "1220000000000000001", "1220000000000000002", "1220000000000000003",
+        "1220000000000000004", "1220000000000000005",
+    )
+    save_state({"sources": {"DS-2": {"container_url": "https://www.bilibili.com/read/cv888001"}}})
+    results = {"DS-1": _updated_result(source_id="DS-1"), "DS-3": _updated_result(source_id="DS-3")}
+    wave = [body_failure, request_failure, unavailable, detail_failure, healthy]
+    results["DS-1"].activity_links = [opus_link(did) for did in wave]
+    # 两个来源引用同一条动态，统一分类并保存重试状态。
+    results["DS-3"].activity_links = [opus_link(body_failure)]
+    network_restored = False
+    classified = []
+
+    def check(index, source_id, *_):
+        if source_id == "DS-2":
+            raise RuntimeError("来源请求超时")
+        result = results.get(source_id) or _updated_result(source_id=source_id)
+        if source_id not in results or network_restored:
+            result.updated = False
+        payload = {
+            "source_id": source_id, "updated": result.updated, "link_count": len(result.activity_links),
+            "saved": True, "status_text": "检查完成",
+        }
+        return index, payload, "检查完成", result
+
+    def no_body(*_, **__):
+        raise DynamicContentFetchError("各抓取路径均未获得正文")
+
+    def time_out(*_, **__):
+        raise httpx.ReadTimeout("活动接口超时")
+
+    def classify(client, dynamic_id):
+        classified.append(dynamic_id)
+        if dynamic_id == body_failure and not network_restored:
+            fetch_dynamic_content_with_retry(client, dynamic_id)
+        if dynamic_id == request_failure and not network_restored:
+            client.request_json("https://api.bilibili.com/lottery", retries=0)
+        if dynamic_id == unavailable:
+            return ClassifyOutcome(dynamic_id, None, True, "动态不可见")
+        return ClassifyOutcome(dynamic_id, "转发抽奖", False)
+
+    def enrich(client, *, dynamic_id, **_):
+        if dynamic_id == detail_failure and not network_restored:
+            raise ActivityDetailUnavailable("活动详情暂不可用")
+        return EnrichedActivity(
+            dynamic_id=dynamic_id, source_url=opus_link(dynamic_id), lottery_type="转发抽奖",
+            enriched_at=1, business_id=dynamic_id, business_type=0, draw_status="active",
+            lottery_time=9_999_999_999, prizes=[PrizeTier("first", 1, "奖品")], participants=0,
+            conditions={}, winners=None, platform_participated=None, repost_fetched=True,
+        )
+
+    monkeypatch.setattr("web.actions._run_ds_check", check)
+    monkeypatch.setattr("src.bilibili_client.BilibiliClient._warmup", lambda self: None)
+    monkeypatch.setattr("src.bilibili_client.BilibiliClient._http_get", time_out)
+    monkeypatch.setattr("src.forward_parser.fetch_dynamic_content", no_body)
+    monkeypatch.setattr("src.forward_parser.CLASSIFY_CONTENT_ATTEMPTS", 1)
+    monkeypatch.setattr("src.pipeline.refresh_all_pipeline.classify_new_link", classify)
+    monkeypatch.setattr("src.pipeline.refresh_all_pipeline.enrich_activity", enrich)
+
+    first = run_action("refresh_all")
+
+    assert first["ok"] is True
+    assert first["result"]["source_errors"] == {"DS-2": "来源请求超时"}
+    assert first["result"]["pipeline"]["skip_reasons"] == {"动态不可见": 1}
+    assert {item["dynamic_id"]: item["stage"] for item in first["result"]["pipeline"]["deferred"]} == {
+        body_failure: "分类", request_failure: "分类", detail_failure: "详情",
+    }
+    assert "3 条待重试" in first["message"]
+    assert "无法获取动态正文" in first["log"]
+    assert classified == wave
+    assert known_activity_ids() == {healthy}
+    assert get_last_container("DS-1") == results["DS-1"].container_url
+    assert get_last_container("DS-2") == "https://www.bilibili.com/read/cv888001"
+    assert stage_source_links(["DS-1", "DS-3"], []) == {
+        "DS-1": [body_failure, request_failure, detail_failure], "DS-3": [body_failure],
+    }
+
+    reset_engine_for_tests()
+    network_restored = True
+    classified.clear()
+    second = run_action("refresh_source", {"source_id": "DS-1"})
+
+    assert second["result"]["sources_updated"] == 0
+    assert second["result"]["pipeline"]["deferred"] == []
+    assert second["result"]["pipeline"]["persisted_count"] == 3
+    assert classified == [body_failure, request_failure, detail_failure]
+    assert known_activity_ids() == {body_failure, request_failure, detail_failure, healthy}
+
+    # 再检查另一来源时，重复链接视为已处理，无需再次抓取。
+    third = run_action("refresh_source", {"source_id": "DS-3"})
+    assert third["result"]["pipeline"]["pipeline_skipped"] is True
+    assert stage_source_links(["DS-1", "DS-3"], []) == {"DS-1": [], "DS-3": []}

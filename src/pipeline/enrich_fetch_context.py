@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from src.bilibili_client import BilibiliClient
-from src.lottery_api import extract_activity_heat, fetch_dynamic_detail
+from src.lottery_api import ActivityDetailUnavailable, extract_activity_heat, fetch_dynamic_detail
 
 _UNSET = object()
 
@@ -33,7 +33,7 @@ class EnrichFetchContext:
             self._detail_item = _UNSET
             item = self.get_detail_item()
         if not item:
-            raise RuntimeError(f"无法获取活动热度: {activity.dynamic_id}")
+            raise ActivityDetailUnavailable(f"无法获取活动热度: {activity.dynamic_id}")
         heat, from_reserve = extract_activity_heat(item, lottery_type=activity.lottery_type)
         return replace(
             activity,

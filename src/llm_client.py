@@ -20,6 +20,10 @@ _LLM_RETRY_ATTEMPTS = 3
 _LLM_TEST_MAX_TOKENS = 64
 
 
+class LlmRequestError(RuntimeError):
+    """A completion or its response could not be processed."""
+
+
 def _format_llm_http_error(exc: httpx.HTTPStatusError) -> str:
     status = exc.response.status_code
     message = ""
@@ -133,18 +137,23 @@ def chat_json(*, system: str, user: str, config: LlmConfig | None = None) -> dic
         try:
             data = _post_chat_completion(config=cfg, headers=headers, payload=payload)
         except httpx.HTTPStatusError as exc:
-            raise RuntimeError(_format_llm_http_error(exc)) from exc
+            if exc.response.status_code in {401, 403, 404}:
+                raise RuntimeError(_format_llm_http_error(exc)) from exc
+            raise LlmRequestError(_format_llm_http_error(exc)) from exc
         except httpx.RequestError as exc:
-            raise RuntimeError(f"无法连接 LLM 接口：{exc}") from exc
+            raise LlmRequestError(f"无法连接 LLM 接口：{exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise LlmRequestError("LLM 接口返回的响应不是有效 JSON") from exc
 
-    content = (
-        ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    ).strip()
-
-    def _parse() -> dict[str, Any]:
-        return _extract_json_object(content)
-
-    return retry_call(_parse, attempts=2, base_delay=0.5, multiplier=1.5)
+    try:
+        content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        return retry_call(lambda: _extract_json_object(content), attempts=2, base_delay=0.5, multiplier=1.5)
+    except (AttributeError, IndexError, KeyError, TypeError) as exc:
+        raise LlmRequestError("LLM 接口返回的响应格式不完整") from exc
+    except json.JSONDecodeError as exc:
+        raise LlmRequestError("LLM 返回无法解析为 JSON") from exc
+    except RuntimeError as exc:
+        raise LlmRequestError(str(exc)) from exc
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
