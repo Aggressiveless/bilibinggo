@@ -7,6 +7,22 @@ from fastapi.testclient import TestClient
 from src.control_store import ControlStore, ControlError
 
 
+def test_public_dashboard_checks_origin_and_requires_dashboard_header(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from web.control_routes import install_control
+
+    monkeypatch.setenv("BINGGO_WEB_ORIGIN", "https://dashboard.example")
+    application = FastAPI()
+    application.post("/api/test-write")(lambda: {"ok": True})
+    install_control(application)
+    client = TestClient(application)
+    assert client.post("/api/test-write").status_code == 403
+    headers = {"X-Binggo-Dashboard": "1", "Origin": "https://dashboard.example"}
+    assert client.post("/api/test-write", headers=headers).status_code == 200
+    assert client.post("/api/test-write", headers={**headers, "Origin": "https://other.example"}).status_code == 403
+
+
 @pytest.fixture
 def controlled(isolated_home):
     from web.app import app

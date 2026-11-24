@@ -5,9 +5,11 @@ test("page actions enqueue while busy and logs own queue controls and history", 
   await setE2EState(request, { account: "logged_in", llm: "ready" });
   const active = { id: 900, action: "refresh_all", label: "更新信息源", state: "running", message: "模拟更新中", log: "模拟读取信息源" };
   const history = { id: 899, action: "participate_sequential", label: "模拟参与结果", state: "success", message: "模拟完成", log: "模拟结果：成功 1，失败 0" };
-  const entries: any[] = [{ ...active, id: "active", job_id: active.id }];
+  const failed = { id: 898, action: "refresh_source", label: "模拟更新失败", state: "error", message: "已保存进度" };
+  const entries: any[] = [{ ...active, id: "active", job_id: active.id },
+    { ...failed, id: "failed", job_id: failed.id, can_retry: true }];
   const submitted: string[] = [];
-  const snapshot = () => ({ entries, current_job: active, jobs: [active, history], pause_reason: "" });
+  const snapshot = () => ({ entries, current_job: active, jobs: [active, history, failed], pause_reason: "" });
   await page.route("**/api/summary", async route => {
     const response = await route.fetch();
     await route.fulfill({ response, json: { ...await response.json(), job: active } });
@@ -44,6 +46,12 @@ test("page actions enqueue while busy and logs own queue controls and history", 
     if (path.endsWith("/logs/899")) {
       await route.fulfill({ json: history });
       return;
+    }
+    if (path.endsWith("/failed/retry")) {
+      expect(route.request().method()).toBe("POST");
+      expect(route.request().headers()["x-binggo-dashboard"]).toBe("1");
+      entries.find(entry => entry.id === "failed").can_retry = false;
+      entries.push({ id: "retry", label: failed.label, state: "queued", job_id: null });
     }
     if (route.request().method() === "PATCH") {
       const id = path.split("/").pop();
@@ -91,6 +99,9 @@ test("page actions enqueue while busy and logs own queue controls and history", 
   await page.getByRole("button", { name: "移出检索新视频", exact: true }).click();
   await expect(rows).toHaveCount(3);
   await expect(page.locator("#task-history-list")).toContainText("检索新视频");
+  await page.getByRole("button", { name: "重试模拟更新失败", exact: true }).click();
+  await expect(rows.last()).toContainText("模拟更新失败");
+  await expect(page.getByRole("button", { name: "重试模拟更新失败", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "查看任务 899 日志", exact: true }).click();
   await expect(page.locator("#task-history-log")).toHaveText(history.log);
   expect(pageErrors).toEqual([]);

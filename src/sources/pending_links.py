@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from sqlalchemy import delete
 from sqlalchemy.dialects.sqlite import insert
 from sqlmodel import col, select
 
@@ -43,13 +44,16 @@ def pending_activity_urls(pending: dict[str, list[str]]) -> list[str]:
     return list(dict.fromkeys(opus_link(did) for ids in pending.values() for did in ids))
 
 
-def clear_processed_source_links(pending: dict[str, list[str]], deferred_ids: set[str]) -> None:
+def clear_processed_source_links(
+    pending: dict[str, list[str]], deferred_ids: set[str], *, processed_ids: set[str] | None = None,
+) -> None:
     """Acknowledge only links in this run's snapshot whose processing finished."""
-    processed = {source_id: set(ids) - deferred_ids for source_id, ids in pending.items()}
     with session_scope() as session:
-        rows = session.exec(
-            select(SourcePendingLinkRow).where(col(SourcePendingLinkRow.source_id).in_(list(processed)))
-        )
-        for row in rows:
-            if row.dynamic_id in processed[row.source_id]:
-                session.delete(row)
+        for source_id, ids in pending.items():
+            processed = set(ids) if processed_ids is None else processed_ids.intersection(ids)
+            processed -= deferred_ids
+            if processed:
+                session.execute(delete(SourcePendingLinkRow).where(
+                    col(SourcePendingLinkRow.source_id) == source_id,
+                    col(SourcePendingLinkRow.dynamic_id).in_(processed),
+                ))

@@ -17,6 +17,7 @@ from src.bilibili_login import QR_IMAGE_PATH
 from src.llm_client import test_llm_connection
 from src.llm_settings import (
     build_llm_config_from_inputs,
+    get_llm_config,
     get_llm_settings_public,
     load_llm_values,
     mark_llm_test_passed,
@@ -437,19 +438,19 @@ def api_test_llm_settings(request: LlmSettingsRequest) -> dict[str, Any]:
     require_login(account, message="请先扫码登录后再测试 LLM")
     try:
         saved = load_llm_values()
-        test_key = request.api_key.strip() or saved.get("LLM_API_KEY", "").strip()
-        test_base = (request.base_url or "").strip().rstrip("/")
-        test_model = request.model_name.strip() or saved.get("LLM_MODEL_NAME", "").strip()
+        test_base = (request.base_url or saved.get("LLM_BASE_URL", "")).strip().rstrip("/")
         config = build_llm_config_from_inputs(
-            api_key=test_key,
+            api_key=request.api_key,
             base_url=test_base,
-            model_name=test_model,
+            model_name=request.model_name,
         )
+        if config != get_llm_config():
+            raise ValueError("请先保存配置，再执行连接测试")
         endpoint = test_llm_connection(config)
         llm = mark_llm_test_passed(
-            api_key=test_key,
+            api_key=config.api_key,
             base_url=test_base,
-            model_name=test_model,
+            model_name=config.model_name,
         )
     except ValueError as exc:
         raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc

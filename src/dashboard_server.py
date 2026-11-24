@@ -66,6 +66,7 @@ def run_dashboard_server(*, log_level: str = "info") -> None:
         port=get_dashboard_port(),
         reload=False,
         log_level=log_level,
+        timeout_graceful_shutdown=10,
     )
     _active_server = uvicorn.Server(config)
     try:

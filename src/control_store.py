@@ -5,8 +5,9 @@ import hashlib
 import json
 import sqlite3
 import threading
+import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,10 @@ class ControlStore:
                     job_id INTEGER NOT NULL, bvid TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(job_id,bvid)
                 );
                 CREATE INDEX IF NOT EXISTS discovery_video_checks_latest ON discovery_video_checks(bvid,job_id DESC);
+                CREATE TABLE IF NOT EXISTS discovery_checkpoints (
+                    id TEXT PRIMARY KEY, saved_at INTEGER NOT NULL, payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS discovery_checkpoints_age ON discovery_checkpoints(saved_at);
             """)
 
     def connect(self):
@@ -73,8 +78,8 @@ class ControlStore:
         finally:
             db.close()
 
-    def put(self, kind: str, key: str, value: dict) -> None:
-        with self.transaction() as db:
+    def put(self, kind: str, key: str, value: dict, *, _db=None) -> None:
+        with (self.transaction() if _db is None else nullcontext(_db)) as db:
             db.execute("INSERT INTO records VALUES(?,?,?) ON CONFLICT(kind,key) DO UPDATE SET payload=excluded.payload",
                        (kind, key, json.dumps(value, ensure_ascii=False)))
 
@@ -88,13 +93,13 @@ class ControlStore:
             rows = db.execute("SELECT payload FROM records WHERE kind=? ORDER BY key", (kind,)).fetchall()
         return [json.loads(row[0]) for row in rows]
 
-    def remember_discovery_videos(self, videos, *, page_id=None, backfill=False) -> None:
+    def remember_discovery_videos(self, videos, *, page_id=None, backfill=False, _db=None) -> None:
         now = utc_now()
         rows = {}
         for video in videos:
             bvid, title = (video, "") if isinstance(video, str) else (video["bvid"], video.get("title", ""))
             rows[bvid] = title or rows.get(bvid, "")
-        with self.transaction() as db:
+        with (self.transaction() if _db is None else nullcontext(_db)) as db:
             for bvid, title in rows.items():
                 created = db.execute("INSERT OR IGNORE INTO discovery_videos VALUES(?,?,?)", (bvid, now, now)).rowcount
                 counted = bool(page_id and db.execute(
@@ -109,12 +114,31 @@ class ControlStore:
                     sightings=discovery_video_metadata.sightings+excluded.sightings
                 """, (bvid, title, int(counted), int(not created or page_id is None), backfill))
 
-    def save_discovery_video_checks(self, job_id: int, checks: dict) -> None:
-        with self.transaction() as db:
+    def save_discovery_video_checks(self, job_id: int, checks: dict, *, _db=None) -> None:
+        with (self.transaction() if _db is None else nullcontext(_db)) as db:
             db.executemany("""
                 INSERT INTO discovery_video_checks VALUES(?,?,?)
                 ON CONFLICT(job_id,bvid) DO UPDATE SET payload=excluded.payload
             """, [(job_id, bvid, json.dumps(check, ensure_ascii=False)) for bvid, check in checks.items()])
+
+    def discovery_checkpoint(self, checkpoint_id: str, *, max_age: int) -> dict | None:
+        with self.transaction() as db:
+            row = db.execute("SELECT payload FROM discovery_checkpoints WHERE id=? AND saved_at>=?",
+                             (checkpoint_id, int(time.time()) - max_age)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_discovery_checkpoint(self, checkpoint_id, state, *, job_id, report, checks, video_page=None):
+        now = int(time.time())
+        with self.transaction() as db:
+            if video_page:
+                self.remember_discovery_videos(video_page["videos"], page_id=video_page["id"], _db=db)
+            if checks:
+                self.save_discovery_video_checks(job_id, checks, _db=db)
+            self.put("discovery", str(job_id), report, _db=db)
+            db.execute("INSERT INTO discovery_checkpoints VALUES(?,?,?) "
+                       "ON CONFLICT(id) DO UPDATE SET saved_at=excluded.saved_at,payload=excluded.payload",
+                       (checkpoint_id, now, json.dumps(state, ensure_ascii=False)))
+            db.execute("DELETE FROM discovery_checkpoints WHERE saved_at<?", (now - 7 * 86400,))
 
     def discovery_video_count(self) -> int:
         with self.transaction() as db:

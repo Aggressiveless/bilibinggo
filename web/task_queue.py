@@ -21,6 +21,13 @@ from web.user_messages import JOB_ACTION_LABELS
 logger = get_logger("task_queue")
 QUEUEABLE_ACTIONS = frozenset({"participate", "participate_triple", "participate_sequential", "refresh_all", "refresh_source", "refresh_watch", "refresh_status"})
 _WAITING = frozenset({"queued", "starting", "running"})
+_RETRYABLE_ACTIONS = frozenset({"control_discover", "refresh_all", "refresh_source", "refresh_watch", "refresh_status"})
+
+
+def _can_retry(entry):
+    return entry.get("action") in _RETRYABLE_ACTIONS and (
+        entry["state"] in {"error", "interrupted"} or entry.get("partial", False)
+    )
 
 
 def task_label(action, params):
@@ -48,6 +55,8 @@ class TaskQueue:
                 status = self.runner.resolve_job_status(entry["job_id"]) if entry.get("job_id") else None
                 if status and status.state not in {"running", "interrupted"}:
                     entry.update(state=status.state, message=status.message)
+                    result = status.result or {}
+                    entry["partial"] = bool(result.get("source_errors") or (result.get("pipeline") or {}).get("deferred"))
                 else:
                     entry.update(state="interrupted", message="程序重启，任务未确认完成")
                 interrupted = True
@@ -65,6 +74,8 @@ class TaskQueue:
 
     def _start(self, entry):
         action, params = entry["action"], entry["params"]
+        if action in {"control_discover", "refresh_watch"}:
+            params = {**params, "_queue_checkpoint_id": entry.get("checkpoint_id", entry["id"])}
         if action == "control_discover":
             params = {**params, "request_budget": None}
             with self.service.lock:
@@ -90,13 +101,15 @@ class TaskQueue:
                 return
             active.update(state=job.state, message=job.message)
             result = job.result or {}
+            active["partial"] = bool(result.get("source_errors") or (result.get("pipeline") or {}).get("deferred"))
             if result.get("completion_reason") in {"platform_paused", "request_budget"}:
                 active.update(state="interrupted", message="检索未完成，队列已暂停")
                 self.pause_reason = "检索遇到平台限制或请求配额，剩余任务已暂停"
             self._save()
-        if self.pause_reason or self.runner.is_running():
+        if self.runner.is_running():
             return
-        entry = next((item for item in self.entries if item["state"] == "queued"), None)
+        entry = next((item for item in self.entries if item["state"] == "queued"
+                      and (not self.pause_reason or item.get("run_while_paused"))), None)
         if not entry:
             return
         entry.update(state="starting", message="正在提交任务")
@@ -122,21 +135,27 @@ class TaskQueue:
                 with self.lock:
                     self._advance()
                     waiting = any(entry["state"] in _WAITING for entry in self.entries)
-                    if not waiting or self.pause_reason:
+                    if not waiting or (self.pause_reason and not self._has_explicit_retry()):
                         return
                 time.sleep(0.25)
         except Exception:
             logger.exception("任务队列异常暂停")
             with self.lock:
                 self.pause_reason = "任务队列异常，等待恢复"
+                for entry in self.entries:
+                    entry.pop("run_while_paused", None)
                 self._save()
         finally:
             with self.lock:
                 self.worker = None
                 self._ensure_worker()
 
+    def _has_explicit_retry(self):
+        return any(entry.get("run_while_paused") and entry["state"] in _WAITING for entry in self.entries)
+
     def _ensure_worker(self):
-        if self.worker is None and not self.pause_reason and any(entry["state"] in _WAITING for entry in self.entries):
+        allowed = not self.pause_reason or self._has_explicit_retry()
+        if self.worker is None and allowed and any(entry["state"] in _WAITING for entry in self.entries):
             self.worker = threading.Thread(target=self._drain, name="dashboard-task-queue", daemon=True)
             self.worker.start()
 
@@ -160,7 +179,37 @@ class TaskQueue:
         with self.lock:
             entries = deepcopy(self.entries)
             pause_reason = self.pause_reason
+        retried = {entry.get("retry_of") for entry in entries}
+        for entry in entries:
+            entry["can_retry"] = _can_retry(entry) and entry["id"] not in retried
         return {"entries": entries, "pause_reason": pause_reason}
+
+    def retry(self, identifier):
+        with self.lock:
+            previous = next((entry for entry in self.entries if entry["id"] == identifier), None)
+            if previous is None or not _can_retry(previous):
+                raise AppError(ErrorCode.VALIDATION_ERROR, "这项任务无法从队列重试")
+            if any(entry.get("retry_of") == identifier for entry in self.entries):
+                self._ensure_worker()
+                return self.snapshot()
+            params = deepcopy(previous["params"])
+            if previous["action"] == "control_discover":
+                params.update(resume=True, replay_completed=False)
+            entry = {
+                "id": uuid.uuid4().hex, "created_at": utc_now(), "action": previous["action"],
+                "label": previous["label"], "params": params, "state": "queued",
+                "message": "等待重新执行", "job_id": None, "control_job_id": None,
+                "retry_of": identifier, "checkpoint_id": previous.get("checkpoint_id", identifier),
+                "run_while_paused": True,
+            }
+            self.entries.append(entry)
+            self._save()
+            # An explicitly retried task can clear a pause only when it is the sole waiting entry.
+            if self.pause_reason and not any(item is not entry and item["state"] in _WAITING for item in self.entries):
+                self.pause_reason = ""
+                self._save()
+            self._ensure_worker()
+            return self.snapshot()
 
     def change(self, identifier, operation):
         with self.lock:
@@ -227,5 +276,9 @@ def install_task_queue(app):
     @router.patch("/{entry_id}")
     def change(entry_id: str, request: QueueChangeRequest):
         return get_task_queue().change(entry_id, request.operation)
+
+    @router.post("/{entry_id}/retry")
+    def retry(entry_id: str):
+        return get_task_queue().retry(entry_id)
 
     app.include_router(router)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from typing import Callable
 
@@ -75,6 +76,8 @@ def sync_watch_forwards(
     *,
     users: list[WatchUser] | None = None,
     on_progress: ProgressCallback | None = None,
+    checkpoint: dict | None = None,
+    on_checkpoint: Callable[[dict], None] | None = None,
 ) -> WatchSyncResult:
     """拉取监控用户在时间窗口内的转发原动态链接（仅采集，不做活动库去重）。"""
     sync_started_at = int(time.time())
@@ -82,15 +85,27 @@ def sync_watch_forwards(
     window_start, window_end = compute_sync_window(now=sync_started_at, last_synced_at=last_synced_at)
 
     watch_users = users if users is not None else list_watch_users()
+    mids = [user.mid for user in watch_users]
     total = len(watch_users)
     if total == 0:
         raise RuntimeError("监控用户列表为空，请先在设置中添加用户")
 
     window_links: list[str] = []
     user_results: list[WatchUserScanResult] = []
+    if (checkpoint and checkpoint["users"] == mids
+            and window_end - checkpoint["window_end"] < MAX_WINDOW_SECONDS):
+        window_start, window_end = checkpoint["window_start"], checkpoint["window_end"]
+        window_links.extend(checkpoint["activity_links"])
+        user_results.extend(WatchUserScanResult(**item) for item in checkpoint["user_results"])
 
-    with BilibiliClient(timeout=30.0) as client:
-        for index, user in enumerate(watch_users, start=1):
+    def save_scan():
+        if on_checkpoint:
+            on_checkpoint({"users": mids, "window_start": window_start, "window_end": window_end,
+                           "activity_links": window_links, "user_results": [item.to_dict() for item in user_results]})
+
+    save_scan()
+    with (BilibiliClient(timeout=30.0) if len(user_results) < total else nullcontext()) as client:
+        for index, user in enumerate(watch_users[len(user_results):], start=len(user_results) + 1):
             if on_progress:
                 on_progress(index, total, f"正在扫描 {user.name} 的转发动态…")
             try:
@@ -115,6 +130,7 @@ def sync_watch_forwards(
             except Exception as exc:
                 message = str(exc).strip() or "扫描失败"
                 raise RuntimeError(f"扫描用户 {user.name}（{user.mid}）失败：{message}") from exc
+            save_scan()
             if index < total:
                 time.sleep(USER_REQUEST_DELAY)
 
@@ -122,7 +138,7 @@ def sync_watch_forwards(
 
     return WatchSyncResult(
         source_id=WATCH_SOURCE_ID,
-        synced_at=sync_started_at,
+        synced_at=window_end,
         window_start=window_start,
         window_end=window_end,
         activity_links=activity_links,

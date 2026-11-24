@@ -104,6 +104,36 @@ def test_repeated_last_page_without_metadata_terminates():
     assert len(client.calls) == 2
 
 
+def test_saved_batch_survives_loss_of_discovery_client(tmp_path):
+    class ProcessStopped(BaseException):
+        pass
+
+    store = ControlStore(tmp_path)
+
+    def on_checkpoint(snapshot):
+        store.save_discovery_checkpoint("queue-item", snapshot["checkpoint_state"], job_id=1, report={},
+                                        checks=snapshot["video_checks"], video_page=snapshot["video_page"])
+
+    class InterruptedClient(PaginatedClient):
+        def read(self, url, params, **kwargs):
+            if url == d.VIDEO_URL and params["bvid"] == bv(18):
+                raise ProcessStopped()
+            return super().read(url, params, **kwargs)
+
+    with pytest.raises(ProcessStopped):
+        discover_page(InterruptedClient(), ["抽奖"], target_new_videos=24, candidate_limit=0,
+                      known_bvids=set(), on_progress=on_checkpoint, checkpoint_batches=True)
+    checkpoint = store.discovery_checkpoint("queue-item", max_age=3600)
+    assert checkpoint["scan_index"] == 16
+    assert store.discovery_video_count() == 24
+    client = PaginatedClient()
+    result = discover_page(client, ["抽奖"], target_new_videos=24, candidate_limit=0,
+                           known_bvids=store.discovery_video_ids(), checkpoint_state=checkpoint,
+                           on_progress=on_checkpoint, checkpoint_batches=True, replay_completed=False)
+    assert result["resumed"] and result["videos_checked"] == 24
+    assert [(url, data["bvid"]) for url, data in client.calls] == [(d.VIDEO_URL, bv(i)) for i in range(16, 24)]
+
+
 @pytest.mark.parametrize("existing,checked,reason", [(20, 100, "target_reached"), (140, 12, "search_exhausted")])
 def test_browser_queue_reports_actual_target_progress(isolated_home, monkeypatch, existing, checked, reason):
     from web.app import app

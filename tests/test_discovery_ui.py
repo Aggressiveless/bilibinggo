@@ -141,7 +141,14 @@ def test_completed_search_keeps_bvs_and_imports_only_confirmed_matches(browser_c
     opened[1]["rule_text"] = "只需关注并转发，无需投币"
 
     def search(*args, **kwargs):
-        kwargs["on_video_page"](["BV11a1111111", "BV11a1111112", "BV11a1111113"])
+        kwargs["on_progress"]({
+            "checkpoint_state": {"done": True}, "video_page": {
+                "id": "test-page", "videos": ["BV11a1111111", "BV11a1111112", "BV11a1111113"],
+            },
+            "video_checks": {}, "rows": opened, "errors": [], "requests": 0, "eligible": 2,
+            "session_id": "test", "resumed": False, "scan_completed": True, "verification_remaining": 0,
+            "videos_checked": 3, "search_video_count": 3, "message": "完成", "phase": "finished",
+        })
         return dict(open=opened, review=[], closed=[], joined=[], errors=[], stopped="", requests=0,
                     session_id="test", resumed=False, scan_completed=True, has_more=False, verification_remaining=0,
                     sources_remaining=0, videos_checked=3, search_video_count=3, completion_reason="search_complete",

@@ -88,9 +88,27 @@ def _resolve_base_url(raw: str) -> str:
     parsed = urlparse(cleaned)
     if parsed.scheme not in ("http", "https"):
         raise ValueError("LLM 接口地址仅支持 http 或 https")
-    if not parsed.netloc:
+    if not parsed.hostname or parsed.username is not None or parsed.query or parsed.fragment:
         raise ValueError("LLM 接口地址格式无效")
+    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("远程 LLM 接口须使用 HTTPS")
+    _ = parsed.port
     return cleaned
+
+
+def _resolve_key(api_key: str | None, current: dict[str, str], base_url: str) -> str:
+    new_key = (api_key or "").strip()
+    if new_key:
+        return new_key
+    saved_key = current.get("LLM_API_KEY", "").strip()
+    if saved_key:
+        def origin(url: str):
+            parsed = urlparse(_resolve_base_url(url))
+            return parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        if origin(current.get("LLM_BASE_URL", "")) != origin(base_url):
+            raise ValueError("更换 LLM 服务地址时，请填写该服务的 API Key")
+    return saved_key
 
 
 def get_llm_config() -> LlmConfig | None:
@@ -129,7 +147,6 @@ def build_llm_config_from_inputs(
     model_name: str | None = None,
 ) -> LlmConfig:
     current = _read_values()
-    next_key = (api_key or "").strip() or current.get("LLM_API_KEY", "").strip()
     if base_url is not None:
         next_base_raw = (base_url or "").strip().rstrip("/")
         if next_base_raw:
@@ -138,6 +155,7 @@ def build_llm_config_from_inputs(
             next_base = current.get("LLM_BASE_URL", "").strip().rstrip("/")
     else:
         next_base = current.get("LLM_BASE_URL", "").strip().rstrip("/")
+    next_key = _resolve_key(api_key, current, next_base)
     next_model = (model_name or "").strip() or current.get("LLM_MODEL_NAME", "").strip()
     if not next_key:
         raise ValueError("请填写 API Key")
@@ -164,14 +182,12 @@ def save_llm_settings(
     model_name: str,
 ) -> dict[str, str | bool]:
     current = _read_values()
-    next_key = (api_key or "").strip()
-    if not next_key:
-        next_key = current.get("LLM_API_KEY", "").strip()
     next_base_raw = (base_url or "").strip().rstrip("/")
     if next_base_raw:
         next_base = _resolve_base_url(next_base_raw)
     else:
         next_base = current.get("LLM_BASE_URL", "").strip().rstrip("/")
+    next_key = _resolve_key(api_key, current, next_base)
     next_model = (model_name or "").strip()
     if not next_key:
         raise ValueError("请填写 LLM API Key")

@@ -20,7 +20,7 @@ from src.lottery_classifier import PARTICIPATABLE_TYPES
 from src.participate_preflight import ensure_activity_participatable
 from src.participation import participate_activity
 from src.participation_log import participation_succeeded
-from src.pipeline.refresh_all_pipeline import PipelineResult, run_new_links_pipeline, run_refresh_all_pipeline
+from src.pipeline.refresh_all_pipeline import PipelineResult, run_batched_new_links_pipeline, run_refresh_all_pipeline
 from src.sources import (
     ds1_xiaozhuli,
     ds2_fanqiao,
@@ -30,9 +30,9 @@ from src.sources import (
     ds6_nuomi,
     ds7_dajinli,
 )
-from src.sources.common import CheckResult, commit_source_checkpoint, is_valid_dynamic_id
+from src.sources.common import CheckResult, commit_source_checkpoint, is_valid_dynamic_id, normalize_activity_id
 from src.sources.pending_links import clear_processed_source_links, pending_activity_urls, stage_source_links
-from src.state_store import set_last_pipeline_persisted, set_watch_last_synced_at
+from src.state_store import get_watch_last_synced_at, set_last_pipeline_persisted, set_watch_last_synced_at
 from src.status_refresh import refresh_local_activity_statuses
 from web.activity_service import (
     PARTICIPATE_TRIPLE_LIMIT,
@@ -457,6 +457,8 @@ def run_action(
                     logger.warning("%s 检查失败：%s", sid, reason)
                 else:
                     checks[sid] = check
+                    stage_source_links([sid], [check])
+                    commit_source_checkpoint(check)
                     source = {key: payload[key] for key in ("source_id", "updated", "link_count", "saved")}
                     status_text = payload["status_text"]
                 sources[sid] = source
@@ -467,8 +469,7 @@ def run_action(
         ds_checks = [checks[sid] for sid in source_ids if sid in checks]
         sources_updated = sum(check.updated for check in ds_checks)
         _raise_if_cancelled(cancel_event)
-        # Persist inputs before processing, so a restart or a newer source edition cannot lose them.
-        pending = stage_source_links(source_ids, ds_checks)
+        pending = stage_source_links(source_ids, [])
         links = pending_activity_urls(pending)
 
         if source_errors and not ds_checks and not links:
@@ -491,10 +492,15 @@ def run_action(
             )
             spans = PhaseSpanTracker(logger=logger, component="pipeline")
             pipeline_error: str | None = None
+            def acknowledge_batch(batch, deferred):
+                clear_processed_source_links(pending, deferred, processed_ids=set(batch))
+                invalidate_activity_cache()
+
             try:
                 pipeline = run_refresh_all_pipeline(
                     ds_checks,
                     pending_links=links,
+                    on_batch=acknowledge_batch,
                     on_progress=_make_refresh_all_pipeline_progress(
                         progress, ds_count=ds_count, span_tracker=spans, cancel_event=cancel_event,
                     ),
@@ -508,10 +514,6 @@ def run_action(
             if not pipeline.ok:
                 raise RuntimeError(pipeline.message or "活动链接流水线失败")
 
-            # 所有候选都已持久化，推进检查点后仍能重试。入库成功后才移除已处理候选。
-            for check in ds_checks:
-                commit_source_checkpoint(check)
-            clear_processed_source_links(pending, {item.dynamic_id for item in pipeline.deferred})
             invalidate_activity_cache()
             pipeline_logs = _pipeline_log_lines(pipeline)
             log_lines.extend(pipeline_logs)
@@ -543,7 +545,22 @@ def run_action(
         }
 
     if action == "refresh_watch":
+        from web.control_service import get_control_service
+
         log_lines: list[str] = []
+        store = get_control_service().store
+        checkpoint_id = params.get("_queue_checkpoint_id", "direct")
+        checkpoint = store.get("watch_checkpoint", checkpoint_id) or {}
+        saved_scan = checkpoint.get("scan")
+        processed = set(checkpoint.get("processed") or [])
+
+        def save_watch_scan(scan):
+            nonlocal saved_scan
+            if saved_scan and (saved_scan["users"], saved_scan["window_end"]) != (scan["users"], scan["window_end"]):
+                processed.clear()
+            saved_scan = scan
+            store.put("watch_checkpoint", checkpoint_id, {"scan": scan, "processed": sorted(processed)})
+
         progress(step=0, total=REFRESH_WATCH_TOTAL, message="准备扫描监控用户动态…")
         _raise_if_cancelled(cancel_event)
 
@@ -552,7 +569,8 @@ def run_action(
             progress(step=1, total=REFRESH_WATCH_TOTAL, message=message)
 
         with log_span("watch_scan", logger=logger, component="pipeline", phase="watch_scan"):
-            watch_result = sync_watch_forwards(on_progress=on_watch_progress)
+            watch_result = sync_watch_forwards(on_progress=on_watch_progress, checkpoint=saved_scan,
+                                             on_checkpoint=save_watch_scan)
         _raise_if_cancelled(cancel_event)
         watch_line = (
             f"【监控扫描】窗口内 {watch_result.link_count} 条活动链接，"
@@ -572,9 +590,15 @@ def run_action(
 
         pipeline_spans = PhaseSpanTracker(logger=logger, component="pipeline")
         pipeline_error: str | None = None
+        def acknowledge_watch_batch(batch, deferred):
+            processed.update(set(batch) - deferred)
+            save_watch_scan(saved_scan)
+            invalidate_activity_cache()
+
         try:
-            pipeline_result = run_new_links_pipeline(
-                watch_result.activity_links,
+            pipeline_result = run_batched_new_links_pipeline(
+                [url for url in watch_result.activity_links if normalize_activity_id(url) not in processed],
+                on_batch=acknowledge_watch_batch,
                 on_progress=_make_refresh_watch_pipeline_progress(
                     progress,
                     span_tracker=pipeline_spans,
@@ -596,8 +620,9 @@ def run_action(
             log_append=log_lines[-1] if log_lines else "",
         )
 
-        set_watch_last_synced_at(watch_result.synced_at)
         save_watch_result(watch_result)
+        set_watch_last_synced_at(max(get_watch_last_synced_at() or 0, watch_result.synced_at))
+        store.put("watch_checkpoint", checkpoint_id, {})
         set_last_pipeline_persisted(
             action="refresh_watch",
             persisted_count=pipeline_result.persisted_count,

@@ -1,5 +1,35 @@
 from __future__ import annotations
 
+
+def test_watch_scan_reuses_completed_users_after_interruption(monkeypatch):
+    from copy import deepcopy
+    from unittest.mock import MagicMock
+    import pytest
+    from src.watch_sync import sync_watch_forwards
+    from src.watch_users import WatchUser
+
+    checkpoint = {}
+    calls = []
+    monkeypatch.setattr("src.watch_sync.BilibiliClient", MagicMock())
+    monkeypatch.setattr("src.watch_sync.USER_REQUEST_DELAY", 0)
+    monkeypatch.setattr("src.watch_sync.get_watch_last_synced_at", lambda: None)
+    def scan(_client, mid, **_):
+        calls.append(mid)
+        if calls == [11, 12]:
+            raise RuntimeError("worker stopped")
+        return []
+
+    def save(state):
+        checkpoint.update(deepcopy(state))
+
+    monkeypatch.setattr("src.watch_sync.collect_forward_links_for_user", scan)
+    users = [WatchUser(11, "one"), WatchUser(12, "two")]
+    with pytest.raises(RuntimeError, match="worker stopped"):
+        sync_watch_forwards(users=users, on_checkpoint=save)
+    assert len(checkpoint["user_results"]) == 1
+    result = sync_watch_forwards(users=users, checkpoint=checkpoint, on_checkpoint=save)
+    assert result.users_ok == 2 and calls == [11, 12, 12]
+
 import json
 from pathlib import Path
 

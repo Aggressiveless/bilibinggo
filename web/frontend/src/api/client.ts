@@ -36,12 +36,17 @@ export async function fetchJSON<T = unknown>(
   options: FetchJSONOptions = {},
 ): Promise<T> {
   const { timeoutMs = 30000, ...fetchOptions } = options;
+  const headers = new Headers(fetchOptions.headers);
+  if (!["GET", "HEAD", "OPTIONS"].includes((fetchOptions.method || "GET").toUpperCase())) {
+    headers.set("X-Binggo-Dashboard", "1");
+  }
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
       cache: "no-store",
       ...fetchOptions,
+      headers,
       signal: controller.signal,
     });
     if (!response.ok) {

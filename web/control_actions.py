@@ -97,7 +97,8 @@ def _run_control_action(action, params, *, on_progress, cancel_event):
         on_progress(step=result.get("new_videos_checked", 0), total=result["target_new_videos"], message=message)
     else:
         on_progress(step=1, total=1, message=message)
-    return {"ok": not cancelled, "cancelled": cancelled, "message": message, "log": message, "result": redact_obj(result)}
+    failed = action == "control_discover" and result.get("completion_reason") == "error"
+    return {"ok": not (cancelled or failed), "cancelled": cancelled, "message": message, "log": message, "result": redact_obj(result)}
 
 
 def discovery_candidates(rows):
@@ -156,24 +157,32 @@ def discovery_client(service, event, *, budget, min_interval_seconds=2.0):
 
 
 def discover(service, job_id, params, event, progress=None):
+    from src.control_store import digest
     from src.lottery_discovery import expand_keywords
     from src.lottery_discovery_broad import discover_page as find
     words = expand_keywords(params["keywords"]) if params.get("expand_keywords") else params["keywords"]
     comprehensive = params.get("mode") == "comprehensive_page"
     target = params.get("target_new_videos")
+    checkpoint_id = params.get("_queue_checkpoint_id") or "direct:" + digest(
+        [words, params.get("video_limit", 36), comprehensive, params.get("author_dynamic_limit", 2), target]
+    )
+    checkpoint_state = service.store.discovery_checkpoint(checkpoint_id, max_age=7 * 86400)
     saved_checks = {}
     def publish(snapshot):
         checks = snapshot.get("video_checks", {})
         changed = {bvid: check for bvid, check in checks.items() if saved_checks.get(bvid) != check}
-        if changed:
-            service.store.save_discovery_video_checks(job_id, redact_obj(changed))
-            saved_checks.update(changed)
         value = {"job_id": job_id, "candidates": discovery_candidates(snapshot["rows"]),
                  "errors": [{"message": str(v)} for v in snapshot["errors"][:100]], "stopped": False, "requests_used": snapshot["requests"], "keywords": words,
                  **{k: snapshot[k] for k in ("session_id", "resumed", "scan_completed", "verification_remaining")}}
         target_stats = {k: snapshot[k] for k in ("target_new_videos", "new_videos_checked", "duplicates_skipped", "search_exhausted") if k in snapshot}
-        value.update(raw=target_stats)
-        service.store.put("discovery", str(job_id), redact_obj(value))
+        state = snapshot["checkpoint_state"]
+        value.update(raw={**target_stats, "has_more": not state["done"],
+                          "resume_expires_at": int(time.time()) + 7 * 86400})
+        service.store.save_discovery_checkpoint(
+            checkpoint_id, state, job_id=job_id, report=redact_obj(value),
+            checks=redact_obj(changed), video_page=snapshot.get("video_page"),
+        )
+        saved_checks.update(changed)
         if progress:
             progress(step=snapshot["videos_checked"], total=target or max(1, min(params.get("video_limit", 36), snapshot["search_video_count"])),
                      message=f"{snapshot['message']} · 请求 {snapshot['requests']}，可导入 {snapshot['eligible']}",
@@ -191,16 +200,21 @@ def discover(service, job_id, params, event, progress=None):
                           comprehensive_page=comprehensive, joined_ids=joined, known_ids=known_activity_ids(), on_progress=publish,
                           candidate_limit=params.get("candidate_limit", 9), author_dynamic_limit=params.get("author_dynamic_limit", 2),
                           resume=params.get("resume", True), replay_completed=params.get("replay_completed", True),
-                          on_video_page=service.store.remember_discovery_videos,
+                          checkpoint_state=checkpoint_state, checkpoint_batches=True,
                           collect_followers=params.get("collect_followers", False), **target_options)
             rows = discovery_candidates([row for category in ("open", "review", "closed", "joined", "rejected", "source")
                                          for row in report.get(category, [])])
             value = {"job_id": job_id, "candidates": rows, "errors": [{"message": str(v)} for v in report["errors"][:100]],
                      "stopped": bool(report["stopped"]), "requests_used": report["requests"], "raw": report, "keywords": words,
-                     **{k: report[k] for k in ("session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining")}}
+                    **{k: report[k] for k in ("session_id", "resumed", "scan_completed", "has_more", "verification_remaining", "sources_remaining")}}
+            value["raw"]["resume_expires_at"] = int(time.time()) + 7 * 86400
             service.store.put("discovery", str(job_id), redact_obj(value))
         finally:
-            client.save()
+            try:
+                client.save()
+            except OSError:
+                from src.app_logging import get_logger
+                get_logger("job").warning("检索缓存未写入，已提交的检查点仍可恢复", exc_info=True)
     return {"discovery_job_id": job_id, "candidates": len(rows), "eligible": sum(v["eligible"] for v in rows),
             "requests_used": client.request_count, "partial": bool(value["stopped"] or value["errors"] or report["has_more"]),
             "errors": value["errors"],

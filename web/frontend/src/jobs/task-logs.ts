@@ -9,6 +9,7 @@ interface Entry {
   state: JobState;
   message: string;
   job_id: number | null;
+  can_retry?: boolean;
 }
 
 interface Job {
@@ -139,6 +140,9 @@ export function bindTaskLogs(onRunning: () => void) {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operation }),
   });
 
+  const retryButton = (entry: Entry) => taskButton("重试任务", `重试${entry.label}`,
+    () => void mutate(`/api/task-queue/${entry.id}/retry`, { method: "POST" }));
+
   const render = (snapshot: QueueSnapshot) => {
     const waiting = snapshot.entries.filter(entry => entry.state === "queued");
     const running = snapshot.entries.find(entry => entry.state === "starting" || entry.state === "running");
@@ -177,12 +181,20 @@ export function bindTaskLogs(onRunning: () => void) {
     });
     historyList.replaceChildren();
     const notStarted = snapshot.entries.filter(entry => !entry.job_id && ["error", "interrupted", "cancelled"].includes(entry.state));
-    notStarted.slice(-5).reverse().forEach(entry => historyList.append(taskRow(entry.label, entry.state, entry.message)));
+    notStarted.slice(-5).reverse().forEach(entry => {
+      const row = taskRow(entry.label, entry.state, entry.message);
+      if (entry.can_retry) row.append(retryButton(entry));
+      historyList.append(row);
+    });
     snapshot.jobs.filter(job => job.state !== "running").forEach(job => {
       const entry = snapshot.entries.find(item => item.job_id === job.id);
       const row = taskRow(entry?.label || job.label, entry?.state === "interrupted" ? entry.state : job.state,
         entry?.state === "interrupted" ? entry.message : job.message);
-      row.append(taskButton("查看日志", `查看任务 ${job.id} 日志`, () => void openLog(job.id)));
+      const controls = document.createElement("div");
+      controls.className = "task-row-controls";
+      controls.append(taskButton("查看日志", `查看任务 ${job.id} 日志`, () => void openLog(job.id)));
+      if (entry?.can_retry) controls.append(retryButton(entry));
+      row.append(controls);
       historyList.append(row);
     });
     if (!historyList.children.length) {

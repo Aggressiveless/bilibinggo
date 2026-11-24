@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+from collections import Counter
 from contextlib import nullcontext
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -31,6 +32,7 @@ from src.sources.common import CheckResult, normalize_activity_id
 
 ProgressCallback = Callable[[int, int, str], None]
 logger = get_logger("job")
+SOURCE_BATCH_SIZE = 8
 _ITEM_ERRORS = (
     httpx.HTTPError,
     BilibiliAPIError,
@@ -256,6 +258,7 @@ def run_refresh_all_pipeline(
     workers: int = 4,
     on_progress: ProgressCallback | None = None,
     pending_links: list[str] | None = None,
+    on_batch: Callable[[list[str], set[str]], None] | None = None,
 ) -> PipelineResult:
     """完整 refresh_all：Step 1 结果 → Step 2～5。"""
     if not pending_links and not any(result.updated for result in ds_results):
@@ -272,4 +275,45 @@ def run_refresh_all_pipeline(
         )
 
     raw_links = _collect_updated_links(ds_results) if pending_links is None else pending_links
-    return run_new_links_pipeline(raw_links, workers=workers, on_progress=on_progress, defer_item_errors=True)
+    return run_batched_new_links_pipeline(raw_links, workers=workers, on_progress=on_progress,
+                                          on_batch=on_batch, defer_item_errors=True)
+
+
+def run_batched_new_links_pipeline(
+    links: list[str],
+    *,
+    workers: int = 4,
+    on_progress: ProgressCallback | None = None,
+    on_batch: Callable[[list[str], set[str]], None] | None = None,
+    defer_item_errors: bool = False,
+) -> PipelineResult:
+    from src.sources.common import opus_link
+
+    ids = list(dict.fromkeys(identifier for url in links if (identifier := normalize_activity_id(url))))
+    result = PipelineResult(True, True, len(links), 0, 0, 0, 0, 0)
+    skip_reasons: Counter[str] = Counter()
+    with (BilibiliClient(warmup=False) if len(ids) > SOURCE_BATCH_SIZE else nullcontext()) as client:
+        for start in range(0, len(ids), SOURCE_BATCH_SIZE):
+            batch = ids[start:start + SOURCE_BATCH_SIZE]
+            part = run_new_links_pipeline(
+                [opus_link(identifier) for identifier in batch],
+                workers=workers, on_progress=on_progress, defer_item_errors=defer_item_errors,
+                **({"client": client} if client is not None else {}),
+            )
+            if not part.ok:
+                return part
+            if on_batch:
+                on_batch(batch, {item.dynamic_id for item in part.deferred})
+            result.pipeline_skipped &= part.pipeline_skipped
+            result.new_link_count += part.new_link_count
+            result.classified_count += part.classified_count
+            result.skipped_count += part.skipped_count
+            result.enriched_count += part.enriched_count
+            result.persisted_count += part.persisted_count
+            result.deferred.extend(part.deferred)
+            skip_reasons.update(part.skip_reasons)
+    result.skip_reasons = dict(skip_reasons)
+    result.message = f"新入库 {result.persisted_count} 条活动"
+    if result.deferred:
+        result.message += f"，{len(result.deferred)} 条待重试"
+    return result

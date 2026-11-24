@@ -17,6 +17,8 @@ from src.discovery_video_audit import audit_note, snapshot_video_checks, video_t
 AUTHOR_SEARCH_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space/search"
 AUTHOR_SEARCH_FEATURES = "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard"
 SESSION_TTL_SECONDS = 1800
+CHECKPOINT_BATCH_SIZE = 8
+CHECKPOINT_INTERVAL_SECONDS = 20
 LARGE_CREATOR_FOLLOWERS = 100_000
 
 
@@ -130,7 +132,7 @@ def _fair_order(tasks):
 def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_page=True,
                   candidate_limit=9, known_ids=None, joined_ids=None, author_dynamic_limit=2,
                   resume=True, replay_completed=True, on_progress=None, on_video_page=None, collect_followers=False,
-                  target_new_videos=None, known_bvids=None):
+                  target_new_videos=None, known_bvids=None, checkpoint_state=None, checkpoint_batches=False):
     now = int(time.time()) if now is None else now
     known_ids, joined_ids = set(known_ids or []), set(joined_ids or [])
     known_bvids = set(known_bvids or [])
@@ -142,8 +144,9 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
     if target_new_videos is not None:
         identity += ["new-videos-v1", target_new_videos]
     key = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()[:24]
-    previous = sessions.get(key)
-    resumed = bool(resume and previous and previous.get("expires_at", 0) > time.time()
+    saved_checkpoint = checkpoint_state and checkpoint_state.get("session_id") == key
+    previous = checkpoint_state if saved_checkpoint else sessions.get(key)
+    resumed = bool(resume and previous and (saved_checkpoint or previous.get("expires_at", 0) > time.time())
                    and (replay_completed or not previous.get("done")))
     state = previous if resumed else {"session_id": key, "expires_at": time.time() + SESSION_TTL_SECONDS,
         "search_index": 0, "videos": [], "scan_index": 0, "source_index": 0, "verify_index": 0,
@@ -160,6 +163,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
     added_open = 0
     started = time.monotonic()
     follower_counts = state.setdefault("follower_counts", {}) if collect_followers else {}
+    last_checkpoint = None
 
     def target_stats():
         if target_new_videos is None:
@@ -198,17 +202,34 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             values.append(row)
         return values
 
-    def emit(message):
+    def emit(message, *, force=False, video_page=None):
+        nonlocal last_checkpoint
         if not on_progress:
             return
+        work = state["scan_index"] + state["source_index"] + state["verify_index"] + len(follower_counts)
+        clock = time.monotonic()
+        if checkpoint_batches and not force and last_checkpoint:
+            previous_work, previous_clock, _, _ = last_checkpoint
+            if work - previous_work < CHECKPOINT_BATCH_SIZE and clock - previous_clock < CHECKPOINT_INTERVAL_SECONDS:
+                return
         rows = current_rows()
+        video_range = None
+        if checkpoint_batches and last_checkpoint:
+            _, _, previous_scans, previous_videos = last_checkpoint
+            if state["phase"] == "search":
+                video_range = (previous_videos, len(state["videos"]))
+            elif state["phase"] == "scan_videos" and not force:
+                video_range = (previous_scans, state["scan_index"])
         on_progress({"phase": state["phase"], "message": message, "videos_checked": state["scan_index"],
             "search_video_count": len(state["videos"]), "requests": client.request_count,
             "eligible": sum(r["status"] == "open" and r.get("kind") == "dynamic" for r in rows), "rows": rows, "errors": state["errors"],
             "cache_hits": getattr(client, "cache_hits", 0), "llm_requests": getattr(client, "llm_requests", 0),
             "llm_cache_hits": getattr(client, "llm_cache_hits", 0), "session_id": key, "resumed": resumed,
             "scan_completed": scan_completed(), "verification_remaining": len(state["tasks"]) - state["verify_index"],
-            "video_checks": snapshot_video_checks(state, rows, legacy=legacy), **target_stats()})
+            "video_checks": snapshot_video_checks(state, rows, legacy=legacy, video_range=video_range),
+            **({"checkpoint_state": state, "video_page": video_page} if checkpoint_batches else {}),
+            **target_stats()})
+        last_checkpoint = (work, clock, state["scan_index"], len(state["videos"]))
 
     def attach_source(existing, duplicate):
         sources = existing.setdefault("source_videos", [existing["source_video"]])
@@ -371,12 +392,15 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                     state["videos"].append(row)
                     seen.add(identifier)
                     accepted.append(row)
+            video_page = {
+                "videos": [{"bvid": row["bvid"], "title": video_title(row.get("title"))}
+                           for row in (accepted if target_new_videos is not None else page)],
+                "id": f"{capture_id}:{state['search_index']}:{page_number}",
+            }
             if on_video_page:
                 # Only claimed new videos enter the library in target mode;
                 # excess results stay available to a future run.
-                on_video_page(({"bvid": row["bvid"], "title": video_title(row.get("title"))}
-                               for row in (accepted if target_new_videos is not None else page)),
-                              page_id=f"{capture_id}:{state['search_index']}:{page_number}")
+                on_video_page(iter(video_page["videos"]), page_id=video_page["id"])
             signature = [row["bvid"] for row in page]
             repeated = signature == state.get("last_page_bvids")
             state["last_page_bvids"] = signature
@@ -390,7 +414,8 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                 state.pop("last_page_bvids", None)
             else:
                 state["search_page"] = page_number + 1
-            emit(f"已收集新视频 {len(state['videos'])}/{video_limit}" if target_new_videos else f"已读取 {len(state['videos'])} 个视频")
+            emit(f"已收集新视频 {len(state['videos'])}/{video_limit}" if target_new_videos else f"已读取 {len(state['videos'])} 个视频",
+                 force=True, video_page=video_page)
 
         # No article, author lookup, target verification or LLM extraction is allowed
         # before the whole selected video page has been collected.
@@ -440,7 +465,7 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                 state["errors"].append(f"{bvid}: {str(exc)[:200]}")
                 detail["notes"].append(audit_note("pending", "视频详情未能读取，无法核验"))
             state["scan_index"] += 1
-        emit(f"整页扫描完成：{state['scan_index']} 个视频，开始解析入口")
+        emit(f"整页扫描完成：{state['scan_index']} 个视频，开始解析入口", force=True)
 
         resolve_sources()
         if state["verify_index"] == 0:
@@ -526,7 +551,8 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
     if not state["done"]:
         state["expires_at"] = state["last_used_at"] + SESSION_TTL_SECONDS
     state["phase"] = "finished" if state["done"] else state["phase"]
-    emit(f"本轮结束：视频 {state['scan_index']}/{len(state['videos'])}，剩余候选 {len(state['tasks']) - state['verify_index']}，进度已保存")
+    emit(f"本轮结束：视频 {state['scan_index']}/{len(state['videos'])}，剩余候选 {len(state['tasks']) - state['verify_index']}，进度已保存",
+         force=True)
     result = {status: [r for r in rows if r["status"] == status] for status in ("open", "review", "closed", "joined", "rejected", "source")}
     return {"checked_at": now, "requests": client.request_count, "stopped": stopped, "errors": state["errors"],
         "completion_reason": completion, "search_video_count": len(state["videos"]), "videos_checked": state["scan_index"],

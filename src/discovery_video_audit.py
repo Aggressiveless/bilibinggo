@@ -21,8 +21,10 @@ def _source_ids(item):
     return [url.rsplit("/", 1)[-1] for url in item.get("source_videos", [item["source_video"]])]
 
 
-def snapshot_video_checks(state, rows, *, legacy=False):
-    checks = {video["bvid"]: {"title": video_title(video.get("title")), "notes": []} for video in state["videos"]}
+def snapshot_video_checks(state, rows, *, legacy=False, video_range=None):
+    start, stop = video_range if video_range is not None else (0, len(state["videos"]))
+    videos = state["videos"][start:stop]
+    checks = {video["bvid"]: {"title": video_title(video.get("title")), "notes": []} for video in videos}
     for bvid, check in checks.items():
         data = state.get("scan_notes", {}).get(bvid, {})
         if data.get("title"):
@@ -64,7 +66,7 @@ def snapshot_video_checks(state, rows, *, legacy=False):
             note = task.get("audit") or audit_note("pending", "旧版未保留该候选的核验依据")
         add(task, note)
 
-    for index, check in enumerate(checks.values()):
+    for index, check in enumerate(checks.values(), start=start):
         if not check["notes"]:
             reason = "旧版未记录该视频的逐条判定" if legacy and index < state["scan_index"] else "等待扫描视频标题、简介和作者评论"
             check["notes"].append(audit_note("pending", reason))

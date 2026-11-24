@@ -100,3 +100,23 @@ def test_restart_pauses_remaining_queue(isolated_home):
     state = queue.snapshot()
     assert state["pause_reason"]
     assert [entry["state"] for entry in state["entries"]] == ["interrupted", "queued"]
+
+
+def test_retry_preserves_history_and_does_not_duplicate_queue_entry(isolated_home, monkeypatch):
+    service = get_control_service()
+    service.store.put("dashboard", "task_queue", {"entries": [
+        {"id": "first", "state": "error", "job_id": 9, "action": "control_discover",
+         "label": "检索", "params": {"keywords": ["抽奖"]}},
+        {"id": "participation", "state": "error", "job_id": 10, "action": "participate",
+         "label": "参与", "params": {}},
+    ]})
+    queue = TaskQueue(service, JobRunner())
+    monkeypatch.setattr(queue, "_ensure_worker", lambda: None)
+    monkeypatch.setattr("web.task_queue.get_task_queue", lambda: queue)
+    api = TestClient(app)
+    for _ in range(2):
+        assert api.post("/api/task-queue/first/retry").status_code == 200
+    assert api.post("/api/task-queue/participation/retry").status_code == 400
+    original, _, retry = queue.snapshot()["entries"]
+    assert original["state"] == "error" and original["job_id"] == 9 and not original["can_retry"]
+    assert retry["state"] == "queued" and retry["checkpoint_id"] == "first" and retry["params"]["resume"]

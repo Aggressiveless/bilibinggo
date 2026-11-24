@@ -163,7 +163,7 @@ def test_refresh_source_commits_checkpoint_only_after_pipeline_success(
     assert get_last_container("DS-3") == "https://www.bilibili.com/read/cv999001"
 
 
-def test_refresh_source_keeps_checkpoint_when_pipeline_fails(
+def test_refresh_source_keeps_pending_links_when_pipeline_fails(
     isolated_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,8 +200,35 @@ def test_refresh_source_keeps_checkpoint_when_pipeline_fails(
         with pytest.raises(RuntimeError, match="无法获取动态正文"):
             run_action("refresh_source", {"source_id": "DS-3"})
 
-    assert get_last_container("DS-3") == "https://www.bilibili.com/read/cv888001"
+    assert get_last_container("DS-3") == "https://www.bilibili.com/read/cv999001"
     assert stage_source_links(["DS-3"], []) == {"DS-3": ["1220000000000000001"]}
+
+
+def test_source_retry_does_not_repeat_committed_batches(isolated_home, monkeypatch):
+    ids = [str(1220000000000000000 + i) for i in range(10)]
+    check = _updated_result(source_id="DS-3")
+    check.activity_links = [opus_link(i) for i in ids]
+    def scan(index, *_):
+        return index, dict(source_id="DS-3", updated=check.updated, link_count=10,
+                           saved=True, status_text="完成"), "完成", check
+
+    calls = []
+    def classify(_client, identifier):
+        calls.append(identifier)
+        if len(calls) == 9:
+            raise RuntimeError("worker stopped")
+        return ClassifyOutcome(dynamic_id=identifier, lottery_type=None, skipped=True)
+
+    monkeypatch.setattr("web.actions._run_ds_check", scan)
+    monkeypatch.setattr("src.pipeline.refresh_all_pipeline.classify_new_link", classify)
+    monkeypatch.setattr("src.pipeline.refresh_all_pipeline.BilibiliClient", MagicMock())
+    with pytest.raises(RuntimeError, match="worker stopped"):
+        run_action("refresh_source", {"source_id": "DS-3"})
+    assert stage_source_links(["DS-3"], []) == {"DS-3": ids[8:]}
+    check.updated = False
+    assert run_action("refresh_source", {"source_id": "DS-3"})["ok"]
+    assert calls == ids[:9] + ids[8:]
+    assert stage_source_links(["DS-3"], []) == {"DS-3": []}
 
 
 def test_refresh_keeps_going_then_retries_only_pending_links(isolated_home, monkeypatch):

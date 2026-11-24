@@ -517,12 +517,19 @@ def comment_dynamic(
     csrf: str,
     referer: str,
 ) -> ActionResult:
-    payload = client.post_form(
-        COMMENT_URL,
-        {"oid": rid, "type": comment_type, "message": message, "csrf": csrf},
-        referer=referer,
-        raise_on_code=False,
-    )
+    try:
+        payload = client.post_form(
+            COMMENT_URL,
+            {"oid": rid, "type": comment_type, "message": message, "csrf": csrf},
+            referer=referer,
+            retries=0,
+            raise_on_code=False,
+        )
+    except (httpx.HTTPError, RuntimeError, AttributeError) as exc:
+        status = f"HTTP {exc.response.status_code}，" if isinstance(exc, httpx.HTTPStatusError) else ""
+        raise RuntimeError(f"{status}评论结果未确认。请先到 B 站核对评论，再决定是否重试。") from None
+    if not isinstance(payload, dict) or payload.get("code") is None:
+        raise RuntimeError("评论响应缺少结果。请先到 B 站核对评论，再决定是否重试。")
     code = _api_code(payload)
     if code == 0:
         return ActionResult("comment", True, message[:80])
