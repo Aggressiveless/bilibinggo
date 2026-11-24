@@ -1,5 +1,3 @@
-> **Komerser fork · 6.0.2** — [更新内容](CHANGELOG.md) · [下载 6.0.2](https://github.com/Komerser/bilibinggo/releases/tag/v6.0.2)。Windows 程序为 `Binggo-RepostFix.exe`，默认端口 `8182`，数据位于程序旁的 `user-data`。本 fork 基于 [上游 bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
-
 <p align="center">
   <img src="docs/images/logo.svg" alt="Binggo" width="80" height="80">
 </p>
@@ -7,71 +5,85 @@
 <h1 align="center">Binggo</h1>
 
 <p align="center">
-  本机运行的 B 站抽奖助手 · Local-first Bilibili lottery helper
+  B 站抽奖助手 · 发现、核验、分享与参与活动
 </p>
 
 <p align="center">
   <a href="https://github.com/Komerser/bilibinggo/releases/latest"><img src="https://img.shields.io/github/v/release/Komerser/bilibinggo?style=flat-square" alt="Release"></a>
   <a href="https://github.com/Komerser/bilibinggo/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Komerser/bilibinggo/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
   <a href="https://github.com/Komerser/bilibinggo/stargazers"><img src="https://img.shields.io/github/stars/Komerser/bilibinggo?style=flat-square" alt="Stars"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Komerser/bilibinggo/releases/latest"><b>下载</b></a>
+  <a href="https://github.com/Komerser/bilibinggo/releases/tag/v6.0.2"><b>下载 6.0.2</b></a>
   &nbsp;·&nbsp;
-  <a href="https://luovicter-collab.github.io/bilibinggo/"><b>官网</b></a>
+  <a href="CHANGELOG.md"><b>更新记录</b></a>
   &nbsp;·&nbsp;
   <a href="docs/console.md"><b>文档</b></a>
   &nbsp;·&nbsp;
   <a href="https://github.com/Komerser/bilibinggo/issues"><b>反馈</b></a>
 </p>
 
-Binggo 从 UP 合集与监控用户动态发现进行中的抽奖活动，在本地 Web 控制台登录、更新与参与（含三连批量）。Cookie、活动库与参与记录只保存在你的电脑上；控制台仅监听 `127.0.0.1`，不往云端同步账号数据。
+Binggo 从 UP 主合集、监控用户动态和视频检索中发现抽奖活动。你可以在 Web 控制台核验候选、分享活动清单、逐项参与，并查看任务进度与用量。由 Komerser 维护的这个 fork 基于 victor 的 [bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
 
-## Features
+## 使用与转载声明
 
-- **发现** — 多路 UP 合集增量同步，监控名单补全转发动态
-- **参与** — 互动 / 转发 / 预约（关注 + 预约）；充电抽奖自动跳过
-- **三连** — 按当前筛选一次参与最多 3 条未参加活动
-- **调度** — 可选定时更新与参与；与进行中的任务撞车时自动停机
-- **跨平台** — Windows 安装包与便携版；macOS Apple Silicon（dmg / zip）
+Binggo 仅供个人学习和研究，是未经哔哩哔哩授权或认可的第三方工具。使用时须遵守适用的法律法规与 B 站平台规则。禁止将本项目或衍生工具用于收费代抽、营销引流等商业用途，禁止批量操作多账号、养号、控号和矩阵运营，也不得用于黑产或其他违法违规活动。账号封禁、功能限制、数据丢失或法律追责等使用后果由使用者自行承担，项目作者及贡献者不承担相关责任。见 [上游免责声明](https://github.com/luovicter-collab/bilibinggo#免责声明)。
 
-## Quick start
+转载或二次发布时，请保留使用声明及适用的版权和许可说明，注明原作者 victor 并附上上游仓库链接。转载本 fork 的内容或发行包时，也请注明维护者 Komerser 并附上 [本 fork 的仓库](https://github.com/Komerser/bilibinggo)。
 
-面向**安装包用户**；开发环境端口为 `8787`，见下文 [Development](#development)。
+## 6.0.2 更新
 
-1. 安装并打开 Binggo，浏览器进入控制台（安装包默认 [http://127.0.0.1:8181](http://127.0.0.1:8181)）。
-2. 侧栏 **扫码登录** → 在「数据源」对需要的合集点 **更新此源**（日常优先单源，慎用「一键更新」）。
-3. 在「活动」筛选未参加 → **参与** 或 **开始顺序参与**。顺序参与会按当前筛选和排序逐项处理全部未参加活动，遇到失败停止，进度和结果在日志页查看。转发抽奖需在概览配置 LLM 并测试通过。
+- **活动分享**。在「活动」按当前筛选导出所有页中仍开放且开奖时间明确的活动。JSON 只含活动 ID、原动态链接、类型、奖品和开奖时间。
+- **活动导入**。导入前可以预览新增、重复和过期数量，确认后追加活动。参与状态仍由接收方自己的账号决定。
+- **数据源更新修复**。遇到单条不可见动态或活动页返回 404 时，记录跳过原因并继续处理其他活动。
 
-新装后列表为空是正常的，完成登录与更新后会出现活动。逐步说明见 **[控制台使用指南](docs/console.md)**，图文上手见 **[官网 · 上手](https://luovicter-collab.github.io/bilibinggo/#start)**。
+完整的更新内容见 [CHANGELOG](CHANGELOG.md) 和 [6.0.2 发布说明](https://github.com/Komerser/bilibinggo/releases/tag/v6.0.2)。
 
-| 平台 | Release 文件 |
-|------|----------------|
-| Windows | `Binggo-Setup-win64.exe`（推荐）、`Binggo-Portable-win64.zip` |
-| macOS | `Binggo-macOS-arm64.dmg`、`Binggo-macOS-arm64.zip` |
+## 下载与安装
 
-👉 **[Latest release](https://github.com/Komerser/bilibinggo/releases/latest)**
+| 平台 | 6.0.2 下载 |
+| --- | --- |
+| Windows x64 | [安装包](https://github.com/Komerser/bilibinggo/releases/download/v6.0.2/Binggo-Setup-win64.exe) · [便携版](https://github.com/Komerser/bilibinggo/releases/download/v6.0.2/Binggo-Portable-win64.zip) |
+| Ubuntu | [部署包](https://github.com/Komerser/bilibinggo/releases/download/v6.0.2/Binggo-6.0.2-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Komerser/bilibinggo/releases/download/v6.0.2/Binggo-6.0.2-ubuntu.tar.gz.sha256) |
 
-> Windows 未商业签名、macOS 未公证时，首次运行需按系统提示选择「仍要运行」或右键 **打开**。Intel Mac 请用源码运行。
+### Windows x64
 
-## Documentation
+运行安装包，或解压便携版后运行 `Binggo-RepostFix.exe`。控制台默认打开在 [127.0.0.1:8182](http://127.0.0.1:8182)，数据位于程序旁的 `user-data`。升级时先等任务结束，再退出 Binggo 并备份整个 `user-data`。覆盖或重装程序时保留该目录。
 
-| | |
-|---|---|
-| [docs/console.md](docs/console.md) | 控制台各页面说明 |
-| [docs/quickstart.md](docs/quickstart.md) | 上手补充 |
-| [docs/cli.md](docs/cli.md) | 命令行 |
-| [mcp/README.md](mcp/README.md) | 可选 MCP / Agent Skill（不打入安装包） |
+### Ubuntu
 
-设计与数据源等维护者文档见 `docs/` 目录。
+部署包内含预构建前端和安装说明。首次启动会创建空数据库。Ubuntu 24.04 可使用 systemd 安装，使服务开机自启并在进程退出后重启。
 
-## Privacy
+```bash
+sha256sum -c Binggo-6.0.2-ubuntu.tar.gz.sha256
+tar -xzf Binggo-6.0.2-ubuntu.tar.gz
+cd binggo-server-6.0.2
+sudo bash deploy.sh install
+```
 
-凭证保存在本机；数据目录随安装方式不同（安装包、`BINGGO_PORTABLE`、`BINGGO_HOME` 等），可在控制台「概览 → 项目信息」查看当前路径。勿轻信私信「中奖」并要求转账或验证码 — 说明见官网 **[谨防诈骗](https://luovicter-collab.github.io/bilibinggo/#notice)**。
+Ubuntu 22.04 可在 Docker Engine 和 Compose 就绪后，运行 `sudo bash deploy.sh docker`。同一台服务器选一种方式即可。systemd 将数据存到 `/var/lib/binggo`，Docker 将数据存到解压目录下的 `user-data`。
 
-## Development
+在自己的电脑上运行 `ssh -N -L 8182:127.0.0.1:8182 用户名@服务器地址`，再打开 [127.0.0.1:8182](http://127.0.0.1:8182)。SSH 断开后服务继续运行。服务重启后，如页面显示队列或工作流已暂停，可根据任务状态手动恢复。
+
+## 开始使用
+
+1. 在控制台侧栏扫码登录。需要使用转发解析或模型核验时，在「概览」配置 LLM 并完成连接测试。
+2. 在「数据源」更新指定 UP 主合集或监控用户动态，也可以检索视频、核验候选后导入。刚安装时活动列表为空，更新或导入后即可开始筛选。
+3. 在「活动」查看规则，选择单条参与或「开始顺序参与」。顺序参与会按当前筛选和排序跨页逐项处理未参加活动，遇到失败停止后续操作。
+4. 在「日志」查看任务进度、参与结果和等待队列。等待项可调整顺序或移除，「概览」可查看 B 站请求和模型用量。
+
+视频检索会按唯一新视频计数并保存进度，停下后可继续检索。更新、检索和参与共用任务队列，便于在同一处查看与管理。
+
+## 数据与隐私
+
+Cookie、模型配置、活动库和参与历史保存在运行 Binggo 的电脑或服务器。启用 LLM 功能时，需要解析的内容会发给你配置的模型服务。当前数据路径可在「概览 → 项目信息」中查看。下载包只包含程序和配置模板，活动分享文件也只包含上面列出的活动字段。
+
+## 文档与开发
+
+- [控制台使用指南](docs/console.md)
+- [命令行说明](docs/cli.md)
+- [可选的 MCP v2 接入](mcp/README.md)
 
 Python **3.12+**，Node.js **20+**（仅构建前端时需要）。
 
@@ -82,11 +94,7 @@ cd web/frontend && npm ci && npm run build && cd ../..
 python scripts/run_dashboard.py
 ```
 
-测试：`pip install -r requirements-dev.txt && python -m pytest tests/ -q`
-
-## Changelog
-
-版本与更新说明见 **[GitHub Releases](https://github.com/Komerser/bilibinggo/releases)**。
+源码模式默认使用 `127.0.0.1:8787`。运行测试前安装 `requirements-dev.txt`，然后执行 `python -m pytest tests/ -q`。
 
 ## Star History
 
@@ -97,6 +105,6 @@ python scripts/run_dashboard.py
 </picture>
 <!-- star-history:end -->
 
-## License
+## 许可说明
 
-[MIT](LICENSE)
+上游 README 将项目标注为 MIT，当前仓库未附独立的 `LICENSE` 文件。转载与使用声明见上文。参见 [上游许可说明](https://github.com/luovicter-collab/bilibinggo#license)。
