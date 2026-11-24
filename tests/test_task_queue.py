@@ -106,7 +106,7 @@ def test_retry_preserves_history_and_does_not_duplicate_queue_entry(isolated_hom
     service = get_control_service()
     service.store.put("dashboard", "task_queue", {"entries": [
         {"id": "first", "state": "error", "job_id": 9, "action": "control_discover",
-         "label": "检索", "params": {"keywords": ["抽奖"]}},
+         "label": "检索", "params": {"keywords": ["抽奖"], "min_interval_seconds": 1}},
         {"id": "participation", "state": "error", "job_id": 10, "action": "participate",
          "label": "参与", "params": {}},
     ]})
@@ -120,3 +120,4 @@ def test_retry_preserves_history_and_does_not_duplicate_queue_entry(isolated_hom
     original, _, retry = queue.snapshot()["entries"]
     assert original["state"] == "error" and original["job_id"] == 9 and not original["can_retry"]
     assert retry["state"] == "queued" and retry["checkpoint_id"] == "first" and retry["params"]["resume"]
+    assert retry["params"]["min_interval_seconds"] == 1

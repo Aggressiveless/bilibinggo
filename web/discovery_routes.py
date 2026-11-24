@@ -24,6 +24,7 @@ class DiscoveryStartRequest(BaseModel):
     keyword_match: Literal["combined", "separate"] = "separate"
     mode: Literal["standard", "comprehensive_page"] = "standard"
     target_new_videos: int = Field(default=100, ge=1, le=10000, strict=True)
+    min_interval_seconds: int = Field(default=2, ge=1, le=2, strict=True)
 
     @model_validator(mode="after")
     def clean_keywords(self):
@@ -45,7 +46,7 @@ def discovery_job_params(request: DiscoveryStartRequest):
         raise AppError(ErrorCode.VALIDATION_ERROR, "综合排序每轮只运行一个查询，请使用组合搜索")
     return {"keywords": request.keywords, "mode": request.mode, "video_limit": request.target_new_videos,
             "keyword_match": request.keyword_match,
-            "target_new_videos": request.target_new_videos,
+            "target_new_videos": request.target_new_videos, "min_interval_seconds": request.min_interval_seconds,
             "request_budget": None, "candidate_limit": 0, "resume": True, "replay_completed": False,
             "collect_followers": True}
 
@@ -100,7 +101,8 @@ def discovery_status(service, job=None):
         job = next((service.job(row["job_id"]) for row in service.store.list_jobs(limit=1000)
                     if row["action"] == "control_discover"), None)
     if job is None:
-        return {"job": None, "keywords": ["转发抽奖"], "summary": {}, "bv_count": bv_count, "resume_available": False}
+        return {"job": None, "keywords": ["转发抽奖"], "summary": {}, "bv_count": bv_count,
+                "min_interval_seconds": 2, "resume_available": False}
     report = service.store.get("discovery", str(job["job_id"])) or {}
     raw = report.get("raw") or {}
     summary = {**{key: value for key, value in raw.items() if key in {
@@ -134,6 +136,7 @@ def discovery_status(service, job=None):
             "keyword_match": job.get("keyword_match"),
             "mode": job.get("discovery_mode", "standard"),
             "target_new_videos": job.get("target_new_videos"),
+            "min_interval_seconds": job.get("min_interval_seconds", 2),
             "summary": summary, "bv_count": bv_count, "stop_message": raw.get("stopped", ""),
             "pending_selection": len(pending),
             "candidates": selectable,

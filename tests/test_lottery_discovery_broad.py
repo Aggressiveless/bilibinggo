@@ -2,6 +2,7 @@
 import json
 
 import httpx
+import pytest
 
 from src import lottery_discovery as d
 from src import lottery_discovery_broad as broad
@@ -116,17 +117,18 @@ def test_author_keyword_search_selects_latest_two_own_originals():
     assert metadata["original_matches"] == 3 and metadata["has_more"]
 
 
-def test_two_second_request_start_spacing_and_cache_does_not_consume_budget(tmp_path, monkeypatch):
+@pytest.mark.parametrize("options, spacing", [({}, 2), ({"min_interval_seconds": 1}, 1)])
+def test_request_start_spacing_and_cache_does_not_consume_budget(tmp_path, monkeypatch, options, spacing):
     clock = [1000.0]
     monkeypatch.setattr(d.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(d.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     monkeypatch.setattr(BilibiliClient, "_http_get", lambda self, url, **kwargs:
         httpx.Response(200, request=httpx.Request("GET", url), json={"code": 0, "data": {}}))
-    with d.DiscoveryClient(tmp_path / "cache.json", budget=3) as client:
+    with d.DiscoveryClient(tmp_path / "cache.json", budget=3, **options) as client:
         for identifier in ("one", "one", "two", "three"):
             client.read(d.VIDEO_URL, {"bvid": identifier}, referer="", ttl=600)
         assert client.request_count == 3 and client.cache_hits == 1
-        assert client.request_start_offsets == [0.0, 2.0, 4.0]
+        assert client.request_start_offsets == [0.0, spacing, spacing * 2]
 
 
 def test_two_independently_verified_home_posts_remain_eligible(monkeypatch):

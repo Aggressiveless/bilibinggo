@@ -501,6 +501,13 @@
                 <label class="field-label" for="discovery-target">目标新视频数</label>
                 <input id="discovery-target" class="form-input" type="number" min="1" max="10000" step="1" value="100" required aria-describedby="discovery-help" />
               </div>
+              <div class="discovery-mode">
+                <label class="field-label" for="discovery-request-interval">B 站请求间隔</label>
+                <select id="discovery-request-interval" class="form-input">
+                  <option value="2">2 秒（默认）</option>
+                  <option value="1">1 秒（试用）</option>
+                </select>
+              </div>
               <div class="action-row">
                 <button type="submit" class="btn btn-primary btn-pill" id="discovery-start" disabled>开始检索</button>
                 <button type="button" class="btn btn-secondary btn-pill" id="discovery-stop" disabled>停止检索</button>

@@ -171,7 +171,13 @@ def test_web_screening_keeps_deferred_videos_available_for_review(isolated_home,
         def save(self):
             pass
 
-    monkeypatch.setattr("web.control_actions.discovery_client", lambda *a, **kw: nullcontext(Client()))
+    intervals = []
+
+    def discovery_client(*args, min_interval_seconds, **kwargs):
+        intervals.append(min_interval_seconds)
+        return nullcontext(Client())
+
+    monkeypatch.setattr("web.control_actions.discovery_client", discovery_client)
     checked = []
     def inspect(_client, identifier, **kwargs):
         checked.append(identifier)
@@ -188,10 +194,13 @@ def test_web_screening_keeps_deferred_videos_available_for_review(isolated_home,
             time.sleep(.03)
         pytest.fail("The discovery queue did not finish")
 
-    initial = api.post("/api/discovery/start?enqueue=true", json={"keywords": ["抽奖"], "target_new_videos": 3})
+    initial = api.post("/api/discovery/start?enqueue=true", json={
+        "keywords": ["抽奖"], "target_new_videos": 3, "min_interval_seconds": 1,
+    })
     assert initial.status_code == 200, initial.text
     first = finish()
     assert first["job"]["state"] == "success" and first["summary"]["eligible"] == 1
+    assert first["min_interval_seconds"] == 1
     assert first["review_deferred_available"] and first["summary"]["deferred_videos"] == 1
     assert first["summary"]["comment_reads_saved"] == 1
     assert [params["oid"] for url, params in reads if url == d.REPLIES_URL] == [2, 3]
@@ -202,6 +211,7 @@ def test_web_screening_keeps_deferred_videos_available_for_review(isolated_home,
     assert review.status_code == 200, review.text
     second = finish()
     assert second["job"]["state"] == "success" and second["summary"]["eligible"] == 1
+    assert second["min_interval_seconds"] == 1 and intervals == [1, 1]
     assert not second["review_deferred_available"] and second["summary"]["deferred_videos"] == 0
     assert checked == [target] and not reads and model_inputs == ["今天去散步"]
 
@@ -235,6 +245,7 @@ def test_browser_queue_reports_actual_target_progress(isolated_home, monkeypatch
     assert job["progress_step"] == checked and job["progress_total"] == 100
     assert job["result"]["completion_reason"] == reason
     status = api.get("/api/discovery/current").json()
+    assert status["min_interval_seconds"] == 2
     assert status["keywords"] == ["抽奖 GTA6 PS5"] and status["keyword_match"] == "combined"
     assert {params["keyword"] for url, params in client.calls if url == d.SEARCH_URL} == {"抽奖 GTA6 PS5"}
     assert status["target_new_videos"] == 100

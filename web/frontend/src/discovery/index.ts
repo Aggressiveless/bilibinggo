@@ -75,6 +75,7 @@ interface DiscoveryStatus {
   keyword_match?: "combined" | "separate" | null;
   mode?: "standard" | "comprehensive_page";
   target_new_videos?: number;
+  min_interval_seconds?: number;
   summary: {
     videos_checked?: number;
     verification_remaining?: number;
@@ -220,6 +221,7 @@ export function bindDiscovery() {
   const mode = element<HTMLSelectElement>("discovery-mode");
   const keywordMatch = element<HTMLSelectElement>("discovery-keyword-match");
   const targetInput = element<HTMLInputElement>("discovery-target");
+  const requestInterval = element<HTMLSelectElement>("discovery-request-interval");
   const stop = element<HTMLButtonElement>("discovery-stop");
   const importButton = element<HTMLButtonElement>("discovery-import");
   const selectedButton = element<HTMLButtonElement>("discovery-import-selected");
@@ -231,7 +233,7 @@ export function bindDiscovery() {
   const filterFields = element<HTMLFieldSetElement>("discovery-filter-fields");
   const previewButton = element<HTMLButtonElement>("discovery-preview");
   const filteredImport = element<HTMLButtonElement>("discovery-import-filtered");
-  if (!form || !input || !mode || !keywordMatch || !targetInput || !stop || !importButton || !selectedButton || !selectionPanel || !candidateBody ||
+  if (!form || !input || !mode || !keywordMatch || !targetInput || !requestInterval || !stop || !importButton || !selectedButton || !selectionPanel || !candidateBody ||
       !selectAll || !filterPanel || !filterForm || !filterFields || !previewButton || !filteredImport) return;
   let snapshot: DiscoveryStatus = { job: null, keywords: ["转发抽奖"], summary: {}, resume_available: false };
   let submitting = false;
@@ -311,6 +313,7 @@ export function bindDiscovery() {
     if (start && !start.disabled && !sameSearch) start.textContent = "开始检索";
     mode.disabled = input.disabled;
     keywordMatch.disabled = input.disabled;
+    requestInterval.disabled = input.disabled;
     renderSelection();
     filterPanel.hidden = !snapshot.pending_selection;
     filterFields.disabled = input.disabled;
@@ -350,6 +353,8 @@ export function bindDiscovery() {
       keywordMatch.value = value.keyword_match ||
         (value.keywords.length > 1 && (value.resume_available || value.job?.state === "running") ? "separate" : "combined");
       targetInput.value = String(value.target_new_videos || value.summary.target_new_videos || 100);
+      requestInterval.value = value.min_interval_seconds === 1 && (value.resume_available || value.job?.state === "running")
+        ? "1" : "2";
     }
     initialized = true;
     render();
@@ -412,7 +417,10 @@ export function bindDiscovery() {
       targetInput.focus();
       return;
     }
-    submit("/api/discovery/start?enqueue=true", { keywords: words, keyword_match: keywordMatch.value, mode: mode.value, target_new_videos: target });
+    submit("/api/discovery/start?enqueue=true", {
+      keywords: words, keyword_match: keywordMatch.value, mode: mode.value, target_new_videos: target,
+      min_interval_seconds: Number(requestInterval.value),
+    });
   });
   input.addEventListener("input", render);
   mode.addEventListener("change", render);

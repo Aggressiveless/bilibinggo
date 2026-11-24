@@ -126,7 +126,7 @@ class DiscoveryClient(BilibiliClient):
         self._client.follow_redirects = False
         self.cache_path = cache_path
         self.budget = budget
-        self.min_interval_seconds = max(2.0, float(min_interval_seconds))
+        self.min_interval_seconds = max(1.0, float(min_interval_seconds))
         self.started_at = time.monotonic()
         self.request_start_offsets: list[float] = []
         self.request_count = 0
