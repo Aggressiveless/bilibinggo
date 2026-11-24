@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Komerser/bilibinggo/releases/tag/v6.0.2"><b>下载 6.0.2</b></a>
+  <a href="https://github.com/Komerser/bilibinggo/releases/tag/v6.0.3"><b>下载 6.0.3</b></a>
   &nbsp;·&nbsp;
   <a href="CHANGELOG.md"><b>更新记录</b></a>
   &nbsp;·&nbsp;
@@ -32,20 +32,20 @@ Binggo 仅供个人学习和研究，是未经哔哩哔哩授权或认可的第�
 
 转载或二次发布时，请保留使用声明及适用的版权和许可说明，注明原作者 victor 并附上上游仓库链接。转载本 fork 的内容或发行包时，也请注明维护者 Komerser 并附上 [本 fork 的仓库](https://github.com/Komerser/bilibinggo)。
 
-## 6.0.2 更新
+## 6.0.3 更新
 
-- **活动分享**。在「活动」按当前筛选导出所有页中仍开放且开奖时间明确的活动。JSON 只含活动 ID、原动态链接、类型、奖品和开奖时间。
-- **活动导入**。导入前可以预览新增、重复和过期数量，确认后追加活动。参与状态仍由接收方自己的账号决定。
-- **数据源更新修复**。遇到单条不可见动态或活动页返回 404 时，记录跳过原因并继续处理其他活动。
+- **组合搜索**。主动检索默认将输入词作为一条查询发往 B 站，也可切换到分别搜索。
+- **断点恢复**。主动检索和数据源更新分批保存，在「日志」中可重试失败或中断的任务。
+- **筛选和安全修复**。调用模型前筛除缺少活动证据的候选，修复数据库连接释放，保护 LLM API Key 并避免重复提交评论。
 
-完整的更新内容见 [CHANGELOG](CHANGELOG.md) 和 [6.0.2 发布说明](https://github.com/Komerser/bilibinggo/releases/tag/v6.0.2)。
+完整的更新内容见 [CHANGELOG](CHANGELOG.md) 和 [6.0.3 发布说明](https://github.com/Komerser/bilibinggo/releases/tag/v6.0.3)。
 
 ## 下载与安装
 
-| 平台 | 6.0.2 下载 |
+| 平台 | 6.0.3 下载 |
 | --- | --- |
-| Windows x64 | [安装包](https://github.com/Komerser/bilibinggo/releases/download/v6.0.2/Binggo-Setup-win64.exe) · [便携版](https://github.com/Komerser/bilibinggo/releases/download/v6.0.2/Binggo-Portable-win64.zip) |
-| Ubuntu | [部署包](https://github.com/Komerser/bilibinggo/releases/download/v6.0.2/Binggo-6.0.2-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Komerser/bilibinggo/releases/download/v6.0.2/Binggo-6.0.2-ubuntu.tar.gz.sha256) |
+| Windows x64 | [安装包](https://github.com/Komerser/bilibinggo/releases/download/v6.0.3/Binggo-Setup-win64.exe) · [便携版](https://github.com/Komerser/bilibinggo/releases/download/v6.0.3/Binggo-Portable-win64.zip) |
+| Ubuntu | [部署包](https://github.com/Komerser/bilibinggo/releases/download/v6.0.3/Binggo-6.0.3-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Komerser/bilibinggo/releases/download/v6.0.3/Binggo-6.0.3-ubuntu.tar.gz.sha256) |
 
 ### Windows x64
 
@@ -56,9 +56,9 @@ Binggo 仅供个人学习和研究，是未经哔哩哔哩授权或认可的第�
 部署包内含预构建前端和安装说明。首次启动会创建空数据库。Ubuntu 24.04 可使用 systemd 安装，使服务开机自启并在进程退出后重启。
 
 ```bash
-sha256sum -c Binggo-6.0.2-ubuntu.tar.gz.sha256
-tar -xzf Binggo-6.0.2-ubuntu.tar.gz
-cd binggo-server-6.0.2
+sha256sum -c Binggo-6.0.3-ubuntu.tar.gz.sha256
+tar -xzf Binggo-6.0.3-ubuntu.tar.gz
+cd binggo-server-6.0.3
 sudo bash deploy.sh install
 ```
 
