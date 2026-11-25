@@ -14,6 +14,7 @@ PEER_PATH = "/api/cluster/peer/v1"
 TARGET = 1000
 POLL_SECONDS = 5
 PAGE_SIZE = 100
+HISTORY_PAGE_SIZE = 2000
 KEYWORDS = ("抽奖", "福利", "奖品", "转发抽奖", "抽奖活动", "粉丝福利")
 BV = Annotated[str, Field(pattern=r"^BV[0-9A-Za-z]{10}$")]
 Token = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
@@ -116,6 +117,11 @@ class Change(Payload):
     activity: Activity
 
 
+class VideoHistory(Payload):
+    ids: list[BV] = Field(max_length=HISTORY_PAGE_SIZE)
+    complete: bool = False
+
+
 class Exchange(Payload):
     node: NodeId
     after: int = Field(default=0, ge=0, lt=2**63)
@@ -125,6 +131,8 @@ class Exchange(Payload):
     unknown_activity_time: bool = False
     working: Lease | None = None
     report: Report | None = None
+    video_history: VideoHistory | None = None
+    import_round: int | None = Field(default=None, ge=1)
 
 
 class Analysis(Lease):

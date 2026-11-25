@@ -9,8 +9,17 @@ type Counts = Record<string, number>;
 type Conversion = { checked: number; matched: number };
 type Node = {
   id: string; name: string; online: boolean; host: boolean; work: number; kind?: string;
-  key?: string; completed: number; model_calls: number; task_label?: string;
+  key?: string; seen?: number; completed: number; model_calls: number; task_label?: string;
+  history_count?: number | null; history_complete?: number | null; search_pages?: number;
+  videos_checked?: number; videos_total?: number; videos_counted?: number; videos_matched?: number;
 };
+type QueuedPage = { page: number; state: "pending" | "leased"; node: string | null };
+type SearchTask = {
+  keyword: string; order: "pubdate" | "totalrank"; pages: number; found: number;
+  failed: number; skipped: number; queued: QueuedPage[];
+};
+type VideoTask = { key: string; state: "pending" | "leased"; node: string | null };
+type RoundImport = { round: number; node: string | null; pending: number; done: number; skipped: number };
 type ClusterEvent = {
   id: number;
   at: number;
@@ -35,6 +44,8 @@ type Status = {
     phase?: string; paused?: boolean; now?: number; next_round?: number; cooldown_until?: number;
     search_pages_total?: number; search_history_start?: number; concurrency_limit?: number; two_stage?: boolean;
     conversion?: Conversion; local_conversion?: Conversion; detected_open?: number; sequence?: number;
+    known_videos?: number; history_syncing?: number; round_import?: RoundImport | null;
+    search_tasks?: SearchTask[]; video_queue?: VideoTask[];
   };
 };
 
@@ -51,6 +62,7 @@ const time = (stamp: number) => new Date(stamp * 1000).toLocaleTimeString("zh-CN
 const kinds: Record<string, string> = { search: "检索页", video: "视频检测", dynamic: "动态核验", short: "短链展开", article: "专栏检查", author: "发布者检查" };
 const phases: Record<string, string> = {
   collecting: "协作检索中", detecting: "分配检测中", running: "协作检索中",
+  importing: "轮间导入活动",
   complete: "本轮完成", incomplete: "本轮有任务未完成", exhausted: "本轮完成，收录未达目标",
 };
 
@@ -58,6 +70,8 @@ let current: Status | undefined;
 let busy = false;
 let refreshing = false;
 let updateDetections: ReturnType<typeof mountDetectedActivities>;
+let searchSignature = "";
+let nodeSignature = "";
 const eventPanels: Array<(snapshot: Status) => void> = [];
 const eventTime = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
@@ -112,6 +126,10 @@ function renderDiscoveryWork(snapshot: Status) {
     task = "集群已暂停领取新任务";
   } else if ((status.cooldown_until || 0) > (status.now || 0)) {
     task = "平台限流，暂停至 " + time(status.cooldown_until!);
+  } else if (status.history_syncing) {
+    task = "正在合并节点历史 BV";
+  } else if (status.round_import) {
+    task = status.round_import.node === snapshot.node ? "本机正在导入集群活动" : "等待轮间导入结束";
   } else if (status.next_round) {
     task = "本轮已结束，下一轮 " + time(status.next_round);
   } else {
@@ -204,7 +222,7 @@ function render(snapshot: Status) {
   byId("worker-note").hidden = snapshot.worker_ready;
   const counts = status.counts || {};
   const video = counts.video || {};
-  const found = Object.values(video).reduce((a, b) => a + b, 0);
+  const found = (video.pending || 0) + (video.leased || 0) + (video.done || 0) + (video.failed || 0);
   const target = status.target;
   set("progress-value", target ? count(found) + " / " + count(target) : "—");
   const progress = byId<HTMLProgressElement>("progress");
@@ -219,6 +237,9 @@ function render(snapshot: Status) {
   set("video-failed", "本轮视频检测失败 " + count(video.failed) + " 项");
   set("search-round", count(status.counts ? counts.search?.done || 0 : undefined));
   set("search-total", count(status.search_pages_total));
+  set("known-videos", count(status.known_videos));
+  set("history-note", status.history_syncing ? count(status.history_syncing) + " 个节点正在上传历史"
+    : status.known_videos !== undefined ? "含已同步的历史 BV 与集群检测结果" : "等待主节点提供历史统计");
   set("search-history", status.search_pages_total === undefined
     ? (status.counts ? "主节点版本尚未提供" : "等待同步")
     : "自第 " + (status.search_history_start || 1) + " 轮起的成功检索页");
@@ -226,11 +247,63 @@ function render(snapshot: Status) {
   const next = status.next_round || 0;
   const phase = status.paused ? "协作已暂停"
     : cooldown > (status.now || 0) ? "平台限流，暂停至 " + time(cooldown)
+    : status.history_syncing ? "合并历史 BV"
     : (phases[status.phase || ""] || "等待节点");
   set("phase", [status.round ? "第 " + status.round + " 轮" : "", phase,
     next && !status.paused ? "下一轮 " + time(next) : ""].filter(Boolean).join(" · "));
 
+  renderSearchTasks(status, found);
   renderNodes(snapshot, found);
+}
+
+function renderSearchTasks(status: Status["status"], found: number) {
+  const tasks = status.search_tasks;
+  const videos = status.video_queue || [];
+  const unassigned = found - (tasks || []).reduce((total, task) => total + task.found, 0);
+  set("search-tasks-note", tasks?.length ? (unassigned > 0 ? count(unassigned) + " 个早期 BV 缺少关键词记录" : "")
+    : tasks ? "等待本轮检索开始" : status.counts ? "等待主节点提供任务明细" : "等待同步");
+  byId("search-task-table").hidden = !tasks?.length;
+  byId("video-queue").hidden = !videos.length;
+  const queueSize = (status.counts?.video?.pending || 0) + (status.counts?.video?.leased || 0);
+  set("video-queue-note", queueSize > videos.length ? `显示前 ${videos.length} 项 / 共 ${count(queueSize)} 项`
+    : `共 ${count(queueSize)} 项`);
+  const signature = JSON.stringify([tasks, videos]);
+  if (signature === searchSignature) return;
+  searchSignature = signature;
+  byId("search-tasks").replaceChildren(...(tasks || []).map((task) => {
+    const row = document.createElement("tr");
+    const keyword = document.createElement("th");
+    keyword.scope = "row";
+    keyword.textContent = task.keyword;
+    row.append(keyword);
+    row.insertCell().textContent = task.order === "pubdate" ? "最新发布" : "综合排序";
+    row.insertCell().textContent = count(task.pages);
+    row.insertCell().textContent = count(task.found);
+    const queue = row.insertCell();
+    if (!task.queued.length) {
+      queue.textContent = task.failed ? count(task.failed) + " 页失败" : task.skipped ? "已达目标" : "已结束";
+    } else {
+      for (const page of task.queued) {
+        const item = document.createElement("span");
+        item.className = "cluster-queue-state";
+        item.dataset.state = page.state;
+        item.textContent = `第 ${page.page} 页 · ${page.state === "leased" ? page.node || "检索中" : "待检索"}`;
+        queue.append(item);
+      }
+    }
+    return row;
+  }));
+  byId("video-queue-rows").replaceChildren(...videos.map((task) => {
+    const row = document.createElement("li");
+    const video = document.createElement("span");
+    video.textContent = task.key;
+    const state = document.createElement("span");
+    state.className = "cluster-queue-state";
+    state.dataset.state = task.state;
+    state.textContent = task.state === "leased" ? `检测中 · ${task.node || "工作节点"}` : "待检测";
+    row.append(video, state);
+    return row;
+  }));
 }
 
 function renderNodes(snapshot: Status, found: number) {
@@ -240,7 +313,13 @@ function renderNodes(snapshot: Status, found: number) {
   const online = nodes.filter((node) => node.online).length;
   set("online", status.nodes ? online + " / " + nodes.length + " 在线" : "等待同步");
   const limit = status.concurrency_limit;
-  const rule = status.phase === "collecting"
+  const importing = status.round_import;
+  const importNode = importing && nodes.find((node) => node.id === importing.node);
+  const rule = importing ? [importNode ? `${importNode.name} 正在导入活动` : "轮间导入已完成",
+    `完成 ${importing.done} / ${importing.done + importing.pending + importing.skipped} 个节点`,
+    importing.skipped ? `跳过 ${importing.skipped} 个` : ""].filter(Boolean).join(" · ")
+    : status.history_syncing ? "历史 BV 合并完成后继续派发任务。"
+    : status.phase === "collecting"
     ? (status.target && found >= status.target ? "已达收录目标，等待各节点交回已领取的检索。"
       : "达到收录目标或搜完可用结果页后，开始分配检测。")
     : status.two_stage && status.phase === "detecting" && !nodes.some((node) => node.online && node.work === 2)
@@ -248,8 +327,13 @@ function renderNodes(snapshot: Status, found: number) {
       : "就绪的空闲节点每次领取一个视频" + (limit ? "，最多 " + limit + " 个并行检测。" : "。");
   set("dispatch-rule", status.counts ? rule : "");
   byId("nodes-empty").hidden = nodes.length > 0;
+  const signature = JSON.stringify([nodes.map(({ seen, ...node }) => node), snapshot.node, status.paused, status.phase, importing?.node]);
+  if (signature === nodeSignature) return;
+  nodeSignature = signature;
   byId("nodes").replaceChildren(...nodes.map((node) => {
     const row = document.createElement("li");
+    const heading = document.createElement("div");
+    heading.className = "cluster-node-heading";
     const name = document.createElement("strong");
     name.textContent = node.name;
     const role = document.createElement("span");
@@ -257,11 +341,43 @@ function renderNodes(snapshot: Status, found: number) {
     role.textContent = (node.host ? "主节点" : "工作节点") + (node.id === snapshot.node ? "（本机）" : "");
     const state = document.createElement("span");
     state.className = "cluster-pill";
-    state.dataset.state = !node.online ? "offline" : node.kind ? "working" : node.work ? "idle" : "sync";
+    const importingHere = importing?.node === node.id;
+    state.dataset.state = !node.online ? "offline" : node.kind || importingHere ? "working" : node.work ? "idle" : "sync";
     const canWork = status.two_stage && status.phase === "detecting" ? node.work === 2 : Boolean(node.work);
     state.textContent = !node.online ? "离线" : node.kind === "search" ? "检索中" : node.kind ? "检测中"
+      : importingHere ? "导入中" : node.history_complete === 0 ? "同步 BV"
       : !canWork ? "仅同步" : status.paused ? "已暂停" : "空闲";
-    row.append(name, role, state);
+    heading.append(name, role, state);
+    row.append(heading);
+    const task = document.createElement("p");
+    task.className = "caption cluster-node-task";
+    task.textContent = node.task_label || (importingHere ? "导入集群活动目录" : "累计完成 " + count(node.completed) + " 项任务");
+    row.append(task);
+    const stats = document.createElement("dl");
+    stats.className = "cluster-node-stats";
+    const checked = node.videos_counted || 0;
+    const matched = node.videos_matched || 0;
+    for (const [label, value, note] of [
+      ["本机历史 BV", count(node.history_count ?? undefined), node.history_complete === 0 ? "上传中" : ""],
+      ["本轮检索页", count(node.search_pages), ""],
+      ["累计已检测", count(node.videos_total), node.videos_checked === undefined ? "" : `本轮 ${count(node.videos_checked)}`],
+      ["累计命中率", checked ? percent.format(matched / checked) : "—",
+        checked ? `${count(matched)} / ${count(checked)}` : ""],
+    ]) {
+      const item = document.createElement("div");
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const data = document.createElement("dd");
+      data.textContent = value;
+      if (note) {
+        const detail = document.createElement("small");
+        detail.textContent = note;
+        data.append(detail);
+      }
+      item.append(term, data);
+      stats.append(item);
+    }
+    row.append(stats);
     return row;
   }));
 }

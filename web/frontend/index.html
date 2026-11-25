@@ -793,6 +793,10 @@
                     <span class="cluster-pill" id="cluster-phase"></span>
                   </div>
                   <dl class="cluster-metrics">
+                    <div class="cluster-metric cluster-metric-history">
+                      <dt>集群已看 BV</dt><dd id="cluster-known-videos">—</dd>
+                      <dd class="cluster-metric-note" id="cluster-history-note">各节点历史合并去重</dd>
+                    </div>
                     <div class="cluster-metric">
                       <dt>累计检索页数</dt><dd id="cluster-search-total">—</dd>
                       <dd class="cluster-metric-note" id="cluster-search-history"></dd>
@@ -808,8 +812,23 @@
                       <strong id="cluster-progress-value">—</strong>
                     </div>
                     <progress class="cluster-progress" id="cluster-progress" max="1000" value="0" aria-label="本轮收录视频"></progress>
-                    <p class="caption">去重后进入检测队列</p>
                   </div>
+                  <section class="cluster-task-section" aria-labelledby="cluster-search-tasks-title">
+                    <div class="cluster-heading">
+                      <h3 id="cluster-search-tasks-title">检索任务队列</h3>
+                      <span class="caption" id="cluster-search-tasks-note"></span>
+                    </div>
+                    <div class="cluster-task-scroll" id="cluster-search-task-table" hidden>
+                      <table aria-labelledby="cluster-search-tasks-title">
+                        <thead><tr><th scope="col">关键词</th><th scope="col">排序</th><th scope="col">已搜页</th><th scope="col">收录 BV</th><th scope="col">队列</th></tr></thead>
+                        <tbody id="cluster-search-tasks"></tbody>
+                      </table>
+                    </div>
+                    <details class="cluster-video-queue" id="cluster-video-queue" hidden>
+                      <summary>视频检测队列 <span class="caption" id="cluster-video-queue-note"></span></summary>
+                      <ul id="cluster-video-queue-rows" aria-label="优先显示正在检测的视频"></ul>
+                    </details>
+                  </section>
                 </article>
                 <article class="panel cluster-workers" aria-labelledby="cluster-workers-title">
                   <div class="cluster-heading">
@@ -830,7 +849,10 @@
                     </button>
                   </div>
                   <p class="caption cluster-dispatch-rule" id="cluster-dispatch-rule"></p>
-                  <ul class="cluster-node-list" id="cluster-nodes" aria-label="节点状态"></ul>
+                  <section class="cluster-task-section" aria-labelledby="cluster-node-work-title">
+                    <h3 id="cluster-node-work-title">节点工作记录</h3>
+                    <ul class="cluster-node-list" id="cluster-nodes" aria-labelledby="cluster-node-work-title"></ul>
+                  </section>
                   <p class="caption cluster-empty" id="cluster-nodes-empty" hidden>等待节点同步</p>
                 </article>
               </div>

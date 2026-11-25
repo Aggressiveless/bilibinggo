@@ -248,19 +248,72 @@ def test_round_targets_1000_distinct_videos_and_starts_again(tmp_path):
     assert feed.task is None
     assert feed.status["phase"] == "collecting"
     assert feed.status["counts"]["video"] == {"pending": TARGET}
-    assert feed.status["counts"]["search"] == {"done": 1, "leased": 1, "skipped": 10}
+    assert feed.status["counts"]["search"] == {"done": 1, "leased": 1, "skipped": 11}
     switched = _exchange(store, member, work=True, report=_report(second))
     assert switched.status["phase"] == "detecting"
     assert switched.task is None  # An older or search-only worker cannot receive the new video check.
     assert _exchange(store, host, work=True, video_detection=True).task.kind == "video"
     with store.tx() as db:
         db.execute("UPDATE jobs SET state='done' WHERE kind='video'")
-    completed = _exchange(store, host).status
-    assert completed["phase"] == "complete"
-    assert completed["next_round"] > completed["now"]
-    store.write("next_round", 1)
     next_round = _exchange(store, host, work=True)
     assert next_round.status["round"] == 2 and next_round.task.page == 1
+    assert next_round.status["next_round"] == 0
+
+
+def test_history_merges_joined_nodes_and_reopens_search_if_queue_shrinks(tmp_path, monkeypatch):
+    monkeypatch.setattr("web.cluster_store.TARGET", 2)
+    store, host, member = _cluster(tmp_path)
+    old, shared, unique, new = [f"BV{number:010d}" for number in range(4)]
+    with store.tx() as db:
+        db.execute("INSERT INTO checked_videos VALUES(?,1)", (old,))
+    task = _exchange(store, host, work=True, video_history={"ids": [shared], "complete": True}).task
+    active = _exchange(store, host, work=True, report=_report(task, more_pages=True,
+        references=[Reference(kind="video", key=key) for key in (old, shared, unique)])).task
+    assert active is not None
+    # The host has a lease and a second node submits another page to reach the target.
+    member_task = _exchange(store, member, work=True).task
+    found = _exchange(store, member, report=_report(member_task, more_pages=True,
+        references=[Reference(kind="video", key=new)])).status
+    assert found["counts"]["video"] == {"pending": 2}
+    assert sum(query["found"] for query in found["search_tasks"]) == 2
+    pending = _exchange(store, member, work=True, video_history={"ids": [shared, unique, shared]})
+    assert pending.task is None and pending.status["history_syncing"] == 1
+    retried = _exchange(store, member, work=True, video_history={"ids": [shared, unique], "complete": True})
+    assert retried.task.kind == "search"
+    assert retried.status["counts"]["video"] == {"pending": 1, "skipped": 1}
+    assert sum(query["found"] for query in retried.status["search_tasks"]) == 1
+    assert retried.status["known_videos"] == 3
+    assert {node["id"]: node["history_count"] for node in retried.status["nodes"]} == {
+        host["node"]: 1, member["node"]: 2,
+    }
+    store.leave(member["node"], member["token"])
+    store = ClusterStore(tmp_path)
+    assert store.status()["known_videos"] == 3
+
+
+def test_round_import_uses_node_order_and_waits_for_applied_catalog_cursor(tmp_path, monkeypatch):
+    monkeypatch.setattr("web.cluster_store.TARGET", 1)
+    store, host, member = _cluster(tmp_path)
+    history = {"ids": [], "complete": True}
+    _exchange(store, member, video_history=history)
+    search = _exchange(store, host, work=True, video_history=history).task
+    scan = _exchange(store, host, work=True, video_detection=True,
+                     report=_report(search, references=[Reference(kind="video", key=BVID)])).task
+    first = _exchange(store, host, work=True, report=_report(scan, activities=[_activity(prize="测试活动")]))
+    assert first.task is None
+    assert first.status["phase"] == "importing"
+    assert first.status["round_import"] == {"round": 1, "node": host["node"], "pending": 2, "done": 0, "skipped": 0}
+    assert _exchange(store, member, work=True, import_round=1).changes == []
+    assert _exchange(store, host, import_round=1).status["round_import"]["node"] == host["node"]
+    seq = first.changes[-1].seq
+    assert _exchange(store, host, after=seq, import_round=1).status["round_import"]["node"] == member["node"]
+    member_import = _exchange(store, member, import_round=1)
+    assert member_import.changes[-1].seq == seq
+    next_round = _exchange(store, member, after=seq, work=True, import_round=1)
+    assert next_round.task.kind == "search" and next_round.status["round"] == 2
+    assert next_round.status["known_videos"] == 1
+    host_work = next(node for node in next_round.status["nodes"] if node["host"])
+    assert (host_work["videos_checked"], host_work["videos_total"], host_work["videos_matched"]) == (0, 1, 1)
 
 
 def test_worker_search_and_linked_activity_without_account_actions(tmp_path, monkeypatch):
@@ -308,6 +361,7 @@ def test_worker_search_and_linked_activity_without_account_actions(tmp_path, mon
 def test_conversion_tracks_completed_videos_and_catalog_deduplicates(tmp_path, monkeypatch):
     monkeypatch.setattr("web.cluster_store.TARGET", 2)
     store, host, member = _cluster(tmp_path)
+    _exchange(store, host, video_history={"ids": [], "complete": True})
     key = str(int(KEY) + 1)
     uploaded = Activity(dynamic_id=key, source_url=opus_link(key), lottery_type="互动抽奖",
                         lottery_time=int(time.time()) + 86400, prize="节点上传")
@@ -414,7 +468,7 @@ def test_active_search_only_counts_this_nodes_cluster_work(tmp_path):
     scan = _exchange(store, member, work=True, video_detection=True).task
     assert scan.kind == "video"
     recent = _exchange(store, member, report=_report(scan)).status
-    assert recent["local_work"]["videos"] == 1
+    assert next(node for node in recent["nodes"] if node["id"] == member["node"])["videos_total"] == 1
     assert store.status()["local_work"]["videos"] == 0
     assert any(BVID in event["message"] for event in recent["local_events"])
     store.write("next_round", 1)

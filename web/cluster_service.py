@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import threading
 import time
@@ -20,7 +21,9 @@ from src.pipeline.status_step import apply_initial_status
 from src.sources.common import is_valid_dynamic_id, opus_link
 from web.account_service import has_login_cookie
 from web.activity_service import invalidate_activity_cache
-from web.cluster_protocol import Activity, Analysis, DetectionPageRequest, Exchange, Feed, Lease, MAX_LOTTERY_TIME, PAGE_SIZE, PEER_PATH, POLL_SECONDS, Register, Report, normalize_address
+from web.cluster_protocol import (Activity, Analysis, DetectionPageRequest, Exchange, Feed, HISTORY_PAGE_SIZE, Lease,
+                                  LINK_PATTERNS, MAX_LOTTERY_TIME, PAGE_SIZE, PEER_PATH, POLL_SECONDS, Register, Report,
+                                  VideoHistory, normalize_address)
 from web.cluster_store import ClusterError, ClusterStore
 from web.cluster_work import RetryCheck, execute
 
@@ -122,6 +125,8 @@ class ClusterService:
 
     def _remote(self, session, path, token, payload):
         headers = {"Authorization": "Bearer " + token}
+        if path == "/join":
+            headers["X-Binggo-Video-History"] = "1"
         if path == "/exchange":
             # Old v1 hosts reject extra JSON fields but ignore the capability header.
             payload = dict(payload)
@@ -154,7 +159,7 @@ class ClusterService:
     def host(self, body):
         address = normalize_address(body.address)
         with self.lock:
-            self.store.start_host(body.name.strip() or "主节点", address)
+            self.store.start_host(body.name.strip() or "主节点", address, video_history=True)
             self.status_remote = {}
             self.error = ""
             self.last_sync = 0
@@ -172,6 +177,8 @@ class ClusterService:
             if not isinstance(cluster_id, str) or len(cluster_id) != 32 or response.get("protocol") != 1:
                 raise ClusterError("主服务器的集群协议版本不兼容", 502)
             self._set_session({**registration.model_dump(), "role": "member", "id": cluster_id, "address": address})
+            if response.get("video_history"):
+                self.status_remote = {"video_history": True}
 
     def leave(self):
         with self.lock:
@@ -235,11 +242,26 @@ class ClusterService:
                        lambda key, result: self._analysis(session, task, key, result),
                        two_stage=two_stage)
 
+    def _history(self):
+        from web.control_service import get_control_service
+
+        ids = get_control_service().store.discovery_video_ids()
+        with self.store.tx(write=False) as db:
+            ids.update(row[0] for row in db.execute("SELECT id FROM local_checked_videos"))
+        return {key for key in ids if re.fullmatch(LINK_PATTERNS["video"], key)}
+
+    def _import_turn(self, node):
+        state = self.status_remote.get("round_import") or {}
+        return state.get("round") if state.get("node") == node else None
+
     def _run(self):
         session_node = ""
         export_queue = []
         exported = set()
         reload_at = 0
+        history_queue, shared_history = [], set()
+        history_sent, history_reload_at = False, 0
+        import_turn = None
         try:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="cluster-worker") as pool:
                 while not self.stop_event.is_set():
@@ -248,6 +270,8 @@ class ClusterService:
                     if session.get("node") != session_node:
                         session_node = session.get("node", "")
                         export_queue, exported, reload_at = [], set(), 0
+                        history_queue, shared_history = [], set()
+                        history_sent, history_reload_at, import_turn = False, 0, None
                     if self._job and self._job.done():
                         try:
                             report = self._job.result()
@@ -255,27 +279,54 @@ class ClusterService:
                             logger.warning("集群任务未完成", exc_info=True)
                             report = Report(task_id=self._task.task_id, lease=self._task.lease, outcome="retry", reason="worker")
                         report_node = self._task_node
+                        task = self._task
                         self._job, self._task = None, None
-                        if report_node == session_node:
-                            self.store.write(f"report:{session_node}", report.model_dump())
+                        with self.store.tx() as db:
+                            if task.kind == "video" and report.outcome == "done":
+                                db.execute("INSERT OR IGNORE INTO local_checked_videos VALUES(?)", (task.key,))
+                            if report_node == session_node:
+                                self.store.put(db, f"report:{session_node}", report.model_dump())
                     if session_node and has_login_cookie():
                         try:
                             now = int(time.time())
                             unknown_time = self._supports_unknown_time(session)
-                            if not export_queue and now >= reload_at:
+                            turn = self._import_turn(session_node)
+                            if turn and turn != import_turn:
+                                export_queue, exported, reload_at = [], set(), 0
+                            import_turn = turn
+                            waiting_turn = bool(self.status_remote.get("round_import")) and not turn
+                            if not waiting_turn and not export_queue and now >= reload_at:
                                 published = set(self.store.read(f"published_unknown:{session_node}", []))
                                 offered = [(row.model_dump_json(), row) for row in _export(now, published)]
                                 exported.intersection_update(mark for mark, _ in offered)
                                 export_queue = [(mark, row) for mark, row in offered if mark not in exported]
                                 reload_at = now + SYNC_SECONDS
-                            batch = export_queue[:PAGE_SIZE]
-                            feed = self._sync(session, [row for _, row in batch], pool)
+                            batch = export_queue[:PAGE_SIZE] if not waiting_turn else []
+                            history = None
+                            if session["role"] == "host" or self.status_remote.get("video_history"):
+                                if not history_queue and now >= history_reload_at:
+                                    history_queue = sorted(self._history() - shared_history)
+                                    history_reload_at = now + SYNC_SECONDS
+                                if history_queue or not history_sent:
+                                    history = VideoHistory(ids=history_queue[:HISTORY_PAGE_SIZE],
+                                                           complete=len(history_queue) <= HISTORY_PAGE_SIZE)
+                            feed = self._sync(session, [row for _, row in batch], pool, history=history,
+                                              import_round=turn if len(export_queue) <= len(batch) else None)
                             if feed:
+                                if history is not None:
+                                    shared_history.update(history.ids)
+                                    history_queue = history_queue[len(history.ids):]
+                                    history_sent = True
                                 if unknown_time != self._supports_unknown_time(session):
                                     export_queue, exported, reload_at = [], set(), 0
                                 else:
                                     exported.update(mark for mark, _ in batch)
-                                    export_queue = export_queue[PAGE_SIZE:]
+                                    export_queue = export_queue[len(batch):]
+                                next_turn = self._import_turn(session_node)
+                                if (history_queue and feed.status.get("video_history")) or (
+                                    next_turn and (next_turn != turn or batch or feed.changes)
+                                ):
+                                    self.wake.set()
                         except ClusterError as exc:
                             self.error = str(exc)
                         except Exception:
@@ -287,7 +338,7 @@ class ClusterService:
         finally:
             self.http.close()
 
-    def _sync(self, session, batch, pool):
+    def _sync(self, session, batch, pool, *, history=None, import_round=None):
         node = session["node"]
         pending = self.store.read(f"report:{node}")
         active = self._task if self._task_node_if_working() == node else None
@@ -301,11 +352,15 @@ class ClusterService:
                            video_detection=video_detection if two_stage else None,
                            unknown_activity_time=True,
                            working=Lease(task_id=active.task_id, lease=active.lease) if active else None,
-                           report=Report.model_validate(pending) if pending else None)
+                           report=Report.model_validate(pending) if pending else None,
+                           video_history=history, import_round=import_round)
         if session["role"] == "host":
             feed = self.store.exchange(message, session["token"])
         else:
             payload = message.model_dump()
+            for field in ("video_history", "import_round"):
+                if payload[field] is None:
+                    del payload[field]
             if pending_report := payload["report"]:
                 if "events" not in self.status_remote:
                     pending_report.pop("reason", None)

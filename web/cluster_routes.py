@@ -121,7 +121,8 @@ def install_cluster(app):
     async def register(request: Request):
         token = _bearer(request)
         body = await _read(request, Register)
-        return await run_in_threadpool(_run, request.app.state.cluster.store.register, body, token)
+        return await run_in_threadpool(_run, request.app.state.cluster.store.register, body, token,
+                                       video_history=request.headers.get("x-binggo-video-history") == "1")
 
     @peer.post("/exchange")
     async def exchange(request: Request):
