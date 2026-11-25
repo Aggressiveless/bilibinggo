@@ -230,6 +230,14 @@ def lottery_time_unix(item: dict, *, ref_ts: int | None = None) -> int | None:
         return None
 
 
+def confirmed_lottery_time_unix(item: dict) -> int | None:
+    conditions = item.get("conditions")
+    inferred = item.get("lottery_time_inferred") or (
+        isinstance(conditions, dict) and conditions.get("lottery_time_inferred")
+    )
+    return None if inferred else lottery_time_unix(item)
+
+
 def default_lottery_time_from_now(*, now: int | None = None) -> int:
     """无开奖时间时，用当前时刻 + 半年作为默认推断值。"""
     return int(now if now is not None else time.time()) + SIX_MONTHS_SECONDS

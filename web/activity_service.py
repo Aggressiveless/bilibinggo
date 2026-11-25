@@ -7,7 +7,7 @@ from src.activity_store import load_payload
 from src.db.snapshots import load_ds_check_dict, load_watch_sync_dict
 from src.draw_reminder import matches_draw_window_filter
 from src.lottery_classifier import PARTICIPATABLE_TYPES, is_charging_lottery_activity
-from src.lottery_time import format_timestamp, is_activity_past_end, lottery_time_text
+from src.lottery_time import confirmed_lottery_time_unix, format_timestamp, is_activity_past_end
 from src.participation_log import load_action_entries_for_uid
 from src.participation_store import ParticipationRecord, load_participations
 from src.sources.common import is_valid_dynamic_id
@@ -157,19 +157,20 @@ def _normalize_activity(
     heat_missing = not repost_fetched or (
         repost_count == 0 and not item.get("repost_zero_confirmed")
     )
+    confirmed_time = confirmed_lottery_time_unix(item)
     return {
         "dynamic_id": dynamic_id,
         "source_url": str(item.get("source_url") or ""),
         "activity_title": _activity_title(item),
         "lottery_type": str(item.get("lottery_type") or ""),
         "activity_status": activity_status,
-        "draw_tag": str(item.get("draw_tag") or ""),
+        "draw_tag": str(item.get("draw_tag") or "") if confirmed_time else "",
         "draw_status": str(item.get("draw_status") or ""),
         "prize": _prize_summary(item),
         "repost_count": repost_count,
         "repost_fetched": repost_fetched,
         "heat_missing": heat_missing,
-        "lottery_time": lottery_time_text(item) or "—",
+        "lottery_time": format_timestamp(confirmed_time) if confirmed_time else "待确认",
         "check_at_recommended": False,
         "skipped": bool(item.get("skipped")),
         "skip_reason": str(item.get("skip_reason") or ""),

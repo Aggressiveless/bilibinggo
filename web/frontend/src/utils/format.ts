@@ -191,6 +191,7 @@ export function formatHeat(item) {
 
 export function formatLotteryTime(value) {
   const text = String(value || "").trim();
+  if (text === "待确认") return text;
   if (!text || text === "—") return "—";
   if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(text)) return text;
   return "—";

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from src.lottery_classifier import is_charging_lottery_activity
-from src.lottery_time import format_timestamp, lottery_time_text, resolve_effective_lottery_time_unix
+from src.lottery_time import confirmed_lottery_time_unix, format_timestamp
 from src.message_watch import BILIBILI_AT_NOTIFY_URL
 from src.participation_store import ParticipationRecord
 from src.user_data import user_dir
@@ -53,7 +53,7 @@ def classify_participated_draw(
     """已参加活动的开奖临近阶段（仅「即将开奖」；已过期归活动状态「已结束」，不再单独标记）。"""
     if not is_user_participated(participation):
         return None
-    lottery_ts = resolve_effective_lottery_time_unix(item, participation)
+    lottery_ts = confirmed_lottery_time_unix(item)
     if not lottery_ts:
         return None
     current = int(now if now is not None else time.time())
@@ -75,6 +75,8 @@ def matches_draw_window_filter(
         return True
     if draw_window != "soon":
         return True
+    if not confirmed_lottery_time_unix(item):
+        return False
     if item.get("status_classified"):
         return str(item.get("draw_tag") or "") == "即将开奖"
     return classify_participated_draw(item, participation, now=now) == "soon"
@@ -111,14 +113,14 @@ def compute_draw_reminders(
         phase = classify_participated_draw(item, participation, now=current)
         if phase != "soon":
             continue
-        lottery_ts = resolve_effective_lottery_time_unix(item, participation)
+        lottery_ts = confirmed_lottery_time_unix(item)
         if not lottery_ts:
             continue
         soon.append(
             DrawReminderItem(
                 dynamic_id=dynamic_id,
                 title=_activity_title(item),
-                lottery_time_text=lottery_time_text(item) or format_timestamp(lottery_ts),
+                lottery_time_text=format_timestamp(lottery_ts),
                 lottery_time_unix=lottery_ts,
             )
         )

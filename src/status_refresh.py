@@ -45,10 +45,12 @@ def _classify_activity(
     now: int,
 ) -> tuple[str, DrawTag, DrawStatus] | None:
     effective_ts = lottery_time_unix(item)
-    if not effective_ts:
+    deadline = item.get("cluster_deadline")
+    if effective_ts is None and not item.get("lottery_time_inferred") and type(deadline) is not int:
         return None
-
-    draw_status: DrawStatus = "ended" if effective_ts <= now else "active"
+    ended = (item.get("draw_status") == "ended" or (effective_ts is not None and effective_ts <= now)
+             or (type(deadline) is int and deadline <= now))
+    draw_status: DrawStatus = "ended" if ended else "active"
     base_status, _ = resolve_activity_status(
         draw_status="active",
         lottery_type=item.get("lottery_type"),

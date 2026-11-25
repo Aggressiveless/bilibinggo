@@ -35,6 +35,10 @@ def _apply_notice_fields(item: dict, notice: dict) -> None:
     lottery_time = int(notice.get("lottery_time") or 0)
     if lottery_time:
         item["lottery_time"] = lottery_time
+        item.pop("lottery_time_inferred", None)
+        if isinstance(conditions := item.get("conditions"), dict):
+            conditions.pop("lottery_time_inferred", None)
+            conditions.pop("lottery_time_text", None)
     status = int(notice.get("status") or 0)
     if status != 0 or notice.get("lottery_result"):
         item["draw_status"] = "ended"
@@ -127,6 +131,9 @@ def ensure_activity_participatable(
         dynamic_id,
         lottery_type_hint=lottery_type_hint,
     )
+    deadline = item.get("cluster_deadline")
+    if type(deadline) is int and deadline <= time.time():
+        raise RuntimeError("活动报名已截止")
     status = str(item.get("activity_status") or "")
     if status != "未参加":
         raise RuntimeError(f"活动当前为「{status}」，无法参与")

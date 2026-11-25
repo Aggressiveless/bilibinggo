@@ -370,7 +370,7 @@ def _embedded_discovery_links(value):
 
 
 def inspect_dynamic(client, dynamic_id: str, *, now: int, item: dict | None = None, on_skip=None,
-                    on_links=None, followers_for=None, context="") -> dict | None:
+                    on_links=None, followers_for=None, context="", skip_video_cards=False) -> dict | None:
     """Read and assess one target, shared by breadth-first discovery and resumption."""
     url = opus_link(dynamic_id)
     if item is None:
@@ -410,6 +410,10 @@ def inspect_dynamic(client, dynamic_id: str, *, now: int, item: dict | None = No
         if linked_text.strip():
             on_links(linked_text)
     if not notice and not text:
+        if (skip_video_cards and item.get("type") == "DYNAMIC_TYPE_AV" and item.get("visible") is True
+                and (((item.get("modules") or {}).get("module_dynamic") or {}).get("major") or {}).get("type")
+                == "MAJOR_TYPE_ARCHIVE"):
+            return None
         if on_skip:
             on_skip("pending", "关联动态正文不可读，无法核验")
         return None

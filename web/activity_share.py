@@ -9,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 
 from src.activity_store import activity_file_lock, append_activities, known_activity_ids, load_activities
 from src.lottery_classifier import PARTICIPATABLE_TYPES
-from src.lottery_time import lottery_time_unix
+from src.lottery_time import confirmed_lottery_time_unix
 from src.pipeline.status_step import apply_initial_status
 from src.sources.common import is_valid_dynamic_id, opus_link
 from web.activity_service import _filtered_activity_rows
@@ -26,7 +26,7 @@ class SharedActivity(BaseModel):
 
     dynamic_id: str = Field(pattern=r"^[0-9]{18,19}$")
     lottery_type: Literal["互动抽奖", "预约抽奖", "转发抽奖"]
-    lottery_time: int = Field(gt=0, le=MAX_LOTTERY_TIME)
+    lottery_time: int | None = Field(gt=0, le=MAX_LOTTERY_TIME)
     prize: str = Field(max_length=300)
     source_url: str = Field(max_length=64)
 
@@ -40,8 +40,14 @@ class SharedActivity(BaseModel):
 class ActivityShareFile(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    format: Literal["binggo.activities.v1"]
+    format: Literal["binggo.activities.v1", "binggo.activities.v2"]
     activities: list[SharedActivity] = Field(min_length=1, max_length=MAX_ACTIVITIES)
+
+    @model_validator(mode="after")
+    def validate_version(self):
+        if self.format == "binggo.activities.v1" and any(row.lottery_time is None for row in self.activities):
+            raise ValueError("旧版活动文件需要明确的开奖时间")
+        return self
 
 
 @router.get("/export", response_model=ActivityShareFile)
@@ -58,13 +64,13 @@ def export_activities(
     eligible = {}
     for item in load_activities():
         if (item.get("lottery_type") not in PARTICIPATABLE_TYPES or item.get("draw_status") != "active"
-                or item.get("skipped") or item.get("lottery_time_inferred")
-                or (item.get("conditions") or {}).get("lottery_time_inferred")):
+                or item.get("skipped")):
             continue
-        timestamp = lottery_time_unix(item)
+        timestamp = confirmed_lottery_time_unix(item)
+        if timestamp is not None and not now < timestamp <= MAX_LOTTERY_TIME:
+            continue
         dynamic_id = str(item.get("dynamic_id") or "")
-        if (timestamp and now < timestamp <= MAX_LOTTERY_TIME
-                and dynamic_id.isascii() and is_valid_dynamic_id(dynamic_id)):
+        if dynamic_id.isascii() and is_valid_dynamic_id(dynamic_id):
             eligible[dynamic_id] = (item, timestamp)
 
     rows = _filtered_activity_rows(
@@ -80,10 +86,11 @@ def export_activities(
         for row in rows if row["activity_status"] != "已结束"
     ]
     if not activities:
-        raise AppError(ErrorCode.VALIDATION_ERROR, "当前筛选没有仍开放且开奖时间明确的活动")
+        raise AppError(ErrorCode.VALIDATION_ERROR, "当前筛选没有仍开放的活动")
     if len(activities) > MAX_ACTIVITIES:
         raise AppError(ErrorCode.VALIDATION_ERROR, f"每份文件最多 {MAX_ACTIVITIES} 条活动，请缩小筛选范围")
-    return {"format": "binggo.activities.v1", "activities": activities}
+    version = "binggo.activities.v2" if any(item.lottery_time is None for item in activities) else "binggo.activities.v1"
+    return {"format": version, "activities": activities}
 
 
 async def _read_share_file(request: Request) -> ActivityShareFile:
@@ -105,7 +112,7 @@ def _import_share_file(bundle: ActivityShareFile, *, preview: bool) -> dict:
         duplicates = expired = 0
         new = []
         for activity in bundle.activities:
-            if activity.lottery_time <= now:
+            if activity.lottery_time is not None and activity.lottery_time <= now:
                 expired += 1
             elif activity.dynamic_id in seen:
                 duplicates += 1
@@ -122,6 +129,7 @@ def _import_share_file(bundle: ActivityShareFile, *, preview: bool) -> dict:
                     "source_url": opus_link(activity.dynamic_id),
                     "lottery_type": activity.lottery_type,
                     "lottery_time": activity.lottery_time,
+                    "lottery_time_inferred": activity.lottery_time is None,
                     "draw_status": "active",
                     "prizes": [{"description": activity.prize}] if activity.prize else [],
                 }, now=now)

@@ -47,9 +47,11 @@ def test_export_respects_filters_and_only_shares_public_open_activity_fields(iso
     response = client.get("/api/activities/export", params={"type": "互动抽奖", "q": "键盘"})
     assert response.status_code == 200
     assert response.json() == {
-        "format": "binggo.activities.v1",
-        "activities": [_shared(1, now + 3600, prize="键盘 ×2")],
+        "format": "binggo.activities.v2",
+        "activities": [_shared(4, None, prize="键盘 ×2"), _shared(1, now + 3600, prize="键盘 ×2")],
     }
+    rows = client.get("/api/activities", params={"type": "互动抽奖"}).json()["items"]
+    assert next(row for row in rows if row["dynamic_id"] == _shared(4, None)["dynamic_id"])["lottery_time"] == "待确认"
     assert client.get("/api/activities/export", params={"status": "已结束"}).status_code == 400
 
 
@@ -88,10 +90,21 @@ def test_import_previews_and_rechecks_duplicates_without_overwriting(isolated_ho
     assert reexported["activities"] == [bundle["activities"][2]]
 
 
+def test_unknown_time_round_trips_without_a_placeholder(isolated_home):
+    activity = _shared(4, None)
+    client = TestClient(app)
+    result = client.post("/api/activities/import?preview=false",
+                         json={"format": "binggo.activities.v2", "activities": [activity]})
+    assert result.json()["imported"] == 1
+    assert load_activities()[0]["lottery_time"] is None
+    assert client.get("/api/activities/export").json()["activities"] == [activity]
+
+
 @pytest.mark.parametrize("bad_fields", [
     {"dynamic_id": 1234567890123456701},
     {"source_url": "https://example.invalid/"},
     {"lottery_time": "9999999999"},
+    {"lottery_time": None},
     {"platform_participated": True},
 ])
 def test_invalid_share_file_cannot_write_a_partial_import(isolated_home, bad_fields):
