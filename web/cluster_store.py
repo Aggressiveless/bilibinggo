@@ -316,16 +316,24 @@ class ClusterStore:
         db.execute("INSERT OR IGNORE INTO jobs(round,kind,key,params) VALUES(?,?,?,?)",
                    (round_id, kind, key, _dump(params)))
 
+    @staticmethod
+    def _upcoming_keywords(current):
+        if current not in KEYWORDS:
+            return KEYWORDS
+        index = KEYWORDS.index(current)
+        return KEYWORDS[index + 1:] + KEYWORDS[:index]
+
     def _next_round(self, db, now):
         round_id = self.get(db, "round", 0) + 1
+        keyword = self._upcoming_keywords(self.get(db, "round_keyword"))[0]
         self.put(db, "round", round_id)
+        self.put(db, "round_keyword", keyword)
         self.put(db, "phase", "collecting")
         self.put(db, "next_round", 0)
         self._event(db, now, f"第 {round_id} 轮开始，目标 {TARGET} 个不同视频")
-        # Order first pages before any later pages. Both sorts cover different results.
+        # Both sorts contribute to the same keyword's target.
         for order in ("pubdate", "totalrank"):
-            for word in KEYWORDS:
-                self._queue(db, round_id, "search", f"{order}:{word}:1", keyword=word, order=order, page=1)
+            self._queue(db, round_id, "search", f"{order}:{keyword}:1", keyword=keyword, order=order, page=1)
         db.execute("DELETE FROM cluster_node_round WHERE round<?", (round_id - 2,))
         db.execute("DELETE FROM cluster_video_results WHERE round<?", (round_id - 2,))
         db.execute("DELETE FROM sightings WHERE round<?", (round_id - 2,))
@@ -672,6 +680,7 @@ class ClusterStore:
 
     def _status(self, db, session, now, *, work_node):
         round_id = self.get(db, "round", 0)
+        keyword = self.get(db, "round_keyword")
         counts = {}
         for row in db.execute("""SELECT kind,state,count(*) AS n FROM jobs WHERE round=?
                                  AND kind IN ('search','video') GROUP BY kind,state""", (round_id,)):
@@ -714,6 +723,7 @@ class ClusterStore:
                        LEFT JOIN nodes n ON n.id=j.node WHERE j.round=? AND j.kind='video'
                        AND j.state IN ('pending','leased') ORDER BY j.state,j.id LIMIT 12""", (round_id,))]
         return {"round": round_id, "target": TARGET, "counts": counts, "nodes": nodes, "events": events,
+                "round_keyword": keyword, "upcoming_keywords": self._upcoming_keywords(keyword),
                 "concurrency_limit": MAX_CONCURRENT, "two_stage": True,
                 "video_history": True,
                 "known_videos": db.execute("SELECT count(*) FROM checked_videos").fetchone()[0],

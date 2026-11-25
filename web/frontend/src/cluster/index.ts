@@ -15,8 +15,7 @@ type Node = {
 };
 type QueuedPage = { page: number; state: "pending" | "leased"; node: string | null };
 type SearchTask = {
-  keyword: string; order: "pubdate" | "totalrank"; pages: number; found: number;
-  failed: number; skipped: number; queued: QueuedPage[];
+  keyword: string; order: "pubdate" | "totalrank"; queued: QueuedPage[];
 };
 type VideoTask = { key: string; state: "pending" | "leased"; node: string | null };
 type RoundImport = { round: number; node: string | null; pending: number; done: number; skipped: number };
@@ -46,6 +45,7 @@ type Status = {
     conversion?: Conversion; local_conversion?: Conversion; detected_open?: number; sequence?: number;
     known_videos?: number; history_syncing?: number; round_import?: RoundImport | null;
     search_tasks?: SearchTask[]; video_queue?: VideoTask[];
+    round_keyword?: string | null; upcoming_keywords?: string[];
   };
 };
 
@@ -257,41 +257,35 @@ function render(snapshot: Status) {
 }
 
 function renderSearchTasks(status: Status["status"], found: number) {
-  const tasks = status.search_tasks;
+  const keyword = status.round_keyword;
+  const upcoming = status.upcoming_keywords || [];
+  const pages = (status.search_tasks || []).filter(task => task.keyword === keyword)
+    .flatMap(task => task.queued.map(page => ({ ...page, order: task.order })));
   const videos = status.video_queue || [];
-  const unassigned = found - (tasks || []).reduce((total, task) => total + task.found, 0);
-  set("search-tasks-note", tasks?.length ? (unassigned > 0 ? count(unassigned) + " 个早期 BV 缺少关键词记录" : "")
-    : tasks ? "等待本轮检索开始" : status.counts ? "等待主节点提供任务明细" : "等待同步");
-  byId("search-task-table").hidden = !tasks?.length;
+  byId("search-plan").hidden = !status.round && !upcoming.length;
+  set("search-keyword", keyword ? `本轮关键词 ${keyword}` : status.round ? "本轮沿用旧版混合检索" : "等待首轮检索");
+  const goalReached = Boolean(status.target && found >= status.target);
+  set("search-tasks-note", !status.round ? (upcoming.length ? "每轮一个关键词" : "等待同步")
+    : status.phase === "collecting" ? (goalReached ? "等待已领取的检索交回" : "")
+    : goalReached ? "本轮已达到收录目标" : "本轮检索已结束");
+  byId("search-upcoming").hidden = !upcoming.length;
+  set("search-upcoming", `${status.round ? "下一轮起" : "首轮起"}依次检索  ${upcoming.join(" → ")}`);
+  byId("search-pages").hidden = !pages.length;
   byId("video-queue").hidden = !videos.length;
   const queueSize = (status.counts?.video?.pending || 0) + (status.counts?.video?.leased || 0);
   set("video-queue-note", queueSize > videos.length ? `显示前 ${videos.length} 项 / 共 ${count(queueSize)} 项`
     : `共 ${count(queueSize)} 项`);
-  const signature = JSON.stringify([tasks, videos]);
+  const signature = JSON.stringify([pages, videos]);
   if (signature === searchSignature) return;
   searchSignature = signature;
-  byId("search-tasks").replaceChildren(...(tasks || []).map((task) => {
-    const row = document.createElement("tr");
-    const keyword = document.createElement("th");
-    keyword.scope = "row";
-    keyword.textContent = task.keyword;
-    row.append(keyword);
-    row.insertCell().textContent = task.order === "pubdate" ? "最新发布" : "综合排序";
-    row.insertCell().textContent = count(task.pages);
-    row.insertCell().textContent = count(task.found);
-    const queue = row.insertCell();
-    if (!task.queued.length) {
-      queue.textContent = task.failed ? count(task.failed) + " 页失败" : task.skipped ? "已达目标" : "已结束";
-    } else {
-      for (const page of task.queued) {
-        const item = document.createElement("span");
-        item.className = "cluster-queue-state";
-        item.dataset.state = page.state;
-        item.textContent = `第 ${page.page} 页 · ${page.state === "leased" ? page.node || "检索中" : "待检索"}`;
-        queue.append(item);
-      }
-    }
-    return row;
+  byId("search-pages").replaceChildren(...pages.map((page) => {
+    const item = document.createElement("li");
+    item.className = "cluster-queue-state";
+    item.dataset.state = page.state;
+    const order = page.order === "pubdate" ? "最新发布" : "综合排序";
+    const state = page.state === "leased" ? page.node || "检索中" : "待检索";
+    item.textContent = `${order}第 ${page.page} 页 · ${state}`;
+    return item;
   }));
   byId("video-queue-rows").replaceChildren(...videos.map((task) => {
     const row = document.createElement("li");

@@ -43,7 +43,8 @@ def test_round_deduplicates_video_and_fans_out_activity(tmp_path):
     store, host, member = _cluster(tmp_path)
     first = _exchange(store, host, work=True).task
     second = _exchange(store, member, work=True).task
-    assert first.keyword != second.keyword
+    assert first.keyword == second.keyword == "抽奖"
+    assert first.order != second.order
     ref = Reference(kind="video", key=BVID)
     first_result = _report(first, references=[ref])
     _exchange(store, host, report=first_result)
@@ -248,7 +249,7 @@ def test_round_targets_1000_distinct_videos_and_starts_again(tmp_path):
     assert feed.task is None
     assert feed.status["phase"] == "collecting"
     assert feed.status["counts"]["video"] == {"pending": TARGET}
-    assert feed.status["counts"]["search"] == {"done": 1, "leased": 1, "skipped": 11}
+    assert feed.status["counts"]["search"] == {"done": 1, "leased": 1, "skipped": 1}
     switched = _exchange(store, member, work=True, report=_report(second))
     assert switched.status["phase"] == "detecting"
     assert switched.task is None  # An older or search-only worker cannot receive the new video check.
@@ -258,6 +259,32 @@ def test_round_targets_1000_distinct_videos_and_starts_again(tmp_path):
     next_round = _exchange(store, host, work=True)
     assert next_round.status["round"] == 2 and next_round.task.page == 1
     assert next_round.status["next_round"] == 0
+    assert next_round.task.keyword == next_round.status["round_keyword"] == "福利"
+
+
+def test_new_keyword_rounds_follow_legacy_round_and_wrap_after_exhaustion(tmp_path):
+    from web.cluster_protocol import KEYWORDS
+
+    store, host, _ = _cluster(tmp_path)
+    first = _exchange(store, host, work=True).task
+    with store.tx() as db:
+        db.execute("DELETE FROM settings WHERE key='round_keyword'")
+        store._queue(db, 1, "search", "pubdate:福利:1", keyword="福利", order="pubdate", page=1)
+    legacy = store.status()
+    assert legacy["round_keyword"] is None and legacy["upcoming_keywords"] == KEYWORDS
+    assert {item["keyword"] for item in legacy["search_tasks"]} == {"抽奖", "福利"}
+
+    feed = _exchange(store, host, work=True, report=_report(first))
+    while feed.status["round"] == 1:
+        feed = _exchange(store, host, work=True, report=_report(feed.task))
+    for keyword in (*KEYWORDS, KEYWORDS[0]):
+        assert feed.task.keyword == feed.status["round_keyword"] == keyword
+        assert {item["keyword"] for item in feed.status["search_tasks"]} == {keyword}
+        store = ClusterStore(tmp_path)
+        other_order = _exchange(store, host, work=True, report=_report(feed.task))
+        assert other_order.task.keyword == keyword
+        assert other_order.task.order != feed.task.order
+        feed = _exchange(store, host, work=True, report=_report(other_order.task))
 
 
 def test_history_merges_joined_nodes_and_reopens_search_if_queue_shrinks(tmp_path, monkeypatch):
