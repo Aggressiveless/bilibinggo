@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 import time
@@ -23,11 +24,16 @@ VIDEO_RECHECK = 12 * 3600
 SEARCH_PAGE_LIMIT = 60
 EVENT_RETENTION = 2000
 RECENT_EVENTS = 80
+DETECTIONS_PER_PAGE = 10
 JOB_LABEL = {"search": "检索", "video": "视频检查", "dynamic": "动态核验",
              "article": "专栏检查", "short": "短链展开", "author": "发布者检查"}
 RETRY_LABEL = {"platform": "平台内容暂不可读", "model": "模型未返回有效结果",
                "network": "网络请求失败", "analysis_busy": "其它节点正在分析同一内容",
-               "worker": "工作节点处理失败"}
+               "worker": "工作节点处理失败", "source_response": "B 站内容接口未返回可用数据",
+               "dynamic_detail": "关联动态详情不可读取", "dynamic_body": "关联动态缺少可核验正文"}
+DETECTION_EVENT = re.compile(
+    r"视频检查 (BV[0-9A-Za-z]{10})完成：(核验 ([0-9]+) 项开放活动|未确认开放活动)(?:，调用模型 [0-9]+ 次)?"
+)
 
 
 def _dump(value):
@@ -62,6 +68,11 @@ class ClusterStore:
                     videos INTEGER NOT NULL, activities INTEGER NOT NULL,
                     PRIMARY KEY(round,node)
                 );
+                CREATE TABLE IF NOT EXISTS cluster_video_results(
+                    job INTEGER PRIMARY KEY, round INTEGER NOT NULL, node TEXT NOT NULL,
+                    matched INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS cluster_video_results_round ON cluster_video_results(round,node);
                 CREATE TABLE IF NOT EXISTS nodes(
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL,
                     seen INTEGER NOT NULL, work INTEGER NOT NULL DEFAULT 0,
@@ -89,6 +100,7 @@ class ClusterStore:
             """)
             db.execute("BEGIN IMMEDIATE")
             self._migrate_round(db)
+            self._restore_video_results(db)
 
     @contextmanager
     def tx(self, *, write=True):
@@ -151,6 +163,24 @@ class ClusterStore:
         if not self.get(db, "next_round", 0):
             self.put(db, "phase", "collecting")
 
+    def _restore_video_results(self, db):
+        session = self.get(db, "session") or {}
+        if session.get("role") != "host" or self.get(db, "video_results_restored"):
+            return
+        round_id = self.get(db, "round", 0)
+        start = db.execute("SELECT max(id) FROM cluster_events WHERE message=?",
+                           (f"第 {round_id} 轮开始，目标 {TARGET} 个不同视频",)).fetchone()[0]
+        if start:
+            for event in db.execute("""SELECT node,message FROM cluster_events
+                                       WHERE id>? AND node IS NOT NULL AND level='info' ORDER BY id""", (start,)):
+                match = DETECTION_EVENT.fullmatch(event["message"])
+                if match:
+                    db.execute("""INSERT OR REPLACE INTO cluster_video_results
+                                  SELECT id,round,?,? FROM jobs
+                                  WHERE round=? AND kind='video' AND key=? AND state='done'""",
+                               (event["node"], int(int(match[3] or 0) > 0), round_id, match[1]))
+        self.put(db, "video_results_restored", True)
+
     @staticmethod
     def _event(db, at, message, *, node=None, name=None, level="info"):
         if node and name is None:
@@ -172,7 +202,8 @@ class ClusterStore:
         with self.tx() as db:
             if self.get(db, "session"):
                 raise ClusterError("请先退出当前集群")
-            for table in ("nodes", "catalog", "jobs", "checked_videos", "sightings", "analyses", "cluster_events", "cluster_node_round"):
+            for table in ("nodes", "catalog", "jobs", "checked_videos", "sightings", "analyses",
+                          "cluster_events", "cluster_node_round", "cluster_video_results"):
                 db.execute(f"DELETE FROM {table}")
             session = {"role": "host", "name": name, "address": address, "id": uuid.uuid4().hex,
                        "node": uuid.uuid4().hex, "token": secrets.token_hex(32)}
@@ -183,6 +214,7 @@ class ClusterStore:
             self.put(db, "round", 0)
             self.put(db, "phase", "collecting")
             self.put(db, "two_stage", True)
+            self.put(db, "video_results_restored", True)
             self._event(db, int(time.time()), "主节点已发起工作集群", name=name)
             return session
 
@@ -270,6 +302,7 @@ class ClusterStore:
             for word in KEYWORDS:
                 self._queue(db, round_id, "search", f"{order}:{word}:1", keyword=word, order=order, page=1)
         db.execute("DELETE FROM cluster_node_round WHERE round<?", (round_id - 2,))
+        db.execute("DELETE FROM cluster_video_results WHERE round<?", (round_id - 2,))
         db.execute("DELETE FROM sightings WHERE round<?", (round_id - 2,))
         # Keep a cumulative page count when old rounds are pruned. Older installations
         # can recover only the rounds whose job rows still exist at upgrade time.
@@ -329,6 +362,9 @@ class ClusterStore:
         activities = {item.dynamic_id: item for item in report.activities} if kind == "video" else {}
         for item in activities.values():
             self._catalog(db, item, 2, now, node)
+            if not item.closed and min(item.lottery_time, item.deadline or item.lottery_time) > now:
+                db.execute("INSERT OR IGNORE INTO sightings VALUES(?,?,'open_activity',?)",
+                           (job["round"], job["id"], item.dynamic_id))
         if report.outcome == "cooldown":
             until = max(now + report.cooldown, self.get(db, "cooldown_until", 0))
             self.put(db, "cooldown_until", until)
@@ -347,6 +383,10 @@ class ClusterStore:
         db.execute("UPDATE nodes SET completed=completed+1 WHERE id=?", (node,))
         if kind == "video":
             db.execute("INSERT OR REPLACE INTO checked_videos VALUES(?,?)", (job["key"], now))
+            db.execute("""INSERT INTO cluster_video_results
+                          SELECT ?,?,?,EXISTS(SELECT 1 FROM sightings
+                          WHERE round=? AND job=? AND kind='open_activity')""",
+                       (job["id"], round_id, node, round_id, job["id"]))
         open_activities = sum(not item.closed and min(item.lottery_time, item.deadline or item.lottery_time) > now
                               for item in activities.values())
         summary = f"核验 {open_activities} 项开放活动" if open_activities else "未确认开放活动"
@@ -490,6 +530,22 @@ class ClusterStore:
             session = self.get(db, "session") or {}
             return self._status(db, session, int(time.time()), work_node=session.get("node"))
 
+    def detected_activities(self, page: int, *, node: str | None = None, token: str = ""):
+        now = int(time.time())
+        with self.tx(write=False) as db:
+            db.execute("BEGIN")
+            if node is not None:
+                self._authenticate(db, node, token)
+            elif (self.get(db, "session") or {}).get("role") != "host":
+                raise ClusterError("主节点尚未开启集群")
+            total = db.execute("SELECT count(*) FROM catalog WHERE rank=2 AND expires>?", (now,)).fetchone()[0]
+            pages = max(1, (total + DETECTIONS_PER_PAGE - 1) // DETECTIONS_PER_PAGE)
+            page = min(page, pages)
+            rows = db.execute("""SELECT payload FROM catalog WHERE rank=2 AND expires>?
+                                 ORDER BY expires,id LIMIT ? OFFSET ?""",
+                              (now, DETECTIONS_PER_PAGE, (page - 1) * DETECTIONS_PER_PAGE))
+            return {"total": total, "page": page, "pages": pages, "items": [json.loads(row[0]) for row in rows]}
+
     def _status(self, db, session, now, *, work_node):
         round_id = self.get(db, "round", 0)
         counts = {}
@@ -515,13 +571,20 @@ class ClusterStore:
         events = [dict(row) for row in db.execute(
             "SELECT id,at,level,node,node_name,message FROM cluster_events ORDER BY id DESC LIMIT ?",
             (RECENT_EVENTS,))]
+        results = db.execute("""SELECT count(*),coalesce(sum(matched),0),
+                                       coalesce(sum(node=?),0),coalesce(sum(CASE WHEN node=? THEN matched END),0)
+                                FROM cluster_video_results WHERE round=?""", (work_node, work_node, round_id)).fetchone()
+        catalog = db.execute("SELECT count(*),coalesce(sum(rank=2),0) FROM catalog WHERE expires>?", (now,)).fetchone()
         return {"round": round_id, "target": TARGET, "counts": counts, "nodes": nodes, "events": events,
                 "concurrency_limit": MAX_CONCURRENT, "two_stage": True,
                 "search_pages_total": self.get(db, "search_pages_archived", 0) + search[1],
                 "search_history_start": self.get(db, "search_history_start", search[0] or round_id),
                 "local_work": dict(local_round) if local_round else {"pages": 0, "found": 0, "videos": 0, "activities": 0},
                 "local_events": local_events,
+                "conversion": {"checked": results[0], "matched": results[1]},
+                "local_conversion": {"checked": results[2], "matched": results[3]},
+                "detected_open": catalog[1], "retry_detail": True,
                 "now": now, "phase": self.get(db, "phase", "collecting"), "next_round": self.get(db, "next_round", 0),
                 "paused": self.get(db, "paused", False), "cooldown_until": self.get(db, "cooldown_until", 0),
                 "sequence": self.get(db, "sequence", 0),
-                "active": db.execute("SELECT count(*) FROM catalog WHERE expires>?", (now,)).fetchone()[0]}
+                "active": catalog[0]}

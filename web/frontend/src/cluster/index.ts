@@ -2,9 +2,11 @@
 import { fetchJSON } from "../api/client";
 import { showToast } from "../shell/toast";
 import { loadActivities, loadSummary } from "../activities";
+import { mountDetectedActivities } from "./detections";
 import "./styles.css";
 
 type Counts = Record<string, number>;
+type Conversion = { checked: number; matched: number };
 type Node = {
   id: string; name: string; online: boolean; host: boolean; work: number; kind?: string;
   key?: string; completed: number; model_calls: number; task_label?: string;
@@ -32,6 +34,7 @@ type Status = {
     local_events?: ClusterEvent[];
     phase?: string; paused?: boolean; now?: number; next_round?: number; cooldown_until?: number;
     search_pages_total?: number; search_history_start?: number; concurrency_limit?: number; two_stage?: boolean;
+    conversion?: Conversion; local_conversion?: Conversion; detected_open?: number; sequence?: number;
   };
 };
 
@@ -42,6 +45,7 @@ const set = (name: string, value: string | number) => {
   if (element.textContent !== label) element.textContent = label;
 };
 const number = new Intl.NumberFormat("zh-CN");
+const percent = new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 1 });
 const count = (value?: number) => value === undefined ? "—" : number.format(value);
 const time = (stamp: number) => new Date(stamp * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 const kinds: Record<string, string> = { search: "检索页", video: "视频检测", dynamic: "动态核验", short: "短链展开", article: "专栏检查", author: "发布者检查" };
@@ -53,6 +57,7 @@ const phases: Record<string, string> = {
 let current: Status | undefined;
 let busy = false;
 let refreshing = false;
+let updateDetections: ReturnType<typeof mountDetectedActivities>;
 const eventPanels: Array<(snapshot: Status) => void> = [];
 const eventTime = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
@@ -79,6 +84,17 @@ function eventRow(event: ClusterEvent, showNode = true) {
 }
 
 let lastDiscoveryEvents = "";
+function renderConversion(prefix: string, conversion: Conversion | undefined, completed: number) {
+  const id = prefix ? prefix + "-" : "";
+  byId(id + "yield").hidden = conversion === undefined;
+  if (!conversion) return;
+  const { matched, checked } = conversion;
+  set(id + "conversion", checked ? percent.format(matched / checked) : "—");
+  const missing = Math.max(0, completed - checked);
+  set(id + "conversion-detail", "命中 " + count(matched) + " / 已统计 " + count(checked) + " 个视频" +
+    (missing ? "，另有 " + count(missing) + " 个早期结果缺少明细" : ""));
+}
+
 function renderDiscoveryWork(snapshot: Status) {
   const panel = byId("discovery-work");
   if (!panel) return;
@@ -106,6 +122,7 @@ function renderDiscoveryWork(snapshot: Status) {
   for (const metric of ["pages", "found", "videos", "activities"] as const) {
     set("discovery-" + metric, status.local_work?.[metric] ?? "—");
   }
+  renderConversion("local", status.local_conversion, status.local_work?.videos || 0);
 
   const events = status.local_events ?? (status.events || []).filter((event) => event.node === snapshot.node).slice(0, 6);
   const list = byId("discovery-events");
@@ -157,6 +174,7 @@ function mountEventPanels() {
 function render(snapshot: Status) {
   const priorRole = current?.role;
   current = snapshot;
+  updateDetections({ node: snapshot.node, total: snapshot.status.detected_open, sequence: snapshot.status.sequence });
   renderDiscoveryWork(snapshot);
   eventPanels.forEach((update) => update(snapshot));
   const status = snapshot.status;
@@ -195,6 +213,8 @@ function render(snapshot: Status) {
   set("video-pending", count(status.counts ? video.pending || 0 : undefined));
   set("video-running", count(status.counts ? video.leased || 0 : undefined));
   set("video-done", count(status.counts ? video.done || 0 : undefined));
+  renderConversion("", status.conversion, video.done || 0);
+  set("detected-open", count(status.detected_open));
   byId("video-failed").hidden = !video.failed;
   set("video-failed", "本轮视频检测失败 " + count(video.failed) + " 项");
   set("search-round", count(status.counts ? counts.search?.done || 0 : undefined));
@@ -313,6 +333,7 @@ async function action(path: string, data?: object) {
 export function bindCluster() {
   if (!byId("root")) return;
   mountEventPanels();
+  updateDetections = mountDetectedActivities(byId);
   for (const mode of ["host", "join"]) {
     byId<HTMLFormElement>(mode + "-form").addEventListener("submit", (event) => {
       event.preventDefault();

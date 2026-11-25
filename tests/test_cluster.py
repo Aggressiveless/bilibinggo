@@ -117,6 +117,10 @@ def test_host_api_login_auth_and_protocol(isolated_home, monkeypatch):
         creds = {"Authorization": f"Bearer {other.token}"}
         result = api.post(base + "/exchange", headers=creds, json=body)
         assert result.json()["changes"][0]["activity"]["prize"] == "同步"
+        assert api.get("/api/cluster/detected-activities", headers=headers).json()["total"] == 0
+        assert api.get("/api/cluster/detected-activities").status_code == 403
+        assert api.post(base + "/detected-activities", json={"node": other.node}).status_code == 401
+        assert api.post(base + "/detected-activities", headers=creds, json={"node": other.node}).json()["total"] == 0
         assert api.post(base + "/exchange", headers=creds, content=b"x" * (256 * 1024 + 1)).status_code == 413
         assert api.post(base + "/leave/" + other.node, headers=creds).status_code == 200
         assert api.post(base + "/exchange", headers=creds, json=body).status_code == 401
@@ -234,6 +238,50 @@ def test_worker_search_and_linked_activity_without_account_actions(tmp_path, mon
     assert scanned.activities[0].prize == "奖品"
     assert scanned.activities[0].lottery_time == now + 3600
     assert scanned.model_calls == 0
+    endpoints[cluster_work.d.LOTTERY_NOTICE_URL] = {}
+    endpoints[cluster_work.d.OPUS_DETAIL_URL] = {"item": None}
+    endpoints[cluster_work.d.DYNAMIC_DETAIL_URL] = {"item": {
+        "id_str": KEY, "type": "DYNAMIC_TYPE_AV", "visible": True,
+        "modules": {"module_dynamic": {"major": {"type": "MAJOR_TYPE_ARCHIVE"}}},
+    }}
+    archive = run("video", BVID)
+    assert archive.outcome == "done" and not archive.activities
+    endpoints[cluster_work.d.DYNAMIC_DETAIL_URL] = {"item": None}
+    missing = run("video", BVID)
+    assert missing.outcome == "retry" and missing.reason == "dynamic_detail"
+
+
+def test_conversion_tracks_completed_videos_and_catalog_deduplicates(tmp_path, monkeypatch):
+    monkeypatch.setattr("web.cluster_store.TARGET", 2)
+    store, host, member = _cluster(tmp_path)
+    key = str(int(KEY) + 1)
+    uploaded = Activity(dynamic_id=key, source_url=opus_link(key), lottery_type="互动抽奖",
+                        lottery_time=int(time.time()) + 86400, prize="节点上传")
+    search = _exchange(store, host, work=True, activities=[uploaded]).task
+    refs = [Reference(kind="video", key=code) for code in (BVID, "BV0000000001")]
+    first = _exchange(store, host, work=True, video_detection=True, report=_report(search, references=refs)).task
+    second = _exchange(store, member, work=True, video_detection=True).task
+    valid = _activity(prize="集群检出")
+    _exchange(store, host, report=Report(task_id=first.task_id, lease=first.lease, outcome="retry",
+                                        reason="dynamic_body", activities=[valid]))
+    assert store.status()["conversion"] == {"matched": 0, "checked": 0}
+    assert store.detected_activities(1)["items"][0]["dynamic_id"] == KEY
+    result = _exchange(store, member, report=_report(second, activities=[valid])).status
+    assert result["conversion"] == {"matched": 1, "checked": 1}
+    assert result["local_conversion"] == result["conversion"]
+    with store.tx() as db:
+        db.execute("UPDATE jobs SET due=0 WHERE id=?", (first.task_id,))
+    retried = _exchange(store, host, work=True, video_detection=True).task
+    _exchange(store, host, report=_report(retried, activities=[valid]))
+    assert store.status()["conversion"] == {"matched": 2, "checked": 2}
+    assert store.status()["local_conversion"] == {"matched": 1, "checked": 1}
+    assert store.detected_activities(1)["total"] == 1
+
+    with store.tx() as db:
+        store.put(db, "video_results_restored", False)
+        db.execute("DELETE FROM cluster_video_results")
+    reopened = ClusterStore(tmp_path)
+    assert reopened.status()["conversion"] == {"matched": 2, "checked": 2}
 
 
 def test_upgrade_requeues_video_with_unfinished_link_and_keeps_catalog(tmp_path):

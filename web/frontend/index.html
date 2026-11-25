@@ -455,6 +455,11 @@
                 <div><dt>本机已检测视频</dt><dd id="cluster-discovery-videos">—</dd></div>
                 <div><dt>本机核验开放活动</dt><dd id="cluster-discovery-activities">—</dd></div>
               </dl>
+              <div class="cluster-yield" id="cluster-local-yield" hidden>
+                <span>本机视频转化率 <strong id="cluster-local-conversion">—</strong></span>
+                <small class="caption" id="cluster-local-conversion-detail"></small>
+                <button type="button" class="btn btn-secondary btn-compact" data-section-jump="activities" data-cluster-show-detections>查看集群检出</button>
+              </div>
               <ol class="cluster-events cluster-discovery-events" id="cluster-discovery-events" aria-label="本机最近处理结果" hidden></ol>
             </section>
             <form id="discovery-form" class="discovery-controls">
@@ -658,6 +663,22 @@
                 <button class="btn btn-ghost btn-compact btn-pill" data-action="refresh_status">刷新任务状态</button>
               </div>
             </div>
+            <details class="cluster-detected" id="cluster-detected" hidden>
+              <summary>
+                <strong>集群检出活动</strong>
+                <span class="caption" id="cluster-detected-summary"></span>
+              </summary>
+              <div class="cluster-detected-body">
+                <p class="caption">仅显示集群检测确认、目前仍开放的活动。参与条件以原动态为准。</p>
+                <p class="caption" id="cluster-detected-status" role="status"></p>
+                <ul id="cluster-detected-rows" class="cluster-detected-rows"></ul>
+                <div id="cluster-detected-pager" class="cluster-detected-pager" hidden>
+                  <span class="caption" id="cluster-detected-page"></span>
+                  <button type="button" class="btn btn-secondary btn-compact" id="cluster-detected-prev">上一页</button>
+                  <button type="button" class="btn btn-secondary btn-compact" id="cluster-detected-next">下一页</button>
+                </div>
+              </div>
+            </details>
             <div class="sequential-participate-bar" id="sequential-participate-bar" data-tone="blocked">
               <div class="sequential-participate-lead">
                 <h3 class="sequential-participate-title">自动顺序参与</h3>
@@ -798,6 +819,13 @@
                     <div><dt>已检测</dt><dd id="cluster-video-done">—</dd></div>
                   </dl>
                   <p class="caption cluster-detection-failed" id="cluster-video-failed" hidden></p>
+                  <div class="cluster-yield" id="cluster-yield" hidden>
+                    <span>本轮视频转化率 <strong id="cluster-conversion">—</strong></span>
+                    <small class="caption" id="cluster-conversion-detail"></small>
+                    <button type="button" class="btn btn-secondary btn-compact" data-section-jump="activities" data-cluster-show-detections>
+                      集群检出 · <span id="cluster-detected-open">0</span> 项开放
+                    </button>
+                  </div>
                   <p class="caption cluster-dispatch-rule" id="cluster-dispatch-rule"></p>
                   <ul class="cluster-node-list" id="cluster-nodes" aria-label="节点状态"></ul>
                   <p class="caption cluster-empty" id="cluster-nodes-empty" hidden>等待节点同步</p>

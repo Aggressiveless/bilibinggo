@@ -52,7 +52,7 @@ class WorkClient(d.DiscoveryClient):
 def read_data(client, url, params, *, referer, wbi=False, ttl=600):
     payload = client.read(url, params, referer=referer, ttl=ttl, wbi=wbi)
     if d.api_code(payload) != 0 or not isinstance(payload.get("data"), dict):
-        raise RetryCheck("平台未返回可读取结果")
+        raise RetryCheck("平台未返回可读取结果", reason="source_response")
     return payload["data"]
 
 
@@ -100,15 +100,19 @@ def _video(client, key):
 
 def _dynamic(client, key, now):
     linked = []
-    skip = []
+    unreadable = []
 
     def on_links(text):
         linked.extend(ref for ref in references(text) if ref.key != key)
 
+    def on_skip(status, message):
+        if status == "pending":
+            unreadable.append("dynamic_detail" if "详情" in message else "dynamic_body")
+
     row = d.inspect_dynamic(client, key, now=now, on_links=on_links,
-                            on_skip=lambda status, _reason: skip.append(status))
-    if not row and "pending" in skip:
-        raise RetryCheck("动态暂时无法核验")
+                            on_skip=on_skip, skip_video_cards=True)
+    if not row and unreadable:
+        raise RetryCheck("动态暂时无法核验", reason=unreadable[0])
     if not row:
         return linked, []
     notice = row.get("official_notice") or {}

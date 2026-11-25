@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from src.app_paths import DATA_DIR
 from web.account_service import get_account_profile, has_login_cookie
 from web.api_errors import AppError, ErrorCode, require_login
-from web.cluster_protocol import Analysis, Exchange, HostRequest, JoinRequest, NodeId, PEER_PATH, Register
+from web.cluster_protocol import Analysis, DetectionPageRequest, Exchange, HostRequest, JoinRequest, NodeId, PEER_PATH, Register
 from web.cluster_service import ClusterService
 from web.cluster_store import ClusterError
 
@@ -38,9 +38,9 @@ async def _read(request, schema):
         raise AppError(ErrorCode.VALIDATION_ERROR, "集群协议或参数无效") from exc
 
 
-def _run(fn, *args):
+def _run(fn, *args, **kwargs):
     try:
-        return fn(*args)
+        return fn(*args, **kwargs)
     except ClusterError as exc:
         code = ErrorCode.AUTH_REQUIRED if exc.status == 401 else ErrorCode.VALIDATION_ERROR
         raise AppError(code, str(exc), status_code=exc.status) from exc
@@ -76,6 +76,11 @@ def install_cluster(app):
     @dashboard.get("/status")
     def status(request: Request):
         return request.app.state.cluster.snapshot()
+
+    @dashboard.get("/detected-activities")
+    def detected_activities(request: Request, page: int = Query(default=1, ge=1, le=1_000_000)):
+        _dashboard(request)
+        return _run(request.app.state.cluster.detected_activities, page)
 
     @dashboard.post("/host")
     def host(request: Request, body: HostRequest):
@@ -125,6 +130,13 @@ def install_cluster(app):
         if request.headers.get("x-binggo-video-detection") == "1":
             body.video_detection = True
         return await run_in_threadpool(_run, request.app.state.cluster.store.exchange, body, token)
+
+    @peer.post("/detected-activities")
+    async def peer_detections(request: Request):
+        token = _bearer(request)
+        body = await _read(request, DetectionPageRequest)
+        return await run_in_threadpool(_run, request.app.state.cluster.store.detected_activities,
+                                       body.page, node=body.node, token=token)
 
     @peer.post("/analysis")
     async def analysis(request: Request):

@@ -20,7 +20,7 @@ from src.pipeline.status_step import apply_initial_status
 from src.sources.common import is_valid_dynamic_id, opus_link
 from web.account_service import has_login_cookie
 from web.activity_service import invalidate_activity_cache
-from web.cluster_protocol import Activity, Analysis, Exchange, Feed, Lease, PAGE_SIZE, PEER_PATH, POLL_SECONDS, Register, Report, normalize_address
+from web.cluster_protocol import Activity, Analysis, DetectionPageRequest, Exchange, Feed, Lease, PAGE_SIZE, PEER_PATH, POLL_SECONDS, Register, Report, normalize_address
 from web.cluster_store import ClusterError, ClusterStore
 from web.cluster_work import RetryCheck, execute
 
@@ -190,6 +190,17 @@ class ClusterService:
                 raise ClusterError("只有主节点可以查看邀请码")
             return {"invite": self.store.read("invite")}
 
+    def detected_activities(self, page):
+        session = self.store.read("session") or {}
+        if session.get("role") == "host":
+            return self.store.detected_activities(page)
+        if session.get("role") != "member":
+            raise ClusterError("请先加入工作集群")
+        if "detected_open" not in self.status_remote:
+            raise ClusterError("主节点尚未提供检出活动列表")
+        request = DetectionPageRequest(node=session["node"], page=page)
+        return self._remote(session, "/detected-activities", session["token"], request.model_dump())
+
     def _analysis(self, session, task, key, fields=None):
         payload = {"node": session["node"], "task_id": task.task_id, "lease": task.lease, "key": key, "fields": fields}
         if session["role"] == "host":
@@ -268,9 +279,12 @@ class ClusterService:
             feed = self.store.exchange(message, session["token"])
         else:
             payload = message.model_dump()
-            if payload["report"] is not None and "events" not in self.status_remote:
-                # Older v1 hosts reject report fields they do not recognize.
-                payload["report"].pop("reason", None)
+            if pending_report := payload["report"]:
+                if "events" not in self.status_remote:
+                    pending_report.pop("reason", None)
+                elif (not self.status_remote.get("retry_detail") and
+                      pending_report["reason"] in {"source_response", "dynamic_detail", "dynamic_body"}):
+                    pending_report["reason"] = "platform"
             feed = Feed.model_validate(self._remote(session, "/exchange", session["token"], payload))
         with self.lock:
             if self.store.read("session") != session:

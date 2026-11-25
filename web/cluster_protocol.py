@@ -96,7 +96,13 @@ class Report(Lease):
     more_pages: bool = False
     cooldown: int = Field(default=900, ge=900, le=86400)
     model_calls: int = Field(default=0, ge=0, le=128)
-    reason: Literal["platform", "model", "network", "analysis_busy", "worker"] | None = None
+    reason: Literal["platform", "model", "network", "analysis_busy", "worker",
+                    "source_response", "dynamic_detail", "dynamic_body"] | None = None
+
+
+class DetectionPageRequest(Payload):
+    node: NodeId
+    page: int = Field(default=1, ge=1, le=1_000_000)
 
 
 class Change(Payload):
