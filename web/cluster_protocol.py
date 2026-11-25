@@ -15,12 +15,15 @@ TARGET = 1000
 POLL_SECONDS = 5
 PAGE_SIZE = 100
 HISTORY_PAGE_SIZE = 2000
+WATCH_PAGE_SIZE = 200
 KEYWORDS = ("抽奖", "福利", "奖品", "转发抽奖", "抽奖活动", "粉丝福利")
 BV = Annotated[str, Field(pattern=r"^BV[0-9A-Za-z]{10}$")]
 Token = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 NodeId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
-TaskKind = Literal["search", "video"]
+TaskKind = Literal["search", "video", "watch"]
 LegacyTaskKind = Literal["dynamic", "article", "short", "author"]
+Mid = Annotated[str, Field(pattern=r"^[1-9][0-9]{0,19}$")]
+LocalWork = Literal["idle", "watch", "participating", "busy"]
 LINK_PATTERNS = {
     "video": r"^BV[0-9A-Za-z]{10}$",
     "dynamic": r"^[0-9]{18,19}$",
@@ -92,7 +95,7 @@ class Task(Lease):
             if self.keyword not in KEYWORDS:
                 raise ValueError("未知检索词")
         else:
-            Reference(kind=self.kind, key=self.key)
+            Reference(kind="author" if self.kind == "watch" else self.kind, key=self.key)
         return self
 
 
@@ -122,6 +125,22 @@ class VideoHistory(Payload):
     complete: bool = False
 
 
+class WatchUser(Payload):
+    mid: Mid
+    name: str = Field(min_length=1, max_length=64)
+
+
+class WatchList(Payload):
+    revision: NodeId
+    users: list[WatchUser] = Field(max_length=WATCH_PAGE_SIZE)
+    complete: bool = False
+
+
+class WatchAssignment(Payload):
+    mid: Mid
+    node: NodeId
+
+
 class Exchange(Payload):
     node: NodeId
     after: int = Field(default=0, ge=0, lt=2**63)
@@ -133,6 +152,8 @@ class Exchange(Payload):
     report: Report | None = None
     video_history: VideoHistory | None = None
     import_round: int | None = Field(default=None, ge=1)
+    watch_list: WatchList | None = None
+    local_work: LocalWork | None = None
 
 
 class Analysis(Lease):

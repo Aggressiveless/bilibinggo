@@ -787,6 +787,7 @@
                 <p class="caption" id="cluster-worker-note" hidden>登录 B 站后可参与检索和同步。完成模型连接测试后可领取检测任务。</p>
               </div>
               <div class="cluster-dashboard-grid">
+                <div class="cluster-search-column">
                 <article class="panel cluster-overview" aria-labelledby="cluster-overview-title">
                   <div class="cluster-heading">
                     <h2 class="section-title" id="cluster-overview-title">检索集合</h2>
@@ -829,6 +830,23 @@
                     </details>
                   </section>
                 </article>
+                <article class="panel cluster-watch" aria-labelledby="cluster-watch-title" id="cluster-watch" hidden>
+                  <div class="cluster-heading">
+                    <h2 class="section-title" id="cluster-watch-title">追踪 UP 主</h2>
+                    <span class="caption" id="cluster-watch-total"></span>
+                  </div>
+                  <label class="cluster-watch-target" id="cluster-watch-target" hidden>
+                    指派节点<select class="form-input" id="cluster-watch-node"></select>
+                  </label>
+                  <p class="caption" id="cluster-watch-note" role="status"></p>
+                  <ul class="cluster-watch-list" id="cluster-watch-list"></ul>
+                  <div class="cluster-watch-pages" id="cluster-watch-pages" hidden>
+                    <span class="caption" id="cluster-watch-page"></span>
+                    <button type="button" class="btn btn-secondary btn-compact" id="cluster-watch-prev">上一页</button>
+                    <button type="button" class="btn btn-secondary btn-compact" id="cluster-watch-next">下一页</button>
+                  </div>
+                </article>
+                </div>
                 <article class="panel cluster-workers" aria-labelledby="cluster-workers-title">
                   <div class="cluster-heading">
                     <h2 class="section-title" id="cluster-workers-title">分配检测</h2>

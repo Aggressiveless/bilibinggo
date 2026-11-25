@@ -16,10 +16,13 @@ from src.bilibili_client import BilibiliRequestError
 from src.llm_settings import get_llm_config
 from src.lottery_discovery_broad import has_direct_video_entry, has_video_clue, search_author_lotteries
 from src.sources.common import opus_link
+from src.watch_feed import SPACE_FEED_URL, extract_feed_pub_ts, extract_forward_orig_id
 from web.cluster_protocol import Activity, Reference, Report, Task
 
 MAX_VIDEO_REFERENCES = 16
 MAX_REFERENCE_DEPTH = 4
+WATCH_LOOKBACK = 24 * 3600
+WATCH_SCAN_PAGES = 3
 
 
 class RetryCheck(Exception):
@@ -167,12 +170,55 @@ def _detect_video(client, key, activities):
         raise retry
 
 
+def _check_watched_author(client, mid, activities):
+    now = int(time.time())
+    offset = ""
+    seen_offsets, candidates = set(), set()
+    for _ in range(WATCH_SCAN_PAGES):
+        data = read_data(client, SPACE_FEED_URL,
+                         {"host_mid": int(mid), "offset": offset, "type": "all", "platform": "web",
+                          "timezone_offset": -480, "web_location": "333.1365"},
+                         referer=f"https://space.bilibili.com/{mid}/dynamic", wbi=True, ttl=90)
+        for item in data.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            published = extract_feed_pub_ts(item)
+            if published and not now - WATCH_LOOKBACK <= published <= now:
+                continue
+            original = extract_forward_orig_id(item)
+            if original and len(original) in (18, 19) and original.isascii():
+                candidates.add(original)
+            # The official lottery marker can be present even when the body is short.
+            text = d._extract_from_detail_item(d._normalize_dynamic_item(item))
+            key = str(item.get("id_str") or "")
+            if (len(key) in (18, 19) and key.isascii() and key.isdecimal()
+                    and (d.LOTTERY_RE.search(text) or "RICH_TEXT_NODE_TYPE_LOTTERY" in json.dumps(item))):
+                candidates.add(key)
+        offset = str(data.get("offset") or "")
+        if not data.get("has_more") or not offset or offset in seen_offsets:
+            break
+        seen_offsets.add(offset)
+    retry = None
+    for key in sorted(candidates, key=int, reverse=True)[:MAX_VIDEO_REFERENCES]:
+        try:
+            _, matches = _dynamic(client, key, now)
+        except (RetryCheck, httpx.HTTPError, BilibiliRequestError) as exc:
+            retry = retry or exc
+            continue
+        activities.extend(matches)
+    if retry is not None:
+        raise retry
+
+
 def execute(task: Task, cache_path: Path, get_analysis, put_analysis, *, two_stage=True) -> Report:
     result = {"task_id": task.task_id, "lease": task.lease, "outcome": "done"}
     client = WorkClient(cache_path, get_analysis, put_analysis)
     try:
         if task.kind == "search":
             result.update(_search(client, task))
+        elif task.kind == "watch":
+            result["activities"] = activities = []
+            _check_watched_author(client, task.key, activities)
         elif task.kind == "video" and two_stage:
             activities = []
             result["activities"] = activities

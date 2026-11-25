@@ -343,6 +343,68 @@ def test_round_import_uses_node_order_and_waits_for_applied_catalog_cursor(tmp_p
     assert (host_work["videos_checked"], host_work["videos_total"], host_work["videos_matched"]) == (0, 1, 1)
 
 
+def test_cluster_watch_merges_by_mid_and_prioritizes_assignment_for_selected_node(tmp_path):
+    from web.cluster_protocol import WatchAssignment
+
+    store, host, member = _cluster(tmp_path)
+    revision = uuid.uuid4().hex
+    users = [{"mid": "31", "name": "同一 UP 主"}]
+    _exchange(store, host, video_detection=True, local_work="idle", watch_list={
+        "revision": revision, "users": users, "complete": True,
+    })
+    _exchange(store, member, video_detection=True, local_work="participating", watch_list={
+        "revision": revision, "users": users + [{"mid": "49", "name": "另一位"}], "complete": True,
+    })
+    result = store.tracked_users(1, node=member["node"], token=member["token"])
+    assert result["total"] == 2
+    shared = next(user for user in result["items"] if user["mid"] == "31")
+    assert set(shared["sources"]) == {host["name"], member["name"]}
+    assignment = WatchAssignment(mid="31", node=member["node"])
+    store.assign_watch(assignment)
+    store.assign_watch(assignment)
+    assert _exchange(store, host, work=True, video_detection=True, local_work="idle").task.kind == "search"
+    assigned = _exchange(store, member, work=True, video_detection=True, local_work="idle")
+    assert (assigned.task.kind, assigned.task.key) == ("watch", "31")
+    displayed = next(node for node in assigned.status["nodes"] if node["id"] == member["node"])
+    assert displayed["kind"] == "watch" and displayed["task_label"] == "追踪检查「同一 UP 主」"
+    report = _exchange(store, member, local_work="idle", report=_report(assigned.task, activities=[_activity(prize="追踪检出")]))
+    assert report.status["conversion"] == {"checked": 0, "matched": 0}
+    assert report.changes[0].activity.prize == "追踪检出"
+    assert next(user for user in store.tracked_users(1)["items"] if user["mid"] == "31")["hits"] == 1
+
+    _exchange(store, member, video_detection=True, local_work="idle", watch_list={
+        "revision": uuid.uuid4().hex, "users": [], "complete": True,
+    })
+    result = ClusterStore(tmp_path).tracked_users(1)
+    assert result["total"] == 1 and result["items"][0]["sources"] == [host["name"]]
+
+
+def test_watch_worker_checks_recent_original_and_forwarded_dynamics(monkeypatch):
+    from web import cluster_work
+
+    now = int(time.time())
+    seen = []
+    def item(key, at, *, original=None, text=""):
+        row = {"id_str": key, "type": "DYNAMIC_TYPE_WORD", "text": text,
+               "modules": {"module_author": {"pub_ts": at}}}
+        if original:
+            row.update(type="DYNAMIC_TYPE_FORWARD", orig={"id_str": original})
+        return row
+    direct, forwarded, old = KEY, str(int(KEY) + 1), str(int(KEY) + 2)
+    records = [item(direct, now, text="新品抽奖"), item(str(int(KEY) + 3), now, original=forwarded),
+               item(old, now - 2 * 86400, text="过往抽奖")]
+    monkeypatch.setattr(cluster_work, "read_data", lambda *_a, **_kw: {"items": records})
+    monkeypatch.setattr(cluster_work.d, "_extract_from_detail_item", lambda row: row.get("text", ""))
+    def verify(_client, key, _now):
+        seen.append(key)
+        return [], [_activity(prize=key)]
+    monkeypatch.setattr(cluster_work, "_dynamic", verify)
+    activities = []
+    cluster_work._check_watched_author(object(), "31", activities)
+    assert set(seen) == {direct, forwarded}
+    assert {entry.prize for entry in activities} == {direct, forwarded}
+
+
 def test_worker_search_and_linked_activity_without_account_actions(tmp_path, monkeypatch):
     from web import cluster_work
     from web.cluster_protocol import Task

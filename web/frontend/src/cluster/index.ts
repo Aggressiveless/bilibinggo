@@ -12,7 +12,11 @@ type Node = {
   key?: string; seen?: number; completed: number; model_calls: number; task_label?: string;
   history_count?: number | null; history_complete?: number | null; search_pages?: number;
   videos_checked?: number; videos_total?: number; videos_counted?: number; videos_matched?: number;
+  local_work?: "idle" | "watch" | "participating" | "busy" | null;
 };
+type WatchUser = { mid: string; name: string; sources: string[]; assigned: string | null;
+  state: string | null; checked: number | null; hits: number | null };
+type WatchPage = { items: WatchUser[]; page: number; pages: number; total: number };
 type QueuedPage = { page: number; state: "pending" | "leased"; node: string | null };
 type SearchTask = {
   keyword: string; order: "pubdate" | "totalrank"; queued: QueuedPage[];
@@ -46,6 +50,7 @@ type Status = {
     known_videos?: number; history_syncing?: number; round_import?: RoundImport | null;
     search_tasks?: SearchTask[]; video_queue?: VideoTask[];
     round_keyword?: string | null; upcoming_keywords?: string[];
+    watch_tracking?: boolean;
   };
 };
 
@@ -59,7 +64,7 @@ const number = new Intl.NumberFormat("zh-CN");
 const percent = new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 1 });
 const count = (value?: number) => value === undefined ? "—" : number.format(value);
 const time = (stamp: number) => new Date(stamp * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-const kinds: Record<string, string> = { search: "检索页", video: "视频检测", dynamic: "动态核验", short: "短链展开", article: "专栏检查", author: "发布者检查" };
+const kinds: Record<string, string> = { search: "检索页", video: "视频检测", watch: "追踪检查", dynamic: "动态核验", short: "短链展开", article: "专栏检查", author: "发布者检查" };
 const phases: Record<string, string> = {
   collecting: "协作检索中", detecting: "分配检测中", running: "协作检索中",
   importing: "轮间导入活动",
@@ -72,6 +77,9 @@ let refreshing = false;
 let updateDetections: ReturnType<typeof mountDetectedActivities>;
 let searchSignature = "";
 let nodeSignature = "";
+let watchPage = 1;
+let watchPending = false;
+let watchRows = "";
 const eventPanels: Array<(snapshot: Status) => void> = [];
 const eventTime = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
@@ -191,7 +199,13 @@ function mountEventPanels() {
 
 function render(snapshot: Status) {
   const priorRole = current?.role;
+  const priorNode = current?.node;
   current = snapshot;
+  if (priorNode !== snapshot.node) {
+    watchPage = 1;
+    watchRows = "";
+    byId("watch-list").replaceChildren();
+  }
   updateDetections({ node: snapshot.node, total: snapshot.status.detected_open, sequence: snapshot.status.sequence });
   renderDiscoveryWork(snapshot);
   eventPanels.forEach((update) => update(snapshot));
@@ -254,6 +268,84 @@ function render(snapshot: Status) {
 
   renderSearchTasks(status, found);
   renderNodes(snapshot, found);
+  renderWatchControls(snapshot);
+  if (byId("root").closest(".view-section")?.classList.contains("active")) void refreshWatch();
+}
+
+function renderWatchControls(snapshot: Status) {
+  byId("watch").hidden = !snapshot.status.watch_tracking;
+  byId("watch-target").hidden = snapshot.role !== "host";
+  const select = byId<HTMLSelectElement>("watch-node");
+  const targets = (snapshot.status.nodes || []).filter(node => node.online && node.work === 2 && node.local_work);
+  const signature = JSON.stringify(targets.map(({ id, name }) => [id, name]));
+  if (select.dataset.targets !== signature) {
+    const value = select.value;
+    select.replaceChildren(...targets.map(node => new Option(node.name, node.id)));
+    if (targets.some(node => node.id === value)) select.value = value;
+    select.dataset.targets = signature;
+    select.disabled = targets.length === 0;
+  }
+}
+
+async function refreshWatch(page = watchPage) {
+  const snapshot = current;
+  if (!snapshot?.node || !snapshot.status.watch_tracking || watchPending) return;
+  watchPending = true;
+  try {
+    const result = await fetchJSON<WatchPage>(`/api/cluster/tracked-users?page=${page}`, {
+      headers: { "X-Binggo-Dashboard": "1" }, timeoutMs: 10000,
+    });
+    if (current?.node !== snapshot.node) return;
+    watchPage = result.page;
+    const canAssign = snapshot.role === "host" && Boolean(byId<HTMLSelectElement>("watch-node").value);
+    set("watch-total", `${count(result.total)} 位`);
+    set("watch-note", !result.total ? "等待节点同步追踪列表"
+      : snapshot.role === "host" && !canAssign ? "等待支持追踪检查且模型已就绪的节点" : "");
+    byId("watch-pages").hidden = result.pages <= 1;
+    set("watch-page", `${result.page} / ${result.pages} 页`);
+    byId<HTMLButtonElement>("watch-prev").disabled = result.page <= 1;
+    byId<HTMLButtonElement>("watch-next").disabled = result.page >= result.pages;
+    const signature = JSON.stringify([result.items, canAssign]);
+    if (watchRows === signature) return;
+    watchRows = signature;
+    const states: Record<string, string> = { pending: "待检查", leased: "追踪中", failed: "检查失败", skipped: "已取消" };
+    byId("watch-list").replaceChildren(...result.items.map(item => {
+      const row = document.createElement("li");
+      const content = document.createElement("div");
+      const link = document.createElement("a");
+      link.href = `https://space.bilibili.com/${item.mid}/dynamic`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = item.name;
+      const sources = document.createElement("p");
+      sources.className = "caption";
+      sources.textContent = `来源 ${item.sources.join("、")}`;
+      const detail = document.createElement("p");
+      detail.className = "caption";
+      const progress = item.state ? states[item.state] : undefined;
+      detail.textContent = progress ? [progress, item.assigned].filter(Boolean).join(" · ") : item.checked
+        ? `${eventTime.format(item.checked * 1000)} 检查 · ${count(item.hits ?? undefined)} 项开放活动` : "尚未检查";
+      content.append(link, sources, detail);
+      row.append(content);
+      if (snapshot.role === "host") {
+        const assign = document.createElement("button");
+        assign.type = "button";
+        assign.className = "btn btn-secondary btn-compact";
+        assign.textContent = item.state === "pending" ? "改派" : "指派检查";
+        assign.disabled = !canAssign || item.state === "leased";
+        assign.addEventListener("click", () => {
+          const node = byId<HTMLSelectElement>("watch-node").value;
+          if (node) void action("watch-assignment", { mid: item.mid, node });
+        });
+        row.append(assign);
+      }
+      return row;
+    }));
+  } catch {
+    if (current?.node === snapshot.node) set("watch-note", "暂时无法读取集群追踪列表");
+  } finally {
+    watchPending = false;
+  }
 }
 
 function renderSearchTasks(status: Status["status"], found: number) {
@@ -336,11 +428,12 @@ function renderNodes(snapshot: Status, found: number) {
     const state = document.createElement("span");
     state.className = "cluster-pill";
     const importingHere = importing?.node === node.id;
-    state.dataset.state = !node.online ? "offline" : node.kind || importingHere ? "working" : node.work ? "idle" : "sync";
+    state.dataset.state = !node.online ? "offline" : node.kind || importingHere || (node.local_work && node.local_work !== "idle") ? "working" : node.work ? "idle" : "sync";
     const canWork = status.two_stage && status.phase === "detecting" ? node.work === 2 : Boolean(node.work);
-    state.textContent = !node.online ? "离线" : node.kind === "search" ? "检索中" : node.kind ? "检测中"
+    state.textContent = !node.online ? "离线" : node.local_work === "participating" ? "参与活动中"
+      : node.kind === "search" ? "检索中" : node.kind === "watch" || node.local_work === "watch" ? "追踪中" : node.kind ? "检测中"
       : importingHere ? "导入中" : node.history_complete === 0 ? "同步 BV"
-      : !canWork ? "仅同步" : status.paused ? "已暂停" : "空闲";
+      : node.local_work === "busy" ? "本机任务中" : !canWork ? "仅同步" : status.paused ? "已暂停" : "空闲";
     heading.append(name, role, state);
     row.append(heading);
     const task = document.createElement("p");
@@ -452,6 +545,8 @@ export function bindCluster() {
     });
   }
   byId("pause").addEventListener("click", () => void action("pause?paused=" + String(byId("pause").dataset.paused !== "true")));
+  byId("watch-prev").addEventListener("click", () => void refreshWatch(watchPage - 1));
+  byId("watch-next").addEventListener("click", () => void refreshWatch(watchPage + 1));
   byId("show-invite").addEventListener("click", () => {
     if (byId("invite-text").hidden) void action("invite");
     else hideInvite();

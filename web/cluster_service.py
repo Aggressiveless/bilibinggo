@@ -19,11 +19,12 @@ from src.lottery_classifier import PARTICIPATABLE_TYPES
 from src.lottery_time import confirmed_lottery_time_unix
 from src.pipeline.status_step import apply_initial_status
 from src.sources.common import is_valid_dynamic_id, opus_link
+from src.watch_users import list_watch_users
 from web.account_service import has_login_cookie
 from web.activity_service import invalidate_activity_cache
 from web.cluster_protocol import (Activity, Analysis, DetectionPageRequest, Exchange, Feed, HISTORY_PAGE_SIZE, Lease,
                                   LINK_PATTERNS, MAX_LOTTERY_TIME, PAGE_SIZE, PEER_PATH, POLL_SECONDS, Register, Report,
-                                  VideoHistory, normalize_address)
+                                  VideoHistory, WATCH_PAGE_SIZE, WatchList, WatchUser, normalize_address)
 from web.cluster_store import ClusterError, ClusterStore
 from web.cluster_work import RetryCheck, execute
 
@@ -226,6 +227,15 @@ class ClusterService:
         request = DetectionPageRequest(node=session["node"], page=page)
         return self._remote(session, "/detected-activities", session["token"], request.model_dump())
 
+    def tracked_users(self, page):
+        session = self.store.read("session") or {}
+        if session.get("role") == "host":
+            return self.store.tracked_users(page)
+        if session.get("role") != "member" or not self.status_remote.get("watch_tracking"):
+            raise ClusterError("主节点尚未提供集群追踪列表")
+        request = DetectionPageRequest(node=session["node"], page=page)
+        return self._remote(session, "/tracked-users", session["token"], request.model_dump())
+
     def _analysis(self, session, task, key, fields=None):
         payload = {"node": session["node"], "task_id": task.task_id, "lease": task.lease, "key": key, "fields": fields}
         if session["role"] == "host":
@@ -262,6 +272,7 @@ class ClusterService:
         history_queue, shared_history = [], set()
         history_sent, history_reload_at = False, 0
         import_turn = None
+        watch_queue, watch_uploaded, watch_reload_at = [], None, 0
         try:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="cluster-worker") as pool:
                 while not self.stop_event.is_set():
@@ -272,6 +283,7 @@ class ClusterService:
                         export_queue, exported, reload_at = [], set(), 0
                         history_queue, shared_history = [], set()
                         history_sent, history_reload_at, import_turn = False, 0, None
+                        watch_queue, watch_uploaded, watch_reload_at = [], None, 0
                     if self._job and self._job.done():
                         try:
                             report = self._job.result()
@@ -310,9 +322,27 @@ class ClusterService:
                                 if history_queue or not history_sent:
                                     history = VideoHistory(ids=history_queue[:HISTORY_PAGE_SIZE],
                                                            complete=len(history_queue) <= HISTORY_PAGE_SIZE)
-                            feed = self._sync(session, [row for _, row in batch], pool, history=history,
+                            watch = None
+                            if session["role"] == "host" or self.status_remote.get("watch_tracking"):
+                                if not watch_queue and now >= watch_reload_at:
+                                    users = [WatchUser(mid=str(user.mid), name=user.name[:64])
+                                             for user in list_watch_users(ensure_seeded=False)]
+                                    watch_reload_at = now + SYNC_SECONDS
+                                    if users != watch_uploaded:
+                                        revision = uuid.uuid4().hex
+                                        watch_queue = [WatchList(revision=revision, users=users[start:start + WATCH_PAGE_SIZE],
+                                                                complete=start + WATCH_PAGE_SIZE >= len(users))
+                                                       for start in range(0, max(1, len(users)), WATCH_PAGE_SIZE)]
+                                        watch_uploaded = users
+                                if watch_queue:
+                                    watch = watch_queue[0]
+                            feed = self._sync(session, [row for _, row in batch], pool, history=history, watch=watch,
                                               import_round=turn if len(export_queue) <= len(batch) else None)
                             if feed:
+                                if watch is not None:
+                                    watch_queue.pop(0)
+                                    if watch_queue:
+                                        self.wake.set()
                                 if history is not None:
                                     shared_history.update(history.ids)
                                     history_queue = history_queue[len(history.ids):]
@@ -338,7 +368,9 @@ class ClusterService:
         finally:
             self.http.close()
 
-    def _sync(self, session, batch, pool, *, history=None, import_round=None):
+    def _sync(self, session, batch, pool, *, history=None, import_round=None, watch=None):
+        from web.job_runner import runner
+
         node = session["node"]
         pending = self.store.read(f"report:{node}")
         active = self._task if self._task_node_if_working() == node else None
@@ -347,18 +379,25 @@ class ClusterService:
         cursor_key = self._cursor_key(session)
         batch = batch if unknown_time else [row for row in batch if row.lottery_time is not None and not row.closed]
         video_detection = is_llm_ready()
+        local = runner.get_status()
+        local_work = "idle"
+        if local.state == "running":
+            local_work = ("participating" if local.action.startswith("participate")
+                          else "watch" if local.action == "refresh_watch" else "busy")
+        tracking = session["role"] == "host" or self.status_remote.get("watch_tracking")
         message = Exchange(node=node, after=self.store.read(cursor_key, 0), activities=batch,
-                           work=not self._job and (two_stage or video_detection),
+                           work=not self._job and local_work == "idle" and (two_stage or video_detection),
                            video_detection=video_detection if two_stage else None,
                            unknown_activity_time=True,
                            working=Lease(task_id=active.task_id, lease=active.lease) if active else None,
                            report=Report.model_validate(pending) if pending else None,
-                           video_history=history, import_round=import_round)
+                           video_history=history, import_round=import_round,
+                           watch_list=watch, local_work=local_work if tracking else None)
         if session["role"] == "host":
             feed = self.store.exchange(message, session["token"])
         else:
             payload = message.model_dump()
-            for field in ("video_history", "import_round"):
+            for field in ("video_history", "import_round", "watch_list", "local_work"):
                 if payload[field] is None:
                     del payload[field]
             if pending_report := payload["report"]:

@@ -50,6 +50,15 @@
 .cluster-invite input { width: 100%; min-width: 0; }
 .cluster-dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 .cluster-dashboard-grid > * { min-width: 0; }
+.cluster-search-column { display: grid; gap: 16px; min-width: 0; }
+.cluster-watch-target { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 12px 0; font-size: 13px; }
+.cluster-watch-target select { width: min(16rem, 100%); min-width: 0; }
+.cluster-watch-list { list-style: none; margin: 0; padding: 0; }
+.cluster-watch-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; padding: 9px 0; border-top: 1px solid var(--border-soft); }
+.cluster-watch-list a { color: var(--accent-hover); overflow-wrap: anywhere; }
+.cluster-watch-list p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.cluster-watch-pages { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+#cluster-watch-note:empty { display: none; }
 .cluster-overview { border-top: 2px solid var(--accent); }
 .cluster-metrics, .cluster-detection {
   display: grid;

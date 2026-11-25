@@ -11,7 +11,8 @@ from starlette.concurrency import run_in_threadpool
 from src.app_paths import DATA_DIR
 from web.account_service import get_account_profile, has_login_cookie
 from web.api_errors import AppError, ErrorCode, require_login
-from web.cluster_protocol import Analysis, DetectionPageRequest, Exchange, HostRequest, JoinRequest, NodeId, PEER_PATH, Register
+from web.cluster_protocol import (Analysis, DetectionPageRequest, Exchange, HostRequest, JoinRequest, NodeId,
+                                  PEER_PATH, Register, WatchAssignment)
 from web.cluster_service import ClusterService
 from web.cluster_store import ClusterError
 
@@ -89,6 +90,19 @@ def install_cluster(app):
         _run(service.host, body)
         return service.snapshot()
 
+    @dashboard.get("/tracked-users")
+    def tracked_users(request: Request, page: int = Query(default=1, ge=1, le=1_000_000)):
+        _dashboard(request)
+        return _run(request.app.state.cluster.tracked_users, page)
+
+    @dashboard.post("/watch-assignment")
+    def watch_assignment(request: Request, body: WatchAssignment):
+        _dashboard(request, check_login=True)
+        service = request.app.state.cluster
+        _run(service.store.assign_watch, body)
+        service.wake.set()
+        return service.snapshot()
+
     @dashboard.post("/join")
     def join(request: Request, body: JoinRequest):
         _dashboard(request, check_login=True)
@@ -146,6 +160,13 @@ def install_cluster(app):
         token = _bearer(request)
         body = await _read(request, Analysis)
         return await run_in_threadpool(_run, request.app.state.cluster.store.analysis, body, token)
+
+    @peer.post("/tracked-users")
+    async def peer_tracked_users(request: Request):
+        token = _bearer(request)
+        body = await _read(request, DetectionPageRequest)
+        return await run_in_threadpool(_run, request.app.state.cluster.store.tracked_users,
+                                       body.page, node=body.node, token=token)
 
     @peer.post("/leave/{node}")
     def unregister(request: Request, node: NodeId):
