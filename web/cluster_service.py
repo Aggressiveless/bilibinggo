@@ -15,12 +15,12 @@ import httpx
 from src.activity_store import activity_file_lock, append_activities, load_activities, update_activity
 from src.llm_settings import is_llm_ready
 from src.lottery_classifier import PARTICIPATABLE_TYPES
-from src.lottery_time import lottery_time_unix
+from src.lottery_time import confirmed_lottery_time_unix
 from src.pipeline.status_step import apply_initial_status
 from src.sources.common import is_valid_dynamic_id, opus_link
 from web.account_service import has_login_cookie
 from web.activity_service import invalidate_activity_cache
-from web.cluster_protocol import Activity, Analysis, DetectionPageRequest, Exchange, Feed, Lease, PAGE_SIZE, PEER_PATH, POLL_SECONDS, Register, Report, normalize_address
+from web.cluster_protocol import Activity, Analysis, DetectionPageRequest, Exchange, Feed, Lease, MAX_LOTTERY_TIME, PAGE_SIZE, PEER_PATH, POLL_SECONDS, Register, Report, normalize_address
 from web.cluster_store import ClusterError, ClusterStore
 from web.cluster_work import RetryCheck, execute
 
@@ -28,22 +28,24 @@ logger = logging.getLogger(__name__)
 SYNC_SECONDS = 30
 
 
-def _export(now):
+def _export(now, published_unknown=()):
     rows = []
     for item in load_activities():
         key = str(item.get("dynamic_id") or "")
         kind = item.get("lottery_type")
         if (item.get("cluster_id") or kind not in PARTICIPATABLE_TYPES or item.get("skipped")
-                or item.get("lottery_time_inferred") or (item.get("conditions") or {}).get("lottery_time_inferred")
-                or item.get("draw_status") != "active" or not key.isascii() or not is_valid_dynamic_id(key)):
+                or not key.isascii() or not is_valid_dynamic_id(key)):
             continue
-        timestamp = lottery_time_unix(item)
-        if not timestamp or not now < timestamp <= 253402271999:
+        timestamp = confirmed_lottery_time_unix(item)
+        if timestamp is not None and not 0 < timestamp <= MAX_LOTTERY_TIME:
+            timestamp = None
+        closed = item.get("draw_status") == "ended" or (timestamp is not None and timestamp <= now)
+        if (closed and key not in published_unknown) or (not closed and item.get("draw_status") != "active"):
             continue
         prizes = item.get("prizes") or []
         prize = "、".join(str(entry.get("description") or "") for entry in prizes if isinstance(entry, dict))
         rows.append(Activity(dynamic_id=key, source_url=opus_link(key), lottery_type=kind,
-                             lottery_time=timestamp, prize=prize[:300]))
+                             lottery_time=timestamp, prize=prize[:300], closed=closed))
     return rows
 
 
@@ -63,13 +65,19 @@ def _import(changes, cluster_id):
                 current["cluster_id"] == cluster_id and current.get("cluster_seq", 0) >= change.seq
             )):
                 continue
-            deadline = min(activity.lottery_time, activity.deadline or activity.lottery_time)
-            closed = activity.closed or deadline <= now
+            closed = activity.closed or activity.expires_at <= now
             if closed and not current:
                 continue
             row = dict(current or {})
+            lottery_time = activity.lottery_time
+            if lottery_time is None and current:
+                lottery_time = confirmed_lottery_time_unix(current)
+            conditions = dict(row.get("conditions") or {})
+            conditions.pop("lottery_time_text", None)
+            conditions.pop("lottery_time_inferred", None)
             row.update(dynamic_id=key, source_url=opus_link(key), lottery_type=activity.lottery_type,
-                       lottery_time=activity.lottery_time, prizes=[{"description": activity.prize}] if activity.prize else [],
+                       lottery_time=lottery_time, conditions=conditions, lottery_time_inferred=lottery_time is None,
+                       prizes=[{"description": activity.prize}] if activity.prize else [],
                        cluster_id=cluster_id, cluster_seq=change.seq, cluster_deadline=activity.deadline,
                        cluster_closed=closed)
             if current:
@@ -119,6 +127,8 @@ class ClusterService:
             payload = dict(payload)
             if payload.pop("video_detection", None):
                 headers["X-Binggo-Video-Detection"] = "1"
+            if payload.pop("unknown_activity_time", False):
+                headers["X-Binggo-Unknown-Activity-Time"] = "1"
         try:
             response = self.http.post(session["address"] + PEER_PATH + path,
                                       headers=headers, json=payload)
@@ -127,7 +137,8 @@ class ClusterService:
         if response.status_code == 401:
             raise ClusterError("集群授权失败，请检查邀请码或重新加入", 401)
         if response.status_code != 200:
-            raise ClusterError(f"主服务器返回 HTTP {response.status_code}，请检查集群入口", 502)
+            status = response.status_code if response.status_code in (400, 422) else 502
+            raise ClusterError(f"主服务器返回 HTTP {response.status_code}，请检查集群入口", status)
         try:
             return response.json()
         except ValueError as exc:
@@ -180,9 +191,16 @@ class ClusterService:
         return {"role": role, "address": config.get("address"), "node": config.get("node"),
                 "connected": connected if role else False, "error": self.error if role else "",
                 "last_sync": self.last_sync if role else 0,
-                "local_cursor": self.store.read(f"cursor:{config['node']}", 0) if role else 0,
+                "local_cursor": self.store.read(self._cursor_key(config), 0) if role else 0,
                 "worker_ready": has_login_cookie() and is_llm_ready(),
                 "status": status}
+
+    def _supports_unknown_time(self, session):
+        return session["role"] == "host" or bool(self.status_remote.get("unknown_activity_time"))
+
+    def _cursor_key(self, session):
+        prefix = "full_cursor" if self._supports_unknown_time(session) else "cursor"
+        return f"{prefix}:{session['node']}"
 
     def invite(self):
         with self.lock:
@@ -243,16 +261,21 @@ class ClusterService:
                     if session_node and has_login_cookie():
                         try:
                             now = int(time.time())
+                            unknown_time = self._supports_unknown_time(session)
                             if not export_queue and now >= reload_at:
-                                offered = [(row.model_dump_json(), row) for row in _export(now)]
+                                published = set(self.store.read(f"published_unknown:{session_node}", []))
+                                offered = [(row.model_dump_json(), row) for row in _export(now, published)]
                                 exported.intersection_update(mark for mark, _ in offered)
                                 export_queue = [(mark, row) for mark, row in offered if mark not in exported]
                                 reload_at = now + SYNC_SECONDS
                             batch = export_queue[:PAGE_SIZE]
                             feed = self._sync(session, [row for _, row in batch], pool)
                             if feed:
-                                exported.update(mark for mark, _ in batch)
-                                export_queue = export_queue[PAGE_SIZE:]
+                                if unknown_time != self._supports_unknown_time(session):
+                                    export_queue, exported, reload_at = [], set(), 0
+                                else:
+                                    exported.update(mark for mark, _ in batch)
+                                    export_queue = export_queue[PAGE_SIZE:]
                         except ClusterError as exc:
                             self.error = str(exc)
                         except Exception:
@@ -269,10 +292,14 @@ class ClusterService:
         pending = self.store.read(f"report:{node}")
         active = self._task if self._task_node_if_working() == node else None
         two_stage = session["role"] == "host" or bool(self.status_remote.get("two_stage"))
+        unknown_time = self._supports_unknown_time(session)
+        cursor_key = self._cursor_key(session)
+        batch = batch if unknown_time else [row for row in batch if row.lottery_time is not None and not row.closed]
         video_detection = is_llm_ready()
-        message = Exchange(node=node, after=self.store.read(f"cursor:{node}", 0), activities=batch,
+        message = Exchange(node=node, after=self.store.read(cursor_key, 0), activities=batch,
                            work=not self._job and (two_stage or video_detection),
                            video_detection=video_detection if two_stage else None,
+                           unknown_activity_time=True,
                            working=Lease(task_id=active.task_id, lease=active.lease) if active else None,
                            report=Report.model_validate(pending) if pending else None)
         if session["role"] == "host":
@@ -285,15 +312,33 @@ class ClusterService:
                 elif (not self.status_remote.get("retry_detail") and
                       pending_report["reason"] in {"source_response", "dynamic_detail", "dynamic_body"}):
                     pending_report["reason"] = "platform"
-            feed = Feed.model_validate(self._remote(session, "/exchange", session["token"], payload))
+            try:
+                feed = Feed.model_validate(self._remote(session, "/exchange", session["token"], payload))
+            except ClusterError as exc:
+                if unknown_time and exc.status in (400, 422):
+                    self.status_remote = {}
+                raise
         with self.lock:
             if self.store.read("session") != session:
                 return None
             if pending:
                 self.store.write(f"report:{node}", None)
             _import(feed.changes, session["id"])
-            if feed.changes:
-                self.store.write(f"cursor:{node}", feed.changes[-1].seq)
+            # After upgrading, replay the full stream once. The original v1 cursor
+            # may have advanced past records it could not represent.
+            if feed.changes and unknown_time == bool(feed.status.get("unknown_activity_time")):
+                self.store.write(cursor_key, feed.changes[-1].seq)
+            if unknown_time and batch and feed.status.get("unknown_activity_time"):
+                key = f"published_unknown:{node}"
+                previous = set(self.store.read(key, []))
+                published = previous.copy()
+                for activity in batch:
+                    if activity.lottery_time is None and not activity.closed:
+                        published.add(activity.dynamic_id)
+                    else:
+                        published.discard(activity.dynamic_id)
+                if published != previous:
+                    self.store.write(key, sorted(published))
             self.status_remote, self.last_sync, self.error = feed.status, int(time.time()), ""
             if feed.task and not self.stop_event.is_set():
                 self._task, self._task_node = feed.task, node

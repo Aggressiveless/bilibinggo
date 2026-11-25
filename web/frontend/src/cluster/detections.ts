@@ -3,7 +3,7 @@ import { fetchJSON } from "../api/client";
 type DetectedActivity = {
   dynamic_id: string;
   lottery_type: string;
-  lottery_time: number;
+  lottery_time: number | null;
   deadline: number | null;
   prize: string;
 };
@@ -20,7 +20,7 @@ function activityRow(activity: DetectedActivity) {
   title.textContent = activity.prize || "奖品信息待补充";
   const meta = document.createElement("span");
   meta.className = "caption";
-  const draw = "开奖 " + date.format(activity.lottery_time * 1000);
+  const draw = activity.lottery_time === null ? "开奖时间待确认" : "开奖 " + date.format(activity.lottery_time * 1000);
   const deadline = activity.deadline ? "截止 " + date.format(activity.deadline * 1000) : "";
   meta.textContent = [activity.lottery_type, deadline, draw].filter(Boolean).join("　");
   row.append(title, meta);

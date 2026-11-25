@@ -57,6 +57,60 @@ def test_round_deduplicates_video_and_fans_out_activity(tmp_path):
     assert _exchange(store, member, after=result.changes[-1].seq).changes == []
 
 
+def test_old_peer_skips_undated_entries_and_new_peer_can_replay_them(tmp_path, monkeypatch):
+    from web.cluster_protocol import JoinRequest
+    from web import cluster_service
+
+    store, host, peer = _cluster(tmp_path / "host")
+    pending = _activity(prize="时间待定").model_copy(update={"lottery_time": None})
+    known_key = "223456789012345678"
+    known = _activity(prize="时间明确").model_copy(update={"dynamic_id": known_key, "source_url": opus_link(known_key)})
+    _exchange(store, host, activities=[pending, known], unknown_activity_time=True)
+    legacy = _exchange(store, peer)
+    assert legacy.status["active"] == 2
+    assert [change.activity for change in legacy.changes] == [known]
+
+    svc = ClusterService(tmp_path / "member")
+    received = {}
+    monkeypatch.setattr(cluster_service, "is_llm_ready", lambda: False)
+    monkeypatch.setattr(cluster_service, "_import",
+                        lambda rows, _: received.update((row.activity.dynamic_id, row.activity) for row in rows))
+
+    def remote(_session, path, token, payload):
+        if path == "/join":
+            return store.register(Register.model_validate(payload), token)
+        return store.exchange(Exchange.model_validate(payload), token).model_dump()
+
+    monkeypatch.setattr(svc, "_remote", remote)
+    svc.join(JoinRequest(name="升级成员", address="http://127.0.0.1:8182", invite=store.read("invite")))
+    session = svc.store.read("session")
+    node = session["node"]
+    svc.store.write(f"cursor:{node}", legacy.changes[-1].seq)
+    svc._sync(session, [], Mock())
+    assert received == {}
+    svc._sync(session, [], Mock())
+    assert received == {pending.dynamic_id: pending, known.dynamic_id: known}
+    assert svc.store.read(f"full_cursor:{node}") == legacy.changes[-1].seq
+    closed = pending.model_copy(update={"closed": True})
+    assert _exchange(store, host, activities=[closed], unknown_activity_time=True).status["active"] == 1
+    svc.http.close()
+
+
+def test_exports_inferred_time_as_unknown_and_closes_previously_shared_item(monkeypatch):
+    from web import cluster_service
+
+    record = {
+        "dynamic_id": KEY, "lottery_type": "转发抽奖", "draw_status": "active",
+        "lottery_time": int(time.time()) + 180 * 86400, "conditions": {"lottery_time_inferred": True},
+    }
+    monkeypatch.setattr(cluster_service, "load_activities", lambda: [record])
+    now = int(time.time())
+    assert cluster_service._export(now)[0].lottery_time is None
+    record["draw_status"] = "ended"
+    assert cluster_service._export(now) == []
+    assert cluster_service._export(now, {KEY})[0].closed
+
+
 def test_expired_lease_cannot_publish_after_reassignment(tmp_path):
     store, host, member = _cluster(tmp_path)
     _exchange(store, host)
@@ -171,7 +225,7 @@ def test_member_reports_disconnect_and_reconnects(tmp_path, monkeypatch):
     feed = svc._sync(session, [], pool)
     assert feed.task.kind == "search"
     pool.submit.assert_called_once_with(svc._execute, session, feed.task, two_stage=True)
-    assert len(loaded) == 1
+    assert [row.activity.dynamic_id for row in loaded] == [KEY, KEY]  # Upgrade cursor replays the already-imported row once.
     with pytest.raises(ClusterError):
         host.exchange(Exchange(node=session["node"], after=0), "bad token")
     svc.http.close()

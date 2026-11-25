@@ -103,8 +103,10 @@ def test_matches_draw_window_filter_uses_stored_draw_tag() -> None:
         "status_classified": True,
         "draw_tag": "即将开奖",
         "activity_status": "已参加",
+        "lottery_time": int(time.time()) + 3600,
     }
     assert matches_draw_window_filter(item, None, "soon") is True
+    assert matches_draw_window_filter({**item, "lottery_time_inferred": True}, None, "soon") is False
     assert matches_draw_window_filter(item, None, "drawn") is True
 
 

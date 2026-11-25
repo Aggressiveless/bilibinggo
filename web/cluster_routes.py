@@ -129,6 +129,8 @@ def install_cluster(app):
         body = await _read(request, Exchange)
         if request.headers.get("x-binggo-video-detection") == "1":
             body.video_detection = True
+        if request.headers.get("x-binggo-unknown-activity-time") == "1":
+            body.unknown_activity_time = True
         return await run_in_threadpool(_run, request.app.state.cluster.store.exchange, body, token)
 
     @peer.post("/detected-activities")

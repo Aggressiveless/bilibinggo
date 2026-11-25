@@ -325,20 +325,28 @@ class ClusterStore:
         db.execute("DELETE FROM analyses WHERE until<=?", (now,))
 
     def _catalog(self, db, activity: Activity, rank: int, now: int, origin: str):
-        expires = min(activity.lottery_time, activity.deadline or activity.lottery_time)
+        old = db.execute("SELECT payload,rank,origin FROM catalog WHERE id=?", (activity.dynamic_id,)).fetchone()
+        if old:
+            previous = Activity.model_validate_json(old["payload"])
+            other_source = rank == 1 and old["origin"] != origin
+            improves_time = previous.lottery_time is None and activity.lottery_time is not None and not previous.closed
+            if old["rank"] > rank or (other_source and (activity.closed or not improves_time)):
+                return
+            if activity.lottery_time is None and previous.lottery_time is not None:
+                if not activity.closed:
+                    return
+                activity = activity.model_copy(update={"lottery_time": previous.lottery_time})
+        elif activity.closed:
+            return
+        expires = activity.expires_at
         if expires <= now and not activity.closed:
             return
         payload = _dump(activity.model_dump())
-        old = db.execute("SELECT payload,rank,origin FROM catalog WHERE id=?", (activity.dynamic_id,)).fetchone()
         if old:
-            if old["rank"] > rank or (rank == 1 and old["origin"] != origin):
-                return
             if old["payload"] == payload:
                 db.execute("UPDATE catalog SET rank=?, checked=? WHERE id=?",
                            (rank, now, activity.dynamic_id))
                 return
-        if activity.closed and old is None:
-            return
         seq = self.get(db, "sequence", 0) + 1
         self.put(db, "sequence", seq)
         db.execute("""INSERT INTO catalog VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
@@ -365,7 +373,7 @@ class ClusterStore:
         activities = {item.dynamic_id: item for item in report.activities} if kind == "video" else {}
         for item in activities.values():
             self._catalog(db, item, 2, now, node)
-            if not item.closed and min(item.lottery_time, item.deadline or item.lottery_time) > now:
+            if not item.closed and item.expires_at > now:
                 db.execute("INSERT OR IGNORE INTO sightings VALUES(?,?,'open_activity',?)",
                            (job["round"], job["id"], item.dynamic_id))
         if report.outcome == "cooldown":
@@ -390,7 +398,7 @@ class ClusterStore:
                           SELECT ?,?,?,EXISTS(SELECT 1 FROM sightings
                           WHERE round=? AND job=? AND kind='open_activity')""",
                        (job["id"], round_id, node, round_id, job["id"]))
-        open_activities = sum(not item.closed and min(item.lottery_time, item.deadline or item.lottery_time) > now
+        open_activities = sum(not item.closed and item.expires_at > now
                               for item in activities.values())
         summary = f"核验 {open_activities} 项开放活动" if open_activities else "未确认开放活动"
         new_videos = 0
@@ -505,7 +513,7 @@ class ClusterStore:
             db.execute("UPDATE nodes SET seen=?,work=? WHERE id=?", (now, readiness, body.node))
             sequence = self.get(db, "sequence", 0)
             for item in body.activities:
-                if not item.closed:
+                if body.unknown_activity_time or not item.closed:
                     self._catalog(db, item, 1, now, body.node)
             updated = self.get(db, "sequence", 0) - sequence
             if updated:
@@ -516,8 +524,9 @@ class ClusterStore:
                 self._finish(db, body.node, body.report, now)
             self._tick(db, now)
             task = self._claim(db, body.node, now, video_detection=body.video_detection) if body.work and not body.working else None
-            rows = db.execute("SELECT seq,payload FROM catalog WHERE seq>? ORDER BY seq LIMIT ?",
-                              (body.after, PAGE_SIZE))
+            rows = db.execute("""SELECT seq,payload FROM catalog WHERE seq>?
+                                  AND (? OR json_extract(payload,'$.lottery_time') IS NOT NULL)
+                                  ORDER BY seq LIMIT ?""", (body.after, body.unknown_activity_time, PAGE_SIZE))
             changes = [Change(seq=row["seq"], activity=Activity.model_validate_json(row["payload"])) for row in rows]
             return Feed(task=task, changes=changes, status=self._status(db, session, now, work_node=body.node))
 
@@ -586,7 +595,7 @@ class ClusterStore:
                 "local_events": local_events,
                 "conversion": {"checked": results[0], "matched": results[1]},
                 "local_conversion": {"checked": results[2], "matched": results[3]},
-                "detected_open": catalog[1], "retry_detail": True,
+                "detected_open": catalog[1], "retry_detail": True, "unknown_activity_time": True,
                 "now": now, "phase": self.get(db, "phase", "collecting"), "next_round": self.get(db, "next_round", 0),
                 "paused": self.get(db, "paused", False), "cooldown_until": self.get(db, "cooldown_until", 0),
                 "sequence": self.get(db, "sequence", 0),

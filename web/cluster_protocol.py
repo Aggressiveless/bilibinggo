@@ -64,6 +64,12 @@ class Activity(SharedActivity):
     deadline: int | None = Field(default=None, gt=0, le=MAX_LOTTERY_TIME)
     closed: bool = False
 
+    @property
+    def expires_at(self) -> int:
+        # SQLite uses this upper bound for ordering rows with neither time.
+        # Consumers keep the original nullable times.
+        return min(self.lottery_time or MAX_LOTTERY_TIME, self.deadline or MAX_LOTTERY_TIME)
+
 
 class Lease(Payload):
     task_id: int = Field(gt=0)
@@ -116,6 +122,7 @@ class Exchange(Payload):
     activities: list[Activity] = Field(default_factory=list, max_length=PAGE_SIZE)
     work: bool = False
     video_detection: bool | None = None
+    unknown_activity_time: bool = False
     working: Lease | None = None
     report: Report | None = None
 

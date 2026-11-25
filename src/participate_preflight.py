@@ -35,6 +35,10 @@ def _apply_notice_fields(item: dict, notice: dict) -> None:
     lottery_time = int(notice.get("lottery_time") or 0)
     if lottery_time:
         item["lottery_time"] = lottery_time
+        item.pop("lottery_time_inferred", None)
+        if isinstance(conditions := item.get("conditions"), dict):
+            conditions.pop("lottery_time_inferred", None)
+            conditions.pop("lottery_time_text", None)
     status = int(notice.get("status") or 0)
     if status != 0 or notice.get("lottery_result"):
         item["draw_status"] = "ended"
