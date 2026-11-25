@@ -67,7 +67,8 @@ def _normalize_ended_by_time(item: dict, *, now: int | None = None) -> bool:
         changed = True
     current = int(now if now is not None else time.time())
     effective_ts = resolve_effective_lottery_time_unix(item, None)
-    if effective_ts and effective_ts <= current:
+    deadline = item.get("cluster_deadline")
+    if (effective_ts and effective_ts <= current) or (type(deadline) is int and deadline <= current):
         if str(item.get("activity_status") or "") != "已结束":
             item["activity_status"] = "已结束"
             changed = True

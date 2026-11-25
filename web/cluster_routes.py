@@ -1,0 +1,139 @@
+
+"""Dashboard controls and the separately authenticated cluster peer protocol."""
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+
+from fastapi import APIRouter, Request
+from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
+
+from src.app_paths import DATA_DIR
+from web.account_service import get_account_profile, has_login_cookie
+from web.api_errors import AppError, ErrorCode, require_login
+from web.cluster_protocol import Analysis, Exchange, HostRequest, JoinRequest, NodeId, PEER_PATH, Register
+from web.cluster_service import ClusterService
+from web.cluster_store import ClusterError
+
+MAX_BODY = 256 * 1024
+
+
+def _bearer(request):
+    value = request.headers.get("authorization", "")
+    prefix, _, token = value.partition(" ")
+    if prefix != "Bearer" or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
+        raise AppError(ErrorCode.AUTH_REQUIRED, "需要集群凭据")
+    return token
+
+
+async def _read(request, schema):
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > MAX_BODY:
+            raise AppError(ErrorCode.VALIDATION_ERROR, "集群数据超出大小限制", status_code=413)
+        data.extend(chunk)
+    try:
+        return schema.model_validate_json(data)
+    except ValidationError as exc:
+        raise AppError(ErrorCode.VALIDATION_ERROR, "集群协议或参数无效") from exc
+
+
+def _run(fn, *args):
+    try:
+        return fn(*args)
+    except ClusterError as exc:
+        code = ErrorCode.AUTH_REQUIRED if exc.status == 401 else ErrorCode.VALIDATION_ERROR
+        raise AppError(code, str(exc), status_code=exc.status) from exc
+    except ValueError as exc:
+        raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+
+
+def _dashboard(request, *, check_login=False):
+    if request.headers.get("x-binggo-dashboard") != "1":
+        raise AppError(ErrorCode.AUTH_REQUIRED, "请从 Binggo 集群页面操作", status_code=403)
+    if check_login:
+        require_login(get_account_profile())
+
+
+def install_cluster(app):
+    dashboard = APIRouter(prefix="/api/cluster", tags=["cluster"])
+    peer = APIRouter(prefix=PEER_PATH, tags=["cluster-peer"])
+    previous_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(application):
+        async with previous_lifespan(application) as state:
+            service = ClusterService(DATA_DIR / "cluster")
+            application.state.cluster = service
+            service.start()
+            try:
+                yield state
+            finally:
+                service.stop()
+
+    app.router.lifespan_context = lifespan
+
+    @dashboard.get("/status")
+    def status(request: Request):
+        return request.app.state.cluster.snapshot()
+
+    @dashboard.post("/host")
+    def host(request: Request, body: HostRequest):
+        _dashboard(request, check_login=True)
+        service = request.app.state.cluster
+        _run(service.host, body)
+        return service.snapshot()
+
+    @dashboard.post("/join")
+    def join(request: Request, body: JoinRequest):
+        _dashboard(request, check_login=True)
+        service = request.app.state.cluster
+        _run(service.join, body)
+        return service.snapshot()
+
+    @dashboard.post("/leave")
+    def leave(request: Request):
+        _dashboard(request)
+        service = request.app.state.cluster
+        service.leave()
+        return service.snapshot()
+
+    @dashboard.post("/invite")
+    def invite(request: Request):
+        _dashboard(request)
+        if not has_login_cookie():
+            raise AppError(ErrorCode.AUTH_REQUIRED, "请先扫码登录")
+        return _run(request.app.state.cluster.invite)
+
+    @dashboard.post("/pause")
+    def pause(request: Request, paused: bool = True):
+        _dashboard(request)
+        service = request.app.state.cluster
+        _run(service.store.set_paused, paused)
+        return service.snapshot()
+
+    @peer.post("/join")
+    async def register(request: Request):
+        token = _bearer(request)
+        body = await _read(request, Register)
+        return await run_in_threadpool(_run, request.app.state.cluster.store.register, body, token)
+
+    @peer.post("/exchange")
+    async def exchange(request: Request):
+        token = _bearer(request)
+        body = await _read(request, Exchange)
+        return await run_in_threadpool(_run, request.app.state.cluster.store.exchange, body, token)
+
+    @peer.post("/analysis")
+    async def analysis(request: Request):
+        token = _bearer(request)
+        body = await _read(request, Analysis)
+        return await run_in_threadpool(_run, request.app.state.cluster.store.analysis, body, token)
+
+    @peer.post("/leave/{node}")
+    def unregister(request: Request, node: NodeId):
+        _run(request.app.state.cluster.store.leave, node, _bearer(request))
+        return {"ok": True}
+
+    app.include_router(dashboard)
+    app.include_router(peer)

@@ -127,6 +127,9 @@ def ensure_activity_participatable(
         dynamic_id,
         lottery_type_hint=lottery_type_hint,
     )
+    deadline = item.get("cluster_deadline")
+    if type(deadline) is int and deadline <= time.time():
+        raise RuntimeError("活动报名已截止")
     status = str(item.get("activity_status") or "")
     if status != "未参加":
         raise RuntimeError(f"活动当前为「{status}」，无法参与")

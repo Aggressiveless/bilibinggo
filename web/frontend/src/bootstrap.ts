@@ -20,6 +20,7 @@ import { bindDiagnosticsExport } from "./diagnostics/index";
 import { bindCheckUpdates, loadRuntimeInfo } from "./runtime/index";
 import { bindWatchUsers, loadWatchUsers } from "./watch/index";
 import { bindDiscovery } from "./discovery/index";
+import { bindCluster } from "./cluster";
 import { bindUsageOverview } from "./usage/index";
 
 export async function init() {
@@ -35,6 +36,7 @@ export async function init() {
   bindOnboardingPanel();
   bindActionButtons();
   bindDiscovery();
+  bindCluster();
   bindUsageOverview();
   bindDiagnosticsExport();
   bindCheckUpdates();
