@@ -278,7 +278,8 @@ def test_conversion_tracks_completed_videos_and_catalog_deduplicates(tmp_path, m
     assert store.detected_activities(1)["total"] == 1
 
     with store.tx() as db:
-        store.put(db, "video_results_restored", False)
+        store.put(db, "video_results_backfilled", False)
+        db.execute("DELETE FROM cluster_events WHERE message LIKE '第 1 轮开始%'")
         db.execute("DELETE FROM cluster_video_results")
     reopened = ClusterStore(tmp_path)
     assert reopened.status()["conversion"] == {"matched": 2, "checked": 2}

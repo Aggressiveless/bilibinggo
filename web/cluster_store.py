@@ -165,21 +165,24 @@ class ClusterStore:
 
     def _restore_video_results(self, db):
         session = self.get(db, "session") or {}
-        if session.get("role") != "host" or self.get(db, "video_results_restored"):
+        if session.get("role") != "host" or self.get(db, "video_results_backfilled"):
             return
         round_id = self.get(db, "round", 0)
         start = db.execute("SELECT max(id) FROM cluster_events WHERE message=?",
                            (f"第 {round_id} 轮开始，目标 {TARGET} 个不同视频",)).fetchone()[0]
-        if start:
+        # Some hosts enabled event logging after round one had already started.
+        # Since a new cluster clears its event table, all its events belong to round one.
+        if start or round_id == 1:
             for event in db.execute("""SELECT node,message FROM cluster_events
-                                       WHERE id>? AND node IS NOT NULL AND level='info' ORDER BY id""", (start,)):
+                                       WHERE id>? AND node IS NOT NULL AND level='info' ORDER BY id DESC""",
+                                    (start or 0,)):
                 match = DETECTION_EVENT.fullmatch(event["message"])
                 if match:
-                    db.execute("""INSERT OR REPLACE INTO cluster_video_results
+                    db.execute("""INSERT OR IGNORE INTO cluster_video_results
                                   SELECT id,round,?,? FROM jobs
                                   WHERE round=? AND kind='video' AND key=? AND state='done'""",
                                (event["node"], int(int(match[3] or 0) > 0), round_id, match[1]))
-        self.put(db, "video_results_restored", True)
+        self.put(db, "video_results_backfilled", True)
 
     @staticmethod
     def _event(db, at, message, *, node=None, name=None, level="info"):
@@ -214,7 +217,7 @@ class ClusterStore:
             self.put(db, "round", 0)
             self.put(db, "phase", "collecting")
             self.put(db, "two_stage", True)
-            self.put(db, "video_results_restored", True)
+            self.put(db, "video_results_backfilled", True)
             self._event(db, int(time.time()), "主节点已发起工作集群", name=name)
             return session
 
