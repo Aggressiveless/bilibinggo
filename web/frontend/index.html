@@ -440,6 +440,23 @@
               </div>
               <span class="discovery-badge" id="discovery-badge">待开始</span>
             </div>
+            <section class="cluster-discovery-work" id="cluster-discovery-work" aria-labelledby="cluster-discovery-heading" hidden>
+              <div class="cluster-heading">
+                <div>
+                  <h3 id="cluster-discovery-heading">本机集群工作</h3>
+                  <p class="caption" id="cluster-discovery-note"></p>
+                </div>
+                <button type="button" class="btn btn-secondary btn-compact" data-section-jump="cluster">查看工作集群</button>
+              </div>
+              <p class="cluster-discovery-current" id="cluster-discovery-current" role="status"></p>
+              <dl class="cluster-stats">
+                <div><dt>本机已检索页数</dt><dd id="cluster-discovery-pages">—</dd></div>
+                <div><dt>本机去重后收录 BV</dt><dd id="cluster-discovery-found">—</dd></div>
+                <div><dt>本机已检测视频</dt><dd id="cluster-discovery-videos">—</dd></div>
+                <div><dt>本机核验开放活动</dt><dd id="cluster-discovery-activities">—</dd></div>
+              </dl>
+              <ol class="cluster-events cluster-discovery-events" id="cluster-discovery-events" aria-label="本机最近处理结果" hidden></ol>
+            </section>
             <form id="discovery-form" class="discovery-controls">
               <div class="discovery-keywords">
                 <label class="field-label" for="discovery-keywords">搜索关键词</label>

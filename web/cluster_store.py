@@ -54,6 +54,13 @@ class ClusterStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, level TEXT NOT NULL,
                     node TEXT, node_name TEXT, message TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS cluster_events_node ON cluster_events(node,id);
+                CREATE TABLE IF NOT EXISTS cluster_node_round(
+                    round INTEGER NOT NULL, node TEXT NOT NULL,
+                    pages INTEGER NOT NULL, found INTEGER NOT NULL,
+                    videos INTEGER NOT NULL, activities INTEGER NOT NULL,
+                    PRIMARY KEY(round,node)
+                );
                 CREATE TABLE IF NOT EXISTS nodes(
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL,
                     seen INTEGER NOT NULL, work INTEGER NOT NULL DEFAULT 0,
@@ -131,7 +138,7 @@ class ClusterStore:
         with self.tx() as db:
             if self.get(db, "session"):
                 raise ClusterError("请先退出当前集群")
-            for table in ("nodes", "catalog", "jobs", "checked_videos", "sightings", "analyses", "cluster_events"):
+            for table in ("nodes", "catalog", "jobs", "checked_videos", "sightings", "analyses", "cluster_events", "cluster_node_round"):
                 db.execute(f"DELETE FROM {table}")
             session = {"role": "host", "name": name, "address": address, "id": uuid.uuid4().hex,
                        "node": uuid.uuid4().hex, "token": secrets.token_hex(32)}
@@ -230,6 +237,7 @@ class ClusterStore:
         for row in db.execute("""SELECT id FROM catalog WHERE expires>? AND checked<?
                               ORDER BY checked,expires LIMIT 40""", (now, now - 1800)):
             self._queue(db, round_id, "dynamic", row["id"], depth=4)
+        db.execute("DELETE FROM cluster_node_round WHERE round<?", (round_id - 2,))
         db.execute("DELETE FROM sightings WHERE round<?", (round_id - 2,))
         db.execute("DELETE FROM jobs WHERE round<?", (round_id - 2,))
         db.execute("DELETE FROM checked_videos WHERE checked<?", (now - 7 * 86400,))
@@ -295,14 +303,19 @@ class ClusterStore:
             if kind == "dynamic" and item.dynamic_id == job["key"]:
                 self._catalog(db, item, 2, now, node)
         summary = f"发现 {len(report.references)} 条线索"
+        new_videos = open_activities = 0
         if kind == "dynamic":
+            open_activities = int(any(item.dynamic_id == job["key"] and not item.closed
+                                      and min(item.lottery_time, item.deadline or item.lottery_time) > now
+                                      for item in report.activities))
             summary = (f"核验 {len(report.activities)} 条活动状态"
                        if report.activities else "未确认可同步活动") + f"，{summary}"
         if kind == "search":
             before = self._video_count(db, round_id)
             self._add_videos(db, job, report, now)
             count = self._video_count(db, round_id)
-            summary = f"返回 {len(report.references)} 个视频，去重后收录 {count - before} 个"
+            new_videos = count - before
+            summary = f"返回 {len(report.references)} 个视频，去重后收录 {new_videos} 个"
             previous = db.execute(
                 "SELECT id FROM jobs WHERE round=? AND kind='search' AND key=?",
                 (round_id, f"{params['order']}:{params['keyword']}:{params['page'] - 1}"),
@@ -320,6 +333,12 @@ class ClusterStore:
                 if ref.kind != "video":
                     db.execute("INSERT OR IGNORE INTO sightings VALUES(?,?,?,?)", (round_id, job["id"], ref.kind, ref.key))
                     self._queue(db, round_id, ref.kind, ref.key, depth=params.get("depth", 0) + 1)
+        if kind in {"search", "video", "dynamic"}:
+            db.execute("""INSERT INTO cluster_node_round VALUES(?,?,?,?,?,?)
+                          ON CONFLICT(round,node) DO UPDATE SET pages=pages+excluded.pages,
+                          found=found+excluded.found,videos=videos+excluded.videos,
+                          activities=activities+excluded.activities""",
+                       (round_id, node, int(kind == "search"), new_videos, int(kind == "video"), open_activities))
         if report.model_calls:
             summary += f"，调用模型 {report.model_calls} 次"
         self._event(db, now, f"{self._job_label(job)}完成：{summary}", node=node)
@@ -402,7 +421,7 @@ class ClusterStore:
             rows = db.execute("SELECT seq,payload FROM catalog WHERE seq>? ORDER BY seq LIMIT ?",
                               (body.after, PAGE_SIZE))
             changes = [Change(seq=row["seq"], activity=Activity.model_validate_json(row["payload"])) for row in rows]
-            return Feed(task=task, changes=changes, status=self._status(db, session, now))
+            return Feed(task=task, changes=changes, status=self._status(db, session, now, work_node=body.node))
 
     @staticmethod
     def _renew(db, node, lease: Lease, now):
@@ -413,24 +432,33 @@ class ClusterStore:
     def status(self):
         with self.tx(write=False) as db:
             session = self.get(db, "session", {})
-            return self._status(db, session, int(time.time()))
+            return self._status(db, session, int(time.time()), work_node=session.get("node"))
 
-    def _status(self, db, session, now):
+    def _status(self, db, session, now, *, work_node):
         round_id = self.get(db, "round", 0)
         counts = {}
         for row in db.execute("SELECT kind,state,count(*) AS n FROM jobs WHERE round=? GROUP BY kind,state", (round_id,)):
             counts.setdefault(row["kind"], {})[row["state"]] = row["n"]
         nodes = [dict(row) for row in db.execute("""
-            SELECT n.id,n.name,n.seen,n.work,n.completed,n.model_calls,j.kind,j.key
+            SELECT n.id,n.name,n.seen,n.work,n.completed,n.model_calls,j.kind,j.key,j.params
             FROM nodes n LEFT JOIN jobs j ON n.id=j.node AND j.state='leased' AND j.until>?
             ORDER BY n.seen DESC,n.name""", (now,))]
         for node in nodes:
             node["online"] = node["seen"] > now - 30
             node["host"] = node["id"] == session.get("node")
+            node["task_label"] = self._job_label(node) if node["kind"] else None
+            del node["params"]
+        local_round = db.execute("SELECT pages,found,videos,activities FROM cluster_node_round WHERE round=? AND node=?",
+                                 (round_id, work_node)).fetchone()
+        local_events = [dict(row) for row in db.execute(
+            "SELECT id,at,level,node,node_name,message FROM cluster_events WHERE node=? ORDER BY id DESC LIMIT 6",
+            (work_node,))]
         events = [dict(row) for row in db.execute(
             "SELECT id,at,level,node,node_name,message FROM cluster_events ORDER BY id DESC LIMIT ?",
             (RECENT_EVENTS,))]
         return {"round": round_id, "target": TARGET, "counts": counts, "nodes": nodes, "events": events,
+                "local_work": dict(local_round) if local_round else {"pages": 0, "found": 0, "videos": 0, "activities": 0},
+                "local_events": local_events,
                 "now": now, "phase": self.get(db, "phase", "running"), "next_round": self.get(db, "next_round", 0),
                 "paused": self.get(db, "paused", False), "cooldown_until": self.get(db, "cooldown_until", 0),
                 "sequence": self.get(db, "sequence", 0),

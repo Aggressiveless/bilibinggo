@@ -42,3 +42,14 @@
   .cluster-events li { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .cluster-events li > :last-child { grid-column: 1 / -1; }
 }
+
+.cluster-discovery-work { margin: 14px 0 18px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-input); background: var(--surface-soft); }
+.cluster-discovery-work[hidden], .cluster-discovery-work [hidden] { display: none; }
+.cluster-discovery-work h3, .cluster-discovery-work p { margin: 0; }
+.cluster-discovery-work .cluster-discovery-current { margin: 8px 0 12px; font-weight: 650; overflow-wrap: anywhere; }
+.cluster-discovery-events { margin-top: 12px; max-height: 230px; }
+.cluster-discovery-events li { grid-template-columns: 112px minmax(0, 1fr); }
+.cluster-discovery-events li > :last-child { grid-column: auto; }
+@media (max-width: 450px) {
+  .cluster-discovery-events li { grid-template-columns: minmax(0, 1fr); }
+}

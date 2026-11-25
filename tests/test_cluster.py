@@ -235,3 +235,28 @@ def test_existing_cluster_adds_event_table_and_keeps_state(tmp_path):
     assert _exchange(updated, member).changes[0].activity.prize == "原有活动"
     updated.set_paused(True)
     assert _exchange(updated, member).status["events"][0]["message"] == "暂停领取新任务"
+
+
+def test_active_search_only_counts_this_nodes_cluster_work(tmp_path):
+    store, host, member = _cluster(tmp_path)
+    host_task = _exchange(store, host, work=True).task
+    member_task = _exchange(store, member, work=True).task
+    video = Reference(kind="video", key=BVID)
+    assert "第 1 页" in next(row for row in store.status()["nodes"] if row["host"])["task_label"]
+    first = _exchange(store, host, report=_report(host_task, references=[video]))
+    second = _exchange(store, member, report=_report(member_task, references=[video]))
+    assert first.status["local_work"] == {"pages": 1, "found": 1, "videos": 0, "activities": 0}
+    assert second.status["local_work"] == {"pages": 1, "found": 0, "videos": 0, "activities": 0}
+    assert all(event["node"] == member["node"] for event in second.status["local_events"])
+    _exchange(store, host, report=_report(host_task, references=[video]))
+    assert store.status()["local_work"] == first.status["local_work"]
+    with store.tx() as db:
+        db.execute("UPDATE jobs SET state='skipped' WHERE kind='search' AND state='pending'")
+    scan = _exchange(store, member, work=True).task
+    assert scan.kind == "video"
+    recent = _exchange(store, member, report=_report(scan)).status
+    assert recent["local_work"]["videos"] == 1
+    assert store.status()["local_work"]["videos"] == 0
+    assert any(BVID in event["message"] for event in recent["local_events"])
+    store.write("next_round", 1)
+    assert _exchange(store, member).status["local_work"]["videos"] == 0

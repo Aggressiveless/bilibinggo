@@ -7,7 +7,7 @@ import "./styles.css";
 type Counts = Record<string, number>;
 type Node = {
   id: string; name: string; online: boolean; host: boolean; work: number; kind?: string;
-  key?: string; completed: number; model_calls: number;
+  key?: string; task_label?: string; completed: number; model_calls: number;
 };
 type ClusterEvent = {
   id: number;
@@ -28,6 +28,8 @@ type Status = {
   error: string;
   status: {
     round?: number; target?: number; counts?: Record<string, Counts>; nodes?: Node[]; events?: ClusterEvent[];
+    local_work?: Record<"pages" | "found" | "videos" | "activities", number>;
+    local_events?: ClusterEvent[];
     phase?: string; paused?: boolean; now?: number; next_round?: number; cooldown_until?: number; active?: number; sequence?: number;
   };
 };
@@ -45,6 +47,65 @@ const eventPanels: Array<(snapshot: Status) => void> = [];
 const eventTime = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
 });
+
+function eventRow(event: ClusterEvent, showNode = true) {
+  const item = document.createElement("li");
+  item.dataset.level = event.level;
+  const date = document.createElement("time");
+  date.dateTime = new Date(event.at * 1000).toISOString();
+  date.textContent = eventTime.format(event.at * 1000);
+  item.append(date);
+  if (showNode) {
+    const node = document.createElement("span");
+    node.className = "cluster-event-node";
+    node.textContent = event.node_name || "集群";
+    item.append(node);
+  }
+  const message = document.createElement("span");
+  message.textContent = event.level === "error" ? "失败 · " + event.message
+    : event.level === "warning" ? "异常 · " + event.message : event.message;
+  item.append(message);
+  return item;
+}
+
+let lastDiscoveryEvents = "";
+function renderDiscoveryWork(snapshot: Status) {
+  const panel = byId("discovery-work");
+  if (!panel) return;
+  panel.hidden = !snapshot.role;
+  if (!snapshot.role) return;
+  const status = snapshot.status;
+  const node = status.nodes?.find((record) => record.id === snapshot.node);
+  set("discovery-note", [node?.name, status.round ? "第 " + status.round + " 轮" : ""].filter(Boolean).join(" · "));
+  let task: string;
+  if (!snapshot.connected) {
+    task = snapshot.error || "等待同步本机集群状态";
+  } else if (node?.kind) {
+    task = node.task_label || kinds[node.kind] + " · " + (node.key || "");
+  } else if (status.paused) {
+    task = "集群已暂停领取新任务";
+  } else if ((status.cooldown_until || 0) > (status.now || 0)) {
+    task = "平台限流，暂停至 " + time(status.cooldown_until!);
+  } else if (status.next_round) {
+    task = "本轮已结束，下一轮 " + time(status.next_round);
+  } else {
+    task = snapshot.worker_ready ? "本机等待分配任务" : "本机仅同步活动";
+  }
+  const currentTask = byId("discovery-current");
+  if (currentTask.textContent !== task) currentTask.textContent = task;
+  for (const metric of ["pages", "found", "videos", "activities"] as const) {
+    set("discovery-" + metric, status.local_work?.[metric] ?? "—");
+  }
+
+  const events = status.local_events ?? (status.events || []).filter((event) => event.node === snapshot.node).slice(0, 6);
+  const list = byId("discovery-events");
+  list.hidden = events.length === 0;
+  const signature = JSON.stringify(events);
+  if (signature !== lastDiscoveryEvents) {
+    list.replaceChildren(...events.map((event) => eventRow(event, false)));
+    lastDiscoveryEvents = signature;
+  }
+}
 
 function mountEventPanels() {
   const template = document.getElementById("cluster-log-template") as HTMLTemplateElement | null;
@@ -73,21 +134,7 @@ function mountEventPanels() {
       const signature = JSON.stringify(visible);
       if (signature === rendered) return;
       rendered = signature;
-      list.replaceChildren(...visible.map((event) => {
-        const item = document.createElement("li");
-        item.dataset.level = event.level;
-        const date = document.createElement("time");
-        date.dateTime = new Date(event.at * 1000).toISOString();
-        date.textContent = eventTime.format(event.at * 1000);
-        const node = document.createElement("span");
-        node.className = "cluster-event-node";
-        node.textContent = event.node_name || "集群";
-        const message = document.createElement("span");
-        message.textContent = event.level === "error" ? "失败 · " + event.message
-          : event.level === "warning" ? "异常 · " + event.message : event.message;
-        item.append(date, node, message);
-        return item;
-      }));
+      list.replaceChildren(...visible.map((event) => eventRow(event)));
     };
     for (const control of [scope, errors]) {
       control.addEventListener("change", () => { if (current) update(current); });
@@ -100,6 +147,7 @@ function mountEventPanels() {
 function render(snapshot: Status) {
   const priorRole = current?.role;
   current = snapshot;
+  renderDiscoveryWork(snapshot);
   eventPanels.forEach((update) => update(snapshot));
   const status = snapshot.status;
   const connected = Boolean(snapshot.role);
@@ -229,7 +277,7 @@ export function bindCluster() {
     if (current?.role === "host" && !window.confirm("解散后所有节点将断开。确定解散集群？")) return;
     void action("leave");
   });
-  document.querySelectorAll('[data-section="cluster"], [data-section="logs"]')
+  document.querySelectorAll('[data-section="cluster"], [data-section="logs"], [data-section="sources"], [data-source-view="discovery"]')
     .forEach((button) => button.addEventListener("click", () => void refresh()));
   void refresh();
   window.setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
