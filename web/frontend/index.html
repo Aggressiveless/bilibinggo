@@ -458,7 +458,7 @@
               <div class="cluster-yield" id="cluster-local-yield" hidden>
                 <span>本机视频转化率 <strong id="cluster-local-conversion">—</strong></span>
                 <small class="caption" id="cluster-local-conversion-detail"></small>
-                <button type="button" class="btn btn-secondary btn-compact" data-section-jump="activities" data-cluster-show-detections>查看集群检出</button>
+                <button type="button" class="btn btn-secondary btn-compact" data-cluster-show-detections>查看集群检出</button>
               </div>
               <ol class="cluster-events cluster-discovery-events" id="cluster-discovery-events" aria-label="本机最近处理结果" hidden></ol>
             </section>
@@ -509,6 +509,25 @@
               <span id="discovery-video-summary-counts"></span>
               <button type="button" class="btn btn-secondary btn-compact" id="discovery-open-video-checks">查看本轮 BV 记录</button>
             </div>
+            <section class="cluster-detected-results" id="cluster-detected-results" aria-labelledby="cluster-detected-heading" hidden>
+              <h3 class="section-title" id="cluster-detected-heading">成果展示</h3>
+              <details class="cluster-detected" id="cluster-detected">
+                <summary>
+                  <strong>集群检出活动</strong>
+                  <span class="caption" id="cluster-detected-summary"></span>
+                </summary>
+                <div class="cluster-detected-body">
+                  <p class="caption">仅显示集群检测确认、目前仍开放的活动。参与条件以原动态为准。</p>
+                  <p class="caption" id="cluster-detected-status" role="status"></p>
+                  <ul id="cluster-detected-rows" class="cluster-detected-rows"></ul>
+                  <div id="cluster-detected-pager" class="cluster-detected-pager" hidden>
+                    <span class="caption" id="cluster-detected-page"></span>
+                    <button type="button" class="btn btn-secondary btn-compact" id="cluster-detected-prev">上一页</button>
+                    <button type="button" class="btn btn-secondary btn-compact" id="cluster-detected-next">下一页</button>
+                  </div>
+                </div>
+              </details>
+            </section>
             <div class="discovery-queue" id="discovery-queue" hidden>
               <p class="discovery-status" id="discovery-queue-status" role="status"></p>
               <div id="discovery-selection" hidden>
@@ -663,22 +682,6 @@
                 <button class="btn btn-ghost btn-compact btn-pill" data-action="refresh_status">刷新任务状态</button>
               </div>
             </div>
-            <details class="cluster-detected" id="cluster-detected" hidden>
-              <summary>
-                <strong>集群检出活动</strong>
-                <span class="caption" id="cluster-detected-summary"></span>
-              </summary>
-              <div class="cluster-detected-body">
-                <p class="caption">仅显示集群检测确认、目前仍开放的活动。参与条件以原动态为准。</p>
-                <p class="caption" id="cluster-detected-status" role="status"></p>
-                <ul id="cluster-detected-rows" class="cluster-detected-rows"></ul>
-                <div id="cluster-detected-pager" class="cluster-detected-pager" hidden>
-                  <span class="caption" id="cluster-detected-page"></span>
-                  <button type="button" class="btn btn-secondary btn-compact" id="cluster-detected-prev">上一页</button>
-                  <button type="button" class="btn btn-secondary btn-compact" id="cluster-detected-next">下一页</button>
-                </div>
-              </div>
-            </details>
             <div class="sequential-participate-bar" id="sequential-participate-bar" data-tone="blocked">
               <div class="sequential-participate-lead">
                 <h3 class="sequential-participate-title">自动顺序参与</h3>
@@ -822,7 +825,7 @@
                   <div class="cluster-yield" id="cluster-yield" hidden>
                     <span>本轮视频转化率 <strong id="cluster-conversion">—</strong></span>
                     <small class="caption" id="cluster-conversion-detail"></small>
-                    <button type="button" class="btn btn-secondary btn-compact" data-section-jump="activities" data-cluster-show-detections>
+                    <button type="button" class="btn btn-secondary btn-compact" data-section-jump="sources" data-cluster-show-detections>
                       集群检出 · <span id="cluster-detected-open">0</span> 项开放
                     </button>
                   </div>

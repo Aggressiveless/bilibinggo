@@ -108,8 +108,10 @@
 .cluster-yield strong { margin-inline-start: 5px; color: var(--success); font-size: 17px; font-variant-numeric: tabular-nums; }
 .cluster-yield .caption { grid-row: 2; margin: 0; }
 .cluster-yield .btn { grid-column: 2; grid-row: 1 / span 2; }
+.cluster-detected-results { margin-top: 18px; scroll-margin-top: 20px; }
+.cluster-detected-results > .section-title { margin: 0; }
 .cluster-detected { margin: 12px 0; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--bg-elevated); }
-.cluster-detected[hidden], .cluster-detected-pager[hidden] { display: none; }
+.cluster-detected-pager[hidden] { display: none; }
 .cluster-detected summary { padding: 10px 13px; cursor: pointer; }
 .cluster-detected summary .caption { margin-inline-start: 8px; color: var(--success); }
 .cluster-detected-body { padding: 0 13px 10px; }

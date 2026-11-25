@@ -36,7 +36,11 @@ function activityRow(activity: DetectedActivity) {
 }
 
 export function mountDetectedActivities(byId: <T extends HTMLElement>(name: string) => T) {
+  const results = byId("detected-results");
   const panel = byId<HTMLDetailsElement>("detected");
+  const summary = panel.querySelector("summary");
+  const sourceSection = results.closest(".view-section");
+  const discoveryView = document.querySelector<HTMLButtonElement>('[data-source-view="discovery"]');
   const list = byId("detected-rows");
   const message = byId("detected-status");
   const pager = byId("detected-pager");
@@ -49,10 +53,18 @@ export function mountDetectedActivities(byId: <T extends HTMLElement>(name: stri
   let lastRequest = 0;
   let lastVersion = "";
   let signature = "";
+  let jumpToResults = false;
+
+  function revealResults() {
+    if (!jumpToResults || results.hidden || !sourceSection?.classList.contains("active")) return;
+    jumpToResults = false;
+    results.scrollIntoView({ block: "start" });
+    summary?.focus({ preventScroll: true });
+  }
 
   async function refresh(requestedPage = page, force = false) {
-    if (panel.hidden || !panel.open || pending) return;
-    if (!force && !panel.closest(".view-section.active")) return;
+    if (results.hidden || !panel.open || pending) return;
+    if (!force && (!sourceSection?.classList.contains("active") || panel.closest("#discovery-panel")?.hasAttribute("hidden"))) return;
     const version = String(state.sequence) + "/" + String(state.total);
     if (!force && version === lastVersion && Date.now() - lastRequest < 20000) return;
     const request = ++generation;
@@ -90,9 +102,16 @@ export function mountDetectedActivities(byId: <T extends HTMLElement>(name: stri
   next.addEventListener("click", () => void refresh(page + 1, true));
   panel.addEventListener("toggle", () => { if (panel.open) void refresh(page, true); });
   document.querySelectorAll("[data-cluster-show-detections]").forEach((button) => button.addEventListener("click", () => {
+    if (discoveryView?.getAttribute("aria-pressed") === "false") discoveryView.click();
+    jumpToResults = true;
     if (panel.open) void refresh(page, true);
     else panel.open = true;
+    revealResults();
   }));
+  if (sourceSection) {
+    const observer = new MutationObserver(revealResults);
+    observer.observe(sourceSection, { attributes: true, attributeFilter: ["class"] });
+  }
 
   return (updated: CatalogStatus) => {
     if (updated.node !== state.node) {
@@ -107,8 +126,9 @@ export function mountDetectedActivities(byId: <T extends HTMLElement>(name: stri
       message.textContent = "";
     }
     state = updated;
-    panel.hidden = !state.node || state.total === undefined;
+    results.hidden = !state.node || state.total === undefined;
     byId("detected-summary").textContent = (state.total ?? 0) + " 项仍开放";
+    revealResults();
     void refresh();
   };
 }
