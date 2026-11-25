@@ -18,7 +18,8 @@ KEYWORDS = ("抽奖", "福利", "奖品", "转发抽奖", "抽奖活动", "粉�
 BV = Annotated[str, Field(pattern=r"^BV[0-9A-Za-z]{10}$")]
 Token = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 NodeId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
-TaskKind = Literal["search", "video", "dynamic", "article", "short", "author"]
+TaskKind = Literal["search", "video"]
+LegacyTaskKind = Literal["dynamic", "article", "short", "author"]
 LINK_PATTERNS = {
     "video": r"^BV[0-9A-Za-z]{10}$",
     "dynamic": r"^[0-9]{18,19}$",
@@ -70,7 +71,8 @@ class Lease(Payload):
 
 
 class Task(Lease):
-    kind: TaskKind
+    # Still accept leases from older v1 coordinators during rolling upgrades.
+    kind: TaskKind | LegacyTaskKind
     key: str = Field(max_length=80)
     keyword: str = Field(default="", max_length=40)
     order: Literal["pubdate", "totalrank"] = "pubdate"
@@ -90,10 +92,10 @@ class Task(Lease):
 class Report(Lease):
     outcome: Literal["done", "retry", "cooldown"]
     references: list[Reference] = Field(default_factory=list, max_length=120)
-    activities: list[Activity] = Field(default_factory=list, max_length=4)
+    activities: list[Activity] = Field(default_factory=list, max_length=16)
     more_pages: bool = False
     cooldown: int = Field(default=900, ge=900, le=86400)
-    model_calls: int = Field(default=0, ge=0, le=20)
+    model_calls: int = Field(default=0, ge=0, le=128)
     reason: Literal["platform", "model", "network", "analysis_busy", "worker"] | None = None
 
 
@@ -107,6 +109,7 @@ class Exchange(Payload):
     after: int = Field(default=0, ge=0, lt=2**63)
     activities: list[Activity] = Field(default_factory=list, max_length=PAGE_SIZE)
     work: bool = False
+    video_detection: bool | None = None
     working: Lease | None = None
     report: Report | None = None
 

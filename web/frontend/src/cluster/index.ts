@@ -7,7 +7,7 @@ import "./styles.css";
 type Counts = Record<string, number>;
 type Node = {
   id: string; name: string; online: boolean; host: boolean; work: number; kind?: string;
-  key?: string; task_label?: string; completed: number; model_calls: number;
+  key?: string; completed: number; model_calls: number; task_label?: string;
 };
 type ClusterEvent = {
   id: number;
@@ -30,15 +30,25 @@ type Status = {
     round?: number; target?: number; counts?: Record<string, Counts>; nodes?: Node[]; events?: ClusterEvent[];
     local_work?: Record<"pages" | "found" | "videos" | "activities", number>;
     local_events?: ClusterEvent[];
-    phase?: string; paused?: boolean; now?: number; next_round?: number; cooldown_until?: number; active?: number; sequence?: number;
+    phase?: string; paused?: boolean; now?: number; next_round?: number; cooldown_until?: number;
+    search_pages_total?: number; search_history_start?: number; concurrency_limit?: number; two_stage?: boolean;
   };
 };
 
 const byId = <T extends HTMLElement>(name: string) => document.getElementById("cluster-" + name) as T;
-const set = (name: string, value: string | number) => { byId(name).textContent = String(value); };
+const set = (name: string, value: string | number) => {
+  const element = byId(name);
+  const label = String(value);
+  if (element.textContent !== label) element.textContent = label;
+};
+const number = new Intl.NumberFormat("zh-CN");
+const count = (value?: number) => value === undefined ? "—" : number.format(value);
 const time = (stamp: number) => new Date(stamp * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-const kinds: Record<string, string> = { search: "检索", video: "视频检查", dynamic: "动态核验", short: "展开短链", article: "检查专栏", author: "检查发布者" };
-const phases: Record<string, string> = { complete: "本轮完成", incomplete: "本轮有任务未完成", exhausted: "本轮可用搜索页已查完", running: "协作检索中" };
+const kinds: Record<string, string> = { search: "检索页", video: "视频检测", dynamic: "动态核验", short: "短链展开", article: "专栏检查", author: "发布者检查" };
+const phases: Record<string, string> = {
+  collecting: "协作检索中", detecting: "分配检测中", running: "协作检索中",
+  complete: "本轮完成", incomplete: "本轮有任务未完成", exhausted: "本轮完成，收录未达目标",
+};
 
 let current: Status | undefined;
 let busy = false;
@@ -150,67 +160,98 @@ function render(snapshot: Status) {
   renderDiscoveryWork(snapshot);
   eventPanels.forEach((update) => update(snapshot));
   const status = snapshot.status;
-  const connected = Boolean(snapshot.role);
-  if (priorRole !== snapshot.role) byId("invite-text").hidden = true;
+  const joined = Boolean(snapshot.role);
+  if (priorRole !== snapshot.role) {
+    byId<HTMLDetailsElement>("manage").open = false;
+    hideInvite();
+  }
   const nav = byId("nav-indicator");
-  nav.hidden = !connected;
+  nav.hidden = !joined;
   nav.classList.toggle("cluster-dot-offline", !snapshot.connected);
-  byId("setup").hidden = connected;
-  byId("monitor").hidden = !connected;
-  if (!connected) return;
+  byId("setup").hidden = joined;
+  byId("monitor").hidden = !joined;
+  if (!joined) return;
 
   byId("host-actions").hidden = snapshot.role !== "host";
   const pause = byId<HTMLButtonElement>("pause");
-  pause.textContent = status.paused ? "继续检索" : "暂停检索";
+  pause.hidden = snapshot.role !== "host";
+  pause.textContent = status.paused ? "继续协作" : "暂停协作";
   pause.dataset.paused = String(Boolean(status.paused));
   set("leave", snapshot.role === "host" ? "解散集群" : "退出集群");
   set("role", snapshot.role === "host" ? "主节点" : "工作节点");
   set("address", snapshot.address || "");
   set("link-state", snapshot.error || (snapshot.connected ? "同步正常" : "等待同步"));
+  byId("link-state").dataset.connected = String(snapshot.connected && !snapshot.error);
   set("sync-time", snapshot.last_sync ? "上次同步 " + time(snapshot.last_sync) : "");
   byId("worker-note").hidden = snapshot.worker_ready;
   const counts = status.counts || {};
   const video = counts.video || {};
   const found = Object.values(video).reduce((a, b) => a + b, 0);
-  const target = status.target || 1000;
-  const done = video.done || 0;
-  set("progress-value", done + " / " + target);
+  const target = status.target;
+  set("progress-value", target ? count(found) + " / " + count(target) : "—");
   const progress = byId<HTMLProgressElement>("progress");
-  progress.max = target;
-  progress.value = done;
-  set("found", found);
-  set("active", status.active ?? "—");
-  const totals = Object.values(counts);
-  set("pending", totals.reduce((sum, row) => sum + (row.pending || 0), 0));
-  set("failed", totals.reduce((sum, row) => sum + (row.failed || 0), 0));
+  progress.max = target || 1;
+  progress.value = found;
+  set("video-pending", count(status.counts ? video.pending || 0 : undefined));
+  set("video-running", count(status.counts ? video.leased || 0 : undefined));
+  set("video-done", count(status.counts ? video.done || 0 : undefined));
+  byId("video-failed").hidden = !video.failed;
+  set("video-failed", "本轮视频检测失败 " + count(video.failed) + " 项");
+  set("search-round", count(status.counts ? counts.search?.done || 0 : undefined));
+  set("search-total", count(status.search_pages_total));
+  set("search-history", status.search_pages_total === undefined
+    ? (status.counts ? "主节点版本尚未提供" : "等待同步")
+    : "自第 " + (status.search_history_start || 1) + " 轮起的成功检索页");
   const cooldown = status.cooldown_until || 0;
   const next = status.next_round || 0;
-  const phase = status.paused ? "检索已暂停"
+  const phase = status.paused ? "协作已暂停"
     : cooldown > (status.now || 0) ? "平台限流，暂停至 " + time(cooldown)
     : (phases[status.phase || ""] || "等待节点");
   set("phase", [status.round ? "第 " + status.round + " 轮" : "", phase,
     next && !status.paused ? "下一轮 " + time(next) : ""].filter(Boolean).join(" · "));
 
-  const nodes = status.nodes || [];
-  set("online", nodes.filter((node) => node.online).length + " / " + nodes.length + " 在线");
-  const tbody = byId("nodes");
-  tbody.replaceChildren();
-  for (const node of nodes) {
-    const row = document.createElement("tr");
-    const fields = [
-      node.name + (node.id === snapshot.node ? "（本机）" : ""),
-      node.host ? "主节点" : "工作节点",
-      node.online ? (node.kind ? kinds[node.kind] + " · " + (node.key || "") : node.work ? "等待任务" : "仅同步") : "离线",
-      String(node.completed),
-      String(node.model_calls),
-    ];
-    for (const label of fields) {
-      const cell = document.createElement("td");
-      cell.textContent = label;
-      row.appendChild(cell);
-    }
-    tbody.appendChild(row);
-  }
+  renderNodes(snapshot, found);
+}
+
+function renderNodes(snapshot: Status, found: number) {
+  const status = snapshot.status;
+  const nodes = [...(status.nodes || [])].sort((a, b) => Number(b.host) - Number(a.host) ||
+    Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, "zh-CN"));
+  const online = nodes.filter((node) => node.online).length;
+  set("online", status.nodes ? online + " / " + nodes.length + " 在线" : "等待同步");
+  const limit = status.concurrency_limit;
+  const rule = status.phase === "collecting"
+    ? (status.target && found >= status.target ? "已达收录目标，等待各节点交回已领取的检索。"
+      : "达到收录目标或搜完可用结果页后，开始分配检测。")
+    : status.two_stage && status.phase === "detecting" && !nodes.some((node) => node.online && node.work === 2)
+      ? "等待支持两阶段协作且模型已就绪的节点。"
+      : "就绪的空闲节点每次领取一个视频" + (limit ? "，最多 " + limit + " 个并行检测。" : "。");
+  set("dispatch-rule", status.counts ? rule : "");
+  byId("nodes-empty").hidden = nodes.length > 0;
+  byId("nodes").replaceChildren(...nodes.map((node) => {
+    const row = document.createElement("li");
+    const name = document.createElement("strong");
+    name.textContent = node.name;
+    const role = document.createElement("span");
+    role.className = "caption";
+    role.textContent = (node.host ? "主节点" : "工作节点") + (node.id === snapshot.node ? "（本机）" : "");
+    const state = document.createElement("span");
+    state.className = "cluster-pill";
+    state.dataset.state = !node.online ? "offline" : node.kind ? "working" : node.work ? "idle" : "sync";
+    const canWork = status.two_stage && status.phase === "detecting" ? node.work === 2 : Boolean(node.work);
+    state.textContent = !node.online ? "离线" : node.kind === "search" ? "检索中" : node.kind ? "检测中"
+      : !canWork ? "仅同步" : status.paused ? "已暂停" : "空闲";
+    row.append(name, role, state);
+    return row;
+  }));
+}
+
+function hideInvite() {
+  const invite = byId<HTMLInputElement>("invite-text");
+  invite.hidden = true;
+  invite.value = "";
+  set("show-invite", "显示邀请码");
+  byId("show-invite").setAttribute("aria-expanded", "false");
 }
 
 async function refresh() {
@@ -228,6 +269,7 @@ async function refresh() {
     }
   } catch (error) {
     set("link-state", "无法读取集群状态");
+    byId("link-state").dataset.connected = "false";
   } finally {
     refreshing = false;
   }
@@ -237,7 +279,9 @@ async function action(path: string, data?: object) {
   if (busy) return;
   busy = true;
   byId("root").setAttribute("aria-busy", "true");
-  const buttons = [...byId("root").querySelectorAll("button")];
+  const buttons = [...byId("root").querySelectorAll<HTMLButtonElement>(
+    "#cluster-setup button, #cluster-manage button, #cluster-pause",
+  )];
   buttons.forEach((button) => button.disabled = true);
   try {
     const result = await fetchJSON<Status & { invite?: string }>("/api/cluster/" + path, {
@@ -245,9 +289,14 @@ async function action(path: string, data?: object) {
       body: data ? JSON.stringify(data) : undefined,
     });
     if (result.invite) {
-      byId<HTMLInputElement>("invite-text").value = result.invite;
-      byId("invite-text").hidden = false;
-      byId<HTMLInputElement>("invite-text").select();
+      if (byId<HTMLDetailsElement>("manage").open) {
+        const invite = byId<HTMLInputElement>("invite-text");
+        invite.value = result.invite;
+        invite.hidden = false;
+        invite.select();
+        set("show-invite", "隐藏邀请码");
+        byId("show-invite").setAttribute("aria-expanded", "true");
+      }
     } else {
       render(result);
       if (path === "join") byId<HTMLInputElement>("invite").value = "";
@@ -272,13 +321,27 @@ export function bindCluster() {
     });
   }
   byId("pause").addEventListener("click", () => void action("pause?paused=" + String(byId("pause").dataset.paused !== "true")));
-  byId("show-invite").addEventListener("click", () => void action("invite"));
+  byId("show-invite").addEventListener("click", () => {
+    if (byId("invite-text").hidden) void action("invite");
+    else hideInvite();
+  });
+  byId("manage").addEventListener("toggle", (event) => {
+    if (!(event.currentTarget as HTMLDetailsElement).open) hideInvite();
+  });
   byId("leave").addEventListener("click", () => {
     if (current?.role === "host" && !window.confirm("解散后所有节点将断开。确定解散集群？")) return;
     void action("leave");
   });
-  document.querySelectorAll('[data-section="cluster"], [data-section="logs"], [data-section="sources"], [data-source-view="discovery"]')
+  document.querySelectorAll('[data-section="logs"], [data-section="sources"], [data-source-view="discovery"]')
     .forEach((button) => button.addEventListener("click", () => void refresh()));
+  const section = byId("root").closest(".view-section");
+  if (section) {
+    const observer = new MutationObserver(() => {
+      if (section.classList.contains("active")) void refresh();
+      else byId<HTMLDetailsElement>("manage").open = false;
+    });
+    observer.observe(section, { attributes: true, attributeFilter: ["class"] });
+  }
   void refresh();
   window.setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
 }

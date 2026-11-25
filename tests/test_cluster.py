@@ -4,6 +4,7 @@ from __future__ import annotations
 import secrets
 import time
 import uuid
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -61,11 +62,11 @@ def test_expired_lease_cannot_publish_after_reassignment(tmp_path):
     _exchange(store, host)
     with store.tx() as db:
         db.execute("DELETE FROM jobs")
-        store._queue(db, 1, "dynamic", KEY)
-    task = _exchange(store, host, work=True).task
+        store._queue(db, 1, "video", BVID)
+    task = _exchange(store, host, work=True, video_detection=True).task
     with store.tx() as db:
         db.execute("UPDATE jobs SET until=0 WHERE id=?", (task.task_id,))
-    replacement = _exchange(store, member, work=True).task
+    replacement = _exchange(store, member, work=True, video_detection=True).task
     assert replacement.task_id == task.task_id
     assert replacement.lease != task.lease
     stale = _exchange(store, host, report=_report(task, activities=[_activity(prize="过期结果")]))
@@ -121,6 +122,26 @@ def test_host_api_login_auth_and_protocol(isolated_home, monkeypatch):
         assert api.post(base + "/exchange", headers=creds, json=body).status_code == 401
 
 
+def test_dashboard_search_totals_survive_pruning(tmp_path):
+    store, host, member = _cluster(tmp_path)
+    first = _exchange(store, host, work=True).task
+    second = _exchange(store, member, work=True).task
+    _exchange(store, host, report=_report(first))
+    _exchange(store, member, report=Report(task_id=second.task_id, lease=second.lease, outcome="retry"))
+    status = store.status()
+    assert status["counts"]["search"]["done"] == 1
+    assert status["search_pages_total"] == 1
+    for _ in range(4):
+        with store.tx() as db:
+            store._next_round(db, int(time.time()))
+    next_task = _exchange(store, member, work=True).task
+    updated = _exchange(store, member, report=_report(next_task)).status
+    assert updated["search_pages_total"] == 2
+    assert updated["search_history_start"] == 1
+    assert updated["counts"]["search"]["done"] == 1
+    assert ClusterStore(tmp_path).status()["search_pages_total"] == 2
+
+
 def test_member_reports_disconnect_and_reconnects(tmp_path, monkeypatch):
     from web.cluster_protocol import JoinRequest
     from web import cluster_service
@@ -142,7 +163,10 @@ def test_member_reports_disconnect_and_reconnects(tmp_path, monkeypatch):
     svc._sync(session, [_activity(prize="双向")], None)
     assert loaded[0].activity.prize == "双向"
     assert _exchange(host, host_config).changes == loaded
-    svc._sync(session, [], None)
+    pool = Mock()
+    feed = svc._sync(session, [], pool)
+    assert feed.task.kind == "search"
+    pool.submit.assert_called_once_with(svc._execute, session, feed.task, two_stage=True)
     assert len(loaded) == 1
     with pytest.raises(ClusterError):
         host.exchange(Exchange(node=session["node"], after=0), "bad token")
@@ -152,17 +176,25 @@ def test_member_reports_disconnect_and_reconnects(tmp_path, monkeypatch):
 def test_round_targets_1000_distinct_videos_and_starts_again(tmp_path):
     from web.cluster_protocol import TARGET
 
-    store, host, _ = _cluster(tmp_path)
+    store, host, member = _cluster(tmp_path)
     search = _exchange(store, host, work=True).task
+    second = _exchange(store, member, work=True).task
     with store.tx() as db:
         for number in range(TARGET - 1):
             store._queue(db, 1, "video", f"BV{number:010d}")
     refs = [Reference(kind="video", key="BV0000000000"),
             Reference(kind="video", key="BV9999999998"),
             Reference(kind="video", key="BV9999999999")]
-    feed = _exchange(store, host, report=_report(search, references=refs, more_pages=True))
+    feed = _exchange(store, host, work=True, video_detection=True,
+                     report=_report(search, references=refs, more_pages=True))
+    assert feed.task is None
+    assert feed.status["phase"] == "collecting"
     assert feed.status["counts"]["video"] == {"pending": TARGET}
-    assert feed.status["counts"]["search"] == {"done": 1, "skipped": 11}
+    assert feed.status["counts"]["search"] == {"done": 1, "leased": 1, "skipped": 10}
+    switched = _exchange(store, member, work=True, report=_report(second))
+    assert switched.status["phase"] == "detecting"
+    assert switched.task is None  # An older or search-only worker cannot receive the new video check.
+    assert _exchange(store, host, work=True, video_detection=True).task.kind == "video"
     with store.tx() as db:
         db.execute("UPDATE jobs SET state='done' WHERE kind='video'")
     completed = _exchange(store, host).status
@@ -198,11 +230,35 @@ def test_worker_search_and_linked_activity_without_account_actions(tmp_path, mon
     search = run("search", "pubdate:抽奖:1", keyword="抽奖")
     assert [row.key for row in search.references] == [BVID] and search.more_pages
     scanned = run("video", BVID)
-    assert scanned.references == [Reference(kind="dynamic", key=KEY)]
-    verified = run("dynamic", KEY)
-    assert verified.activities[0].prize == "奖品"
-    assert verified.activities[0].lottery_time == now + 3600
-    assert verified.model_calls == 0
+    assert not scanned.references
+    assert scanned.activities[0].prize == "奖品"
+    assert scanned.activities[0].lottery_time == now + 3600
+    assert scanned.model_calls == 0
+
+
+def test_upgrade_requeues_video_with_unfinished_link_and_keeps_catalog(tmp_path):
+    store, host, _ = _cluster(tmp_path)
+    _exchange(store, host, activities=[_activity(prize="既有活动")])
+    with store.tx() as db:
+        store.put(db, "two_stage", False)
+        store.put(db, "phase", "running")
+        db.execute("UPDATE jobs SET state='done'")
+        store._queue(db, 1, "video", BVID)
+        store._queue(db, 1, "short", "abbr")
+        store._queue(db, 1, "dynamic", KEY)
+        db.execute("UPDATE jobs SET state='done' WHERE kind IN ('video','short')")
+        db.execute("INSERT INTO sightings SELECT round,id,'short','abbr' FROM jobs WHERE kind='video'")
+        db.execute("INSERT INTO sightings SELECT round,id,'dynamic',? FROM jobs WHERE kind='short'", (KEY,))
+    upgraded = ClusterStore(tmp_path)
+    assert upgraded.read("session")["id"] == host["id"]
+    first = _exchange(upgraded, host, work=True, video_detection=True)
+    assert first.status["phase"] == "detecting"  # Below target with no search left.
+    assert first.task.kind == "video" and first.task.key == BVID
+    assert set(first.status["counts"]) == {"search", "video"}
+    assert first.changes[0].activity.prize == "既有活动"
+    verified = _activity(prize="核验更新")
+    completed = _exchange(upgraded, host, report=_report(first.task, activities=[verified]))
+    assert completed.changes[-1].activity == verified
 
 
 def test_shared_cluster_log_records_work_retry_and_result(tmp_path):
@@ -252,7 +308,7 @@ def test_active_search_only_counts_this_nodes_cluster_work(tmp_path):
     assert store.status()["local_work"] == first.status["local_work"]
     with store.tx() as db:
         db.execute("UPDATE jobs SET state='skipped' WHERE kind='search' AND state='pending'")
-    scan = _exchange(store, member, work=True).task
+    scan = _exchange(store, member, work=True, video_detection=True).task
     assert scan.kind == "video"
     recent = _exchange(store, member, report=_report(scan)).status
     assert recent["local_work"]["videos"] == 1

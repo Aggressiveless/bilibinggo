@@ -721,7 +721,7 @@
             <div class="pagination" id="pagination"></div>
           </div>
         </section>
-        <section class="view-section" id="section-cluster" data-title="工作集群" data-subtitle="一起发现活动，查看检索、检测与同步进度。">
+        <section class="view-section" id="section-cluster" data-title="工作集群" data-subtitle="查看全组收录进度和节点检测状态。">
           <div id="cluster-root">
             <div class="cluster-layout cluster-setup" id="cluster-setup" hidden>
               <form class="panel cluster-form" id="cluster-host-form">
@@ -740,37 +740,69 @@
               </form>
             </div>
             <div class="cluster-layout" id="cluster-monitor" hidden>
-              <article class="panel">
-                <div class="cluster-heading"><h2 class="section-title" id="cluster-role"></h2><span class="caption" id="cluster-link-state" role="status"></span></div>
-                <p class="caption cluster-address"><span id="cluster-address"></span> <span id="cluster-sync-time"></span></p>
+              <div class="cluster-toolbar">
+                <div class="cluster-connection">
+                  <strong id="cluster-role"></strong>
+                  <span class="cluster-connection-state" id="cluster-link-state" role="status"></span>
+                  <span class="caption" id="cluster-sync-time"></span>
+                </div>
                 <div class="cluster-actions">
-                  <div class="cluster-actions" id="cluster-host-actions" hidden>
-                    <button class="btn btn-secondary" type="button" id="cluster-show-invite">显示邀请码</button>
-                    <input class="form-input" id="cluster-invite-text" aria-label="集群邀请码" readonly hidden>
-                    <button class="btn btn-secondary" type="button" id="cluster-pause">暂停检索</button>
+                  <button class="btn btn-secondary" type="button" id="cluster-pause" hidden>暂停协作</button>
+                  <details class="cluster-manage" id="cluster-manage">
+                    <summary class="btn btn-secondary">集群管理</summary>
+                    <div class="cluster-manage-body">
+                      <div><strong>主服务器</strong><p class="caption cluster-address" id="cluster-address"></p></div>
+                      <div class="cluster-invite" id="cluster-host-actions" hidden>
+                        <button class="btn btn-secondary" type="button" id="cluster-show-invite" aria-expanded="false" aria-controls="cluster-invite-text">显示邀请码</button>
+                        <input class="form-input" id="cluster-invite-text" aria-label="集群邀请码" readonly hidden>
+                      </div>
+                      <button class="btn btn-ghost" type="button" id="cluster-leave">退出集群</button>
+                    </div>
+                  </details>
+                </div>
+                <p class="caption" id="cluster-worker-note" hidden>登录 B 站后可参与检索和同步。完成模型连接测试后可领取检测任务。</p>
+              </div>
+              <div class="cluster-dashboard-grid">
+                <article class="panel cluster-overview" aria-labelledby="cluster-overview-title">
+                  <div class="cluster-heading">
+                    <h2 class="section-title" id="cluster-overview-title">检索集合</h2>
+                    <span class="cluster-pill" id="cluster-phase"></span>
                   </div>
-                  <button class="btn btn-ghost" type="button" id="cluster-leave">退出集群</button>
-                </div>
-                <p class="caption" id="cluster-worker-note" hidden>本机可同步活动。登录 B 站并完成模型连接测试后可领取检测任务。</p>
-              </article>
-              <article class="panel">
-                <div class="cluster-heading"><h2 class="section-title">本轮已检测视频</h2><span class="caption" id="cluster-phase"></span></div>
-                <div class="cluster-progress-value" id="cluster-progress-value"></div>
-                <progress class="cluster-progress" id="cluster-progress" max="1000" value="0" aria-label="本轮已检测视频"></progress>
-                <dl class="cluster-stats">
-                  <div><dt>本轮收录视频</dt><dd id="cluster-found">0</dd></div>
-                  <div><dt>公共开放活动</dt><dd id="cluster-active">0</dd></div>
-                  <div><dt>待处理任务</dt><dd id="cluster-pending">0</dd></div>
-                  <div><dt>失败任务</dt><dd id="cluster-failed">0</dd></div>
-                </dl>
-              </article>
-              <article class="panel">
-                <div class="cluster-heading"><h2 class="section-title">节点</h2><span class="caption" id="cluster-online"></span></div>
-                <div class="cluster-table-wrap">
-                  <table class="cluster-table"><thead><tr><th scope="col">名称</th><th scope="col">角色</th><th scope="col">当前任务</th><th scope="col">已完成</th><th scope="col">模型调用</th></tr></thead><tbody id="cluster-nodes"></tbody></table>
-                </div>
-              </article>
-              <div data-cluster-log="all"></div>
+                  <dl class="cluster-metrics">
+                    <div class="cluster-metric">
+                      <dt>累计检索页数</dt><dd id="cluster-search-total">—</dd>
+                      <dd class="cluster-metric-note" id="cluster-search-history"></dd>
+                    </div>
+                    <div class="cluster-metric">
+                      <dt>本轮检索页数</dt><dd id="cluster-search-round">—</dd>
+                      <dd class="cluster-metric-note">成功检索的 B 站结果页</dd>
+                    </div>
+                  </dl>
+                  <div class="cluster-collection">
+                    <div class="cluster-heading">
+                      <span>本轮收录视频</span>
+                      <strong id="cluster-progress-value">—</strong>
+                    </div>
+                    <progress class="cluster-progress" id="cluster-progress" max="1000" value="0" aria-label="本轮收录视频"></progress>
+                    <p class="caption">去重后进入检测队列</p>
+                  </div>
+                </article>
+                <article class="panel cluster-workers" aria-labelledby="cluster-workers-title">
+                  <div class="cluster-heading">
+                    <h2 class="section-title" id="cluster-workers-title">分配检测</h2>
+                    <span class="caption" id="cluster-online"></span>
+                  </div>
+                  <dl class="cluster-detection" aria-label="本轮视频检测">
+                    <div><dt>待检测</dt><dd id="cluster-video-pending">—</dd></div>
+                    <div><dt>检测中</dt><dd id="cluster-video-running">—</dd></div>
+                    <div><dt>已检测</dt><dd id="cluster-video-done">—</dd></div>
+                  </dl>
+                  <p class="caption cluster-detection-failed" id="cluster-video-failed" hidden></p>
+                  <p class="caption cluster-dispatch-rule" id="cluster-dispatch-rule"></p>
+                  <ul class="cluster-node-list" id="cluster-nodes" aria-label="节点状态"></ul>
+                  <p class="caption cluster-empty" id="cluster-nodes-empty" hidden>等待节点同步</p>
+                </article>
+              </div>
             </div>
           </div>
         </section>

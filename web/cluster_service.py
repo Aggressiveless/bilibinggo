@@ -113,9 +113,15 @@ class ClusterService:
         self.wake.set()
 
     def _remote(self, session, path, token, payload):
+        headers = {"Authorization": "Bearer " + token}
+        if path == "/exchange":
+            # Old v1 hosts reject extra JSON fields but ignore the capability header.
+            payload = dict(payload)
+            if payload.pop("video_detection", None):
+                headers["X-Binggo-Video-Detection"] = "1"
         try:
             response = self.http.post(session["address"] + PEER_PATH + path,
-                                      headers={"Authorization": "Bearer " + token}, json=payload)
+                                      headers=headers, json=payload)
         except httpx.RequestError as exc:
             raise ClusterError("无法连接主服务器，请检查地址、网络和 TLS 证书", 502) from exc
         if response.status_code == 401:
@@ -194,10 +200,11 @@ class ClusterService:
             raise RetryCheck("相同内容正在由其他节点分析", reason="analysis_busy")
         return response.get("fields")
 
-    def _execute(self, session, task):
+    def _execute(self, session, task, *, two_stage):
         return execute(task, self.directory / "worker-cache.json",
                        lambda key: self._analysis(session, task, key),
-                       lambda key, result: self._analysis(session, task, key, result))
+                       lambda key, result: self._analysis(session, task, key, result),
+                       two_stage=two_stage)
 
     def _run(self):
         session_node = ""
@@ -250,8 +257,11 @@ class ClusterService:
         node = session["node"]
         pending = self.store.read(f"report:{node}")
         active = self._task if self._task_node_if_working() == node else None
+        two_stage = session["role"] == "host" or bool(self.status_remote.get("two_stage"))
+        video_detection = is_llm_ready()
         message = Exchange(node=node, after=self.store.read(f"cursor:{node}", 0), activities=batch,
-                           work=not self._job and is_llm_ready(),
+                           work=not self._job and (two_stage or video_detection),
+                           video_detection=video_detection if two_stage else None,
                            working=Lease(task_id=active.task_id, lease=active.lease) if active else None,
                            report=Report.model_validate(pending) if pending else None)
         if session["role"] == "host":
@@ -273,7 +283,7 @@ class ClusterService:
             self.status_remote, self.last_sync, self.error = feed.status, int(time.time()), ""
             if feed.task and not self.stop_event.is_set():
                 self._task, self._task_node = feed.task, node
-                self._job = pool.submit(self._execute, session, feed.task)
+                self._job = pool.submit(self._execute, session, feed.task, two_stage=bool(feed.status.get("two_stage")))
             return feed
 
     def _task_node_if_working(self):

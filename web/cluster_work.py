@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import time
+from collections import deque
 from pathlib import Path
 
 import httpx
@@ -16,6 +17,9 @@ from src.llm_settings import get_llm_config
 from src.lottery_discovery_broad import has_direct_video_entry, has_video_clue, search_author_lotteries
 from src.sources.common import opus_link
 from web.cluster_protocol import Activity, Reference, Report, Task
+
+MAX_VIDEO_REFERENCES = 16
+MAX_REFERENCE_DEPTH = 4
 
 
 class RetryCheck(Exception):
@@ -123,26 +127,57 @@ def _dynamic(client, key, now):
     return linked, [activity]
 
 
-def execute(task: Task, cache_path: Path, get_analysis, put_analysis) -> Report:
+def _follow_reference(client, ref, now):
+    if ref.kind == "dynamic":
+        return _dynamic(client, ref.key, now)
+    if ref.kind == "article":
+        url = f"https://www.bilibili.com/read/cv{ref.key}"
+        data = read_data(client, d.ARTICLE_URL, {"id": int(ref.key)}, referer=url)
+        return references("\n".join(d.extract_opus_links_from_article(data))), []
+    if ref.kind == "short":
+        return references(client.resolve_short_link(f"https://b23.tv/{ref.key}") or ""), []
+    rows, _metadata = search_author_lotteries(client, ref.key, limit=4)
+    return references("\n".join(opus_link(str(row.get("id_str") or "")) for row in rows)), []
+
+
+def _detect_video(client, key, activities):
+    pending = deque((ref, 1) for ref in _video(client, key))
+    seen = set()
+    retry = None
+    while pending and len(seen) < MAX_VIDEO_REFERENCES:
+        ref, depth = pending.popleft()
+        identity = ref.kind, ref.key
+        if identity in seen:
+            continue
+        seen.add(identity)
+        try:
+            links, verified = _follow_reference(client, ref, int(time.time()))
+        except (RetryCheck, httpx.HTTPError, BilibiliRequestError) as exc:
+            if retry is None:
+                retry = exc
+            continue
+        activities.extend(verified)
+        if depth < MAX_REFERENCE_DEPTH:
+            pending.extend((link, depth + 1) for link in links)
+    if retry is not None:
+        raise retry
+
+
+def execute(task: Task, cache_path: Path, get_analysis, put_analysis, *, two_stage=True) -> Report:
     result = {"task_id": task.task_id, "lease": task.lease, "outcome": "done"}
     client = WorkClient(cache_path, get_analysis, put_analysis)
     try:
         if task.kind == "search":
             result.update(_search(client, task))
-        elif task.kind == "video":
+        elif task.kind == "video" and two_stage:
+            activities = []
+            result["activities"] = activities
+            _detect_video(client, task.key, activities)
+        elif task.kind == "video":  # Legacy v1 host verifies the returned links separately.
             result["references"] = _video(client, task.key)
-        elif task.kind == "article":
-            url = f"https://www.bilibili.com/read/cv{task.key}"
-            data = read_data(client, d.ARTICLE_URL, {"id": int(task.key)}, referer=url)
-            result["references"] = references("\n".join(d.extract_opus_links_from_article(data)))
-        elif task.kind == "short":
-            target = client.resolve_short_link(f"https://b23.tv/{task.key}")
-            result["references"] = references(target or "")
-        elif task.kind == "author":
-            rows, _metadata = search_author_lotteries(client, task.key, limit=4)
-            result["references"] = references("\n".join(opus_link(str(row.get("id_str") or "")) for row in rows))
         else:
-            result["references"], result["activities"] = _dynamic(client, task.key, int(time.time()))
+            ref = Reference(kind=task.kind, key=task.key)
+            result["references"], result["activities"] = _follow_reference(client, ref, int(time.time()))
     except d.DiscoveryStopped:
         result.update(outcome="cooldown", cooldown=min(86400, max(900, math.ceil(
             client.cache.get("paused_until", 0) - time.time()))))

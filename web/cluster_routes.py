@@ -122,6 +122,8 @@ def install_cluster(app):
     async def exchange(request: Request):
         token = _bearer(request)
         body = await _read(request, Exchange)
+        if request.headers.get("x-binggo-video-detection") == "1":
+            body.video_detection = True
         return await run_in_threadpool(_run, request.app.state.cluster.store.exchange, body, token)
 
     @peer.post("/analysis")
