@@ -191,7 +191,7 @@ class ClusterService:
         else:
             response = self._remote(session, "/analysis", session["token"], payload)
         if response.get("busy"):
-            raise RetryCheck("相同内容正在由其他节点分析")
+            raise RetryCheck("相同内容正在由其他节点分析", reason="analysis_busy")
         return response.get("fields")
 
     def _execute(self, session, task):
@@ -217,7 +217,7 @@ class ClusterService:
                             report = self._job.result()
                         except Exception:
                             logger.warning("集群任务未完成", exc_info=True)
-                            report = Report(task_id=self._task.task_id, lease=self._task.lease, outcome="retry")
+                            report = Report(task_id=self._task.task_id, lease=self._task.lease, outcome="retry", reason="worker")
                         report_node = self._task_node
                         self._job, self._task = None, None
                         if report_node == session_node:
@@ -257,7 +257,11 @@ class ClusterService:
         if session["role"] == "host":
             feed = self.store.exchange(message, session["token"])
         else:
-            feed = Feed.model_validate(self._remote(session, "/exchange", session["token"], message.model_dump()))
+            payload = message.model_dump()
+            if payload["report"] is not None and "events" not in self.status_remote:
+                # Older v1 hosts reject report fields they do not recognize.
+                payload["report"].pop("reason", None)
+            feed = Feed.model_validate(self._remote(session, "/exchange", session["token"], payload))
         with self.lock:
             if self.store.read("session") != session:
                 return None

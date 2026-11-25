@@ -203,3 +203,35 @@ def test_worker_search_and_linked_activity_without_account_actions(tmp_path, mon
     assert verified.activities[0].prize == "奖品"
     assert verified.activities[0].lottery_time == now + 3600
     assert verified.model_calls == 0
+
+
+def test_shared_cluster_log_records_work_retry_and_result(tmp_path):
+    store, host, member = _cluster(tmp_path)
+    task = _exchange(store, host, work=True).task
+    assert task is not None
+    retry = Report(task_id=task.task_id, lease=task.lease, outcome="retry", reason="model")
+    _exchange(store, host, report=retry)
+    member_job = _exchange(store, member, work=True).task
+    report = _report(member_job, references=[Reference(kind="video", key=BVID)])
+    view_from_member = _exchange(store, member, report=report).status["events"]
+    assert view_from_member == store.status()["events"]
+    assert any(event["node"] == host["node"] and event["level"] == "warning"
+               and "模型未返回有效结果" in event["message"] for event in view_from_member)
+    assert any(event["node"] == member["node"] and "去重后收录 1 个" in event["message"]
+               for event in view_from_member)
+    assert any(event["node"] is None and "第 1 轮开始" in event["message"] for event in view_from_member)
+    assert host["token"] not in str(view_from_member) and member["token"] not in str(view_from_member)
+    _exchange(store, member, report=report)
+    assert store.status()["events"] == view_from_member
+
+
+def test_existing_cluster_adds_event_table_and_keeps_state(tmp_path):
+    store, host, member = _cluster(tmp_path)
+    _exchange(store, host, activities=[_activity(prize="原有活动")])
+    with store.tx() as db:
+        db.execute("DROP TABLE cluster_events")
+    updated = ClusterStore(tmp_path)
+    assert updated.read("session")["id"] == host["id"]
+    assert _exchange(updated, member).changes[0].activity.prize == "原有活动"
+    updated.set_paused(True)
+    assert _exchange(updated, member).status["events"][0]["message"] == "暂停领取新任务"

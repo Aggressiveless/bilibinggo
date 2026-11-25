@@ -94,6 +94,7 @@ class Report(Lease):
     more_pages: bool = False
     cooldown: int = Field(default=900, ge=900, le=86400)
     model_calls: int = Field(default=0, ge=0, le=20)
+    reason: Literal["platform", "model", "network", "analysis_busy", "worker"] | None = None
 
 
 class Change(Payload):

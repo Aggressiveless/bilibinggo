@@ -753,11 +753,31 @@
                   <table class="cluster-table"><thead><tr><th scope="col">名称</th><th scope="col">角色</th><th scope="col">当前任务</th><th scope="col">已完成</th><th scope="col">模型调用</th></tr></thead><tbody id="cluster-nodes"></tbody></table>
                 </div>
               </article>
+              <div data-cluster-log="all"></div>
             </div>
           </div>
         </section>
 
+        <template id="cluster-log-template">
+          <article class="panel cluster-event-panel" hidden>
+            <div class="cluster-heading">
+              <h2 class="section-title">集群工作日志</h2>
+              <div class="cluster-event-filters">
+                <label><select aria-label="节点范围" class="form-input" data-event-scope>
+                  <option value="local">本机和全组事件</option>
+                  <option value="all">全部节点</option>
+                </select></label>
+                <label class="cluster-event-check"><input type="checkbox" data-event-errors> 仅看异常</label>
+              </div>
+            </div>
+            <p class="caption" data-event-meta></p>
+            <p class="caption" data-event-empty hidden></p>
+            <ol class="cluster-events" aria-label="近期集群事件" tabindex="0" data-event-list></ol>
+          </article>
+        </template>
+
         <section class="view-section" id="section-logs" data-title="任务日志" data-subtitle="查看执行顺序、任务进度和结果。">
+          <div data-cluster-log="local"></div>
           <div class="task-layout">
             <div class="task-left">
               <article class="panel task-panel">

@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 
 from src import lottery_discovery as d
+from src.bilibili_client import BilibiliRequestError
 from src.llm_settings import get_llm_config
 from src.lottery_discovery_broad import has_direct_video_entry, has_video_clue, search_author_lotteries
 from src.sources.common import opus_link
@@ -18,7 +19,9 @@ from web.cluster_protocol import Activity, Reference, Report, Task
 
 
 class RetryCheck(Exception):
-    pass
+    def __init__(self, message, reason="platform"):
+        super().__init__(message)
+        self.reason = reason
 
 
 class WorkClient(d.DiscoveryClient):
@@ -38,7 +41,7 @@ class WorkClient(d.DiscoveryClient):
             return cached
         fields = super().extract(text, source=source, followers=followers, context=context)
         if not fields.get("model_assessment"):
-            raise RetryCheck("模型未返回有效判定")
+            raise RetryCheck("模型未返回有效判定", reason="model")
         return self.put_analysis(key, fields)
 
 
@@ -143,8 +146,14 @@ def execute(task: Task, cache_path: Path, get_analysis, put_analysis) -> Report:
     except d.DiscoveryStopped:
         result.update(outcome="cooldown", cooldown=min(86400, max(900, math.ceil(
             client.cache.get("paused_until", 0) - time.time()))))
-    except (httpx.HTTPError, RuntimeError, RetryCheck, ValueError):
-        result["outcome"] = "retry"
+    except RetryCheck as exc:
+        result.update(outcome="retry", reason=exc.reason)
+    except d.DiscoveryModelError:
+        result.update(outcome="retry", reason="model")
+    except (httpx.HTTPError, BilibiliRequestError):
+        result.update(outcome="retry", reason="network")
+    except (RuntimeError, ValueError):
+        result.update(outcome="retry", reason="worker")
     finally:
         result["model_calls"] = client.llm_requests
         client.close()

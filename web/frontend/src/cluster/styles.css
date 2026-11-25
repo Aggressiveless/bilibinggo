@@ -27,3 +27,18 @@
   .cluster-setup { grid-template-columns: minmax(0, 1fr); }
   .cluster-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+.cluster-event-panel[hidden], .cluster-event-panel [hidden] { display: none; }
+#section-logs [data-cluster-log]:has(.cluster-event-panel:not([hidden])) { margin-bottom: 16px; }
+.cluster-event-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 14px; }
+.cluster-event-filters select { padding-block: 6px; }
+.cluster-event-check { white-space: nowrap; }
+.cluster-events { max-height: 320px; overflow-y: auto; list-style: none; padding: 0; margin: 0; }
+.cluster-events li { display: grid; grid-template-columns: 112px minmax(80px, 140px) minmax(0, 1fr); gap: 6px 12px; padding: 9px 4px; border-top: 1px solid var(--border-soft); font-size: 14px; overflow-wrap: anywhere; }
+.cluster-events time, .cluster-event-node { color: var(--foreground-muted); }
+.cluster-events li[data-level="warning"] > :last-child { color: var(--warning); }
+.cluster-events li[data-level="error"] > :last-child { font-weight: 700; color: var(--warning); }
+@media (max-width: 700px) {
+  .cluster-events li { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .cluster-events li > :last-child { grid-column: 1 / -1; }
+}

@@ -9,6 +9,14 @@ type Node = {
   id: string; name: string; online: boolean; host: boolean; work: number; kind?: string;
   key?: string; completed: number; model_calls: number;
 };
+type ClusterEvent = {
+  id: number;
+  at: number;
+  level: "info" | "warning" | "error";
+  node: string | null;
+  node_name: string | null;
+  message: string;
+};
 type Status = {
   role: "host" | "member" | null;
   address?: string;
@@ -19,7 +27,7 @@ type Status = {
   local_cursor: number;
   error: string;
   status: {
-    round?: number; target?: number; counts?: Record<string, Counts>; nodes?: Node[];
+    round?: number; target?: number; counts?: Record<string, Counts>; nodes?: Node[]; events?: ClusterEvent[];
     phase?: string; paused?: boolean; now?: number; next_round?: number; cooldown_until?: number; active?: number; sequence?: number;
   };
 };
@@ -33,10 +41,66 @@ const phases: Record<string, string> = { complete: "本轮完成", incomplete: "
 let current: Status | undefined;
 let busy = false;
 let refreshing = false;
+const eventPanels: Array<(snapshot: Status) => void> = [];
+const eventTime = new Intl.DateTimeFormat("zh-CN", {
+  month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+});
+
+function mountEventPanels() {
+  const template = document.getElementById("cluster-log-template") as HTMLTemplateElement | null;
+  if (!template) return;
+  for (const mount of document.querySelectorAll<HTMLElement>("[data-cluster-log]")) {
+    const panel = template.content.firstElementChild!.cloneNode(true) as HTMLElement;
+    const scope = panel.querySelector<HTMLSelectElement>("[data-event-scope]")!;
+    const errors = panel.querySelector<HTMLInputElement>("[data-event-errors]")!;
+    const meta = panel.querySelector<HTMLElement>("[data-event-meta]")!;
+    const empty = panel.querySelector<HTMLElement>("[data-event-empty]")!;
+    const list = panel.querySelector<HTMLOListElement>("[data-event-list]")!;
+    scope.value = mount.dataset.clusterLog || "all";
+    let rendered = "";
+    const update = (snapshot: Status) => {
+      panel.hidden = !snapshot.role;
+      if (!snapshot.role) return;
+      const events = snapshot.status.events;
+      meta.textContent = snapshot.error || (!snapshot.connected ? "等待与主节点同步" : "最近 80 条事件");
+      const visible = (events || []).filter((event) =>
+        (scope.value === "all" || !event.node || event.node === snapshot.node) &&
+        (!errors.checked || event.level !== "info"));
+      empty.hidden = visible.length !== 0;
+      empty.textContent = !events && snapshot.connected ? "主节点版本尚未提供日志"
+        : errors.checked ? "暂无异常事件" : "暂无集群事件";
+      list.hidden = !empty.hidden;
+      const signature = JSON.stringify(visible);
+      if (signature === rendered) return;
+      rendered = signature;
+      list.replaceChildren(...visible.map((event) => {
+        const item = document.createElement("li");
+        item.dataset.level = event.level;
+        const date = document.createElement("time");
+        date.dateTime = new Date(event.at * 1000).toISOString();
+        date.textContent = eventTime.format(event.at * 1000);
+        const node = document.createElement("span");
+        node.className = "cluster-event-node";
+        node.textContent = event.node_name || "集群";
+        const message = document.createElement("span");
+        message.textContent = event.level === "error" ? "失败 · " + event.message
+          : event.level === "warning" ? "异常 · " + event.message : event.message;
+        item.append(date, node, message);
+        return item;
+      }));
+    };
+    for (const control of [scope, errors]) {
+      control.addEventListener("change", () => { if (current) update(current); });
+    }
+    mount.append(panel);
+    eventPanels.push(update);
+  }
+}
 
 function render(snapshot: Status) {
   const priorRole = current?.role;
   current = snapshot;
+  eventPanels.forEach((update) => update(snapshot));
   const status = snapshot.status;
   const connected = Boolean(snapshot.role);
   if (priorRole !== snapshot.role) byId("invite-text").hidden = true;
@@ -151,6 +215,7 @@ async function action(path: string, data?: object) {
 
 export function bindCluster() {
   if (!byId("root")) return;
+  mountEventPanels();
   for (const mode of ["host", "join"]) {
     byId<HTMLFormElement>(mode + "-form").addEventListener("submit", (event) => {
       event.preventDefault();
@@ -164,7 +229,8 @@ export function bindCluster() {
     if (current?.role === "host" && !window.confirm("解散后所有节点将断开。确定解散集群？")) return;
     void action("leave");
   });
-  document.querySelector('[data-section="cluster"]')?.addEventListener("click", () => void refresh());
+  document.querySelectorAll('[data-section="cluster"], [data-section="logs"]')
+    .forEach((button) => button.addEventListener("click", () => void refresh()));
   void refresh();
   window.setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
 }

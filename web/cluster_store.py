@@ -20,6 +20,15 @@ ROUND_INTERVAL = 1800
 EXHAUSTED_INTERVAL = 3600
 VIDEO_RECHECK = 12 * 3600
 SEARCH_PAGE_LIMIT = 60
+EVENT_RETENTION = 2000
+RECENT_EVENTS = 80
+JOB_LABEL = {"search": "检索", "video": "视频检查", "dynamic": "动态核验",
+             "article": "专栏检查", "short": "短链展开", "author": "发布者检查"}
+RETRY_LABEL = {"platform": "平台内容暂不可读", "model": "模型未返回有效结果",
+               "network": "网络请求失败", "analysis_busy": "其它节点正在分析同一内容",
+               "worker": "工作节点处理失败"}
+
+
 def _dump(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
@@ -41,6 +50,10 @@ class ClusterStore:
         with self.tx() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS cluster_events(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, level TEXT NOT NULL,
+                    node TEXT, node_name TEXT, message TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS nodes(
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL,
                     seen INTEGER NOT NULL, work INTEGER NOT NULL DEFAULT 0,
@@ -97,11 +110,28 @@ class ClusterStore:
         with self.tx() as db:
             self.put(db, key, value)
 
+    @staticmethod
+    def _event(db, at, message, *, node=None, name=None, level="info"):
+        if node and name is None:
+            row = db.execute("SELECT name FROM nodes WHERE id=?", (node,)).fetchone()
+            name = row["name"] if row else None
+        insert = db.execute("INSERT INTO cluster_events(at,level,node,node_name,message) VALUES(?,?,?,?,?)",
+                            (at, level, node, name, message))
+        db.execute("DELETE FROM cluster_events WHERE id<=?", (insert.lastrowid - EVENT_RETENTION,))
+
+    @staticmethod
+    def _job_label(job):
+        if job["kind"] == "search":
+            params = json.loads(job["params"])
+            order = "发布时间" if params["order"] == "pubdate" else "综合排序"
+            return f"检索「{params['keyword']}」第 {params['page']} 页（{order}）"
+        return f"{JOB_LABEL[job['kind']]} {job['key']}"
+
     def start_host(self, name, address):
         with self.tx() as db:
             if self.get(db, "session"):
                 raise ClusterError("请先退出当前集群")
-            for table in ("nodes", "catalog", "jobs", "checked_videos", "sightings", "analyses"):
+            for table in ("nodes", "catalog", "jobs", "checked_videos", "sightings", "analyses", "cluster_events"):
                 db.execute(f"DELETE FROM {table}")
             session = {"role": "host", "name": name, "address": address, "id": uuid.uuid4().hex,
                        "node": uuid.uuid4().hex, "token": secrets.token_hex(32)}
@@ -111,6 +141,7 @@ class ClusterStore:
             self._register(db, Register(name=name, node=session["node"], token=session["token"]), int(time.time()))
             self.put(db, "round", 0)
             self.put(db, "phase", "running")
+            self._event(db, int(time.time()), "主节点已发起工作集群", name=name)
             return session
 
     def register(self, body: Register, invite: str):
@@ -121,7 +152,8 @@ class ClusterStore:
                 raise ClusterError("集群未开启或邀请码无效", 401)
             if body.node == session["node"]:
                 raise ClusterError("不能加入本机发起的集群")
-            self._register(db, body, now)
+            if self._register(db, body, now):
+                self._event(db, now, "节点已加入集群", node=body.node)
             return {"cluster_id": session["id"], "protocol": 1}
 
     @staticmethod
@@ -135,6 +167,7 @@ class ClusterStore:
         db.execute("""INSERT INTO nodes(id,name,token,seen) VALUES(?,?,?,?)
                       ON CONFLICT(id) DO UPDATE SET name=excluded.name,seen=excluded.seen""",
                    (body.node, body.name, hashed, now))
+        return existing is None
 
     def _authenticate(self, db, node, token):
         session = self.get(db, "session", {})
@@ -147,6 +180,7 @@ class ClusterStore:
     def leave(self, node, token):
         with self.tx() as db:
             self._authenticate(db, node, token)
+            self._event(db, int(time.time()), "节点已退出集群", node=node)
             db.execute("DELETE FROM nodes WHERE id=?", (node,))
             db.execute("UPDATE jobs SET until=0 WHERE node=? AND state='leased'", (node,))
 
@@ -175,7 +209,9 @@ class ClusterStore:
         with self.tx() as db:
             if self.get(db, "session", {}).get("role") != "host":
                 raise ClusterError("只有发起人可以控制检索")
-            self.put(db, "paused", paused)
+            if paused != self.get(db, "paused", False):
+                self.put(db, "paused", paused)
+                self._event(db, int(time.time()), "暂停领取新任务" if paused else "恢复领取任务")
 
     def _queue(self, db, round_id, kind, key, **params):
         db.execute("INSERT OR IGNORE INTO jobs(round,kind,key,params) VALUES(?,?,?,?)",
@@ -186,6 +222,7 @@ class ClusterStore:
         self.put(db, "round", round_id)
         self.put(db, "phase", "running")
         self.put(db, "next_round", 0)
+        self._event(db, now, f"第 {round_id} 轮开始，目标 {TARGET} 个不同视频")
         # Order first pages before any later pages. Both sorts cover different results.
         for order in ("pubdate", "totalrank"):
             for word in KEYWORDS:
@@ -221,9 +258,13 @@ class ClusterStore:
                       origin=excluded.origin,checked=excluded.checked""",
                    (activity.dynamic_id, seq, payload, rank, now if activity.closed else expires, origin, now))
 
-    def _retry(self, db, job, now, *, delay):
+    def _retry(self, db, job, now, *, delay, reason):
+        failed = job["attempts"] >= MAX_ATTEMPTS
         db.execute("UPDATE jobs SET state=?,node=NULL,lease=NULL,until=0,due=? WHERE id=?",
-                   ("failed" if job["attempts"] >= MAX_ATTEMPTS else "pending", now + delay, job["id"]))
+                   ("failed" if failed else "pending", now + delay, job["id"]))
+        result = "已达到重试上限" if failed else f"{delay} 秒后可重试" if delay else "已重新排队"
+        self._event(db, now, f"{self._job_label(job)}：{reason}，{result}",
+                    node=job["node"], level="error" if failed else "warning")
 
     def _finish(self, db, node, report: Report, now):
         job = db.execute("SELECT * FROM jobs WHERE id=? AND node=? AND lease=? AND state='leased' AND until>?",
@@ -238,9 +279,12 @@ class ClusterStore:
             db.execute("UPDATE jobs SET attempts=attempts-1 WHERE id=?", (job["id"],))
             db.execute("UPDATE jobs SET state='pending',node=NULL,lease=NULL,until=0,due=? WHERE id=?",
                        (until, job["id"]))
+            self._event(db, now, f"{self._job_label(job)}：平台限流，集群暂停领取任务 {until - now} 秒",
+                        node=node, level="warning")
             return
         if report.outcome == "retry":
-            self._retry(db, job, now, delay=30 * 2 ** (job["attempts"] - 1))
+            self._retry(db, job, now, delay=30 * 2 ** (job["attempts"] - 1),
+                        reason=RETRY_LABEL.get(report.reason, "任务未能完成"))
             return
         round_id, kind, params = job["round"], job["kind"], json.loads(job["params"])
         db.execute("UPDATE jobs SET state='done',node=NULL,lease=NULL,until=0 WHERE id=?", (job["id"],))
@@ -250,9 +294,15 @@ class ClusterStore:
         for item in report.activities:
             if kind == "dynamic" and item.dynamic_id == job["key"]:
                 self._catalog(db, item, 2, now, node)
+        summary = f"发现 {len(report.references)} 条线索"
+        if kind == "dynamic":
+            summary = (f"核验 {len(report.activities)} 条活动状态"
+                       if report.activities else "未确认可同步活动") + f"，{summary}"
         if kind == "search":
+            before = self._video_count(db, round_id)
             self._add_videos(db, job, report, now)
             count = self._video_count(db, round_id)
+            summary = f"返回 {len(report.references)} 个视频，去重后收录 {count - before} 个"
             previous = db.execute(
                 "SELECT id FROM jobs WHERE round=? AND kind='search' AND key=?",
                 (round_id, f"{params['order']}:{params['keyword']}:{params['page'] - 1}"),
@@ -270,6 +320,9 @@ class ClusterStore:
                 if ref.kind != "video":
                     db.execute("INSERT OR IGNORE INTO sightings VALUES(?,?,?,?)", (round_id, job["id"], ref.kind, ref.key))
                     self._queue(db, round_id, ref.kind, ref.key, depth=params.get("depth", 0) + 1)
+        if report.model_calls:
+            summary += f"，调用模型 {report.model_calls} 次"
+        self._event(db, now, f"{self._job_label(job)}完成：{summary}", node=node)
 
     @staticmethod
     def _video_count(db, round_id):
@@ -291,7 +344,7 @@ class ClusterStore:
 
     def _tick(self, db, now):
         for job in db.execute("SELECT * FROM jobs WHERE state='leased' AND until<=?", (now,)).fetchall():
-            self._retry(db, job, now, delay=0)
+            self._retry(db, job, now, delay=0, reason="节点未在租约内交回任务")
         if self.get(db, "paused", False) or self.get(db, "cooldown_until", 0) > now:
             return
         round_id = self.get(db, "round", 0)
@@ -307,6 +360,8 @@ class ClusterStore:
                 phase = "incomplete" if failed else "complete" if found >= TARGET else "exhausted"
                 self.put(db, "phase", phase)
                 self.put(db, "next_round", now + (ROUND_INTERVAL if phase == "complete" else EXHAUSTED_INTERVAL))
+                self._event(db, now, f"第 {round_id} 轮结束，收录 {found}/{TARGET} 个视频，失败 {failed} 项",
+                            level="warning" if failed else "info")
             elif next_round <= now:
                 self._next_round(db, now)
 
@@ -323,6 +378,7 @@ class ClusterStore:
         lease = uuid.uuid4().hex
         db.execute("UPDATE jobs SET state='leased',node=?,lease=?,until=?,attempts=attempts+1 WHERE id=?",
                    (node, lease, now + LEASE_SECONDS, job["id"]))
+        self._event(db, now, f"开始{self._job_label(job)}（第 {job['attempts'] + 1} 次）", node=node)
         return Task(task_id=job["id"], lease=lease, kind=job["kind"], key=job["key"], **json.loads(job["params"]))
 
     def exchange(self, body: Exchange, token: str) -> Feed:
@@ -330,9 +386,13 @@ class ClusterStore:
         with self.tx() as db:
             session = self._authenticate(db, body.node, token)
             db.execute("UPDATE nodes SET seen=?,work=? WHERE id=?", (now, int(body.work), body.node))
+            sequence = self.get(db, "sequence", 0)
             for item in body.activities:
                 if not item.closed:
                     self._catalog(db, item, 1, now, body.node)
+            updated = self.get(db, "sequence", 0) - sequence
+            if updated:
+                self._event(db, now, f"上传活动后，公共目录新增或更新 {updated} 条", node=body.node)
             if body.working:
                 self._renew(db, body.node, body.working, now)
             if body.report:
@@ -367,7 +427,10 @@ class ClusterStore:
         for node in nodes:
             node["online"] = node["seen"] > now - 30
             node["host"] = node["id"] == session.get("node")
-        return {"round": round_id, "target": TARGET, "counts": counts, "nodes": nodes,
+        events = [dict(row) for row in db.execute(
+            "SELECT id,at,level,node,node_name,message FROM cluster_events ORDER BY id DESC LIMIT ?",
+            (RECENT_EVENTS,))]
+        return {"round": round_id, "target": TARGET, "counts": counts, "nodes": nodes, "events": events,
                 "now": now, "phase": self.get(db, "phase", "running"), "next_round": self.get(db, "next_round", 0),
                 "paused": self.get(db, "paused", False), "cooldown_until": self.get(db, "cooldown_until", 0),
                 "sequence": self.get(db, "sequence", 0),
