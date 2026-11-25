@@ -2,99 +2,110 @@
   <img src="docs/images/logo.svg" alt="Binggo" width="80" height="80">
 </p>
 
-<h1 align="center">Binggo</h1>
+<h1 align="center">Binggo 6.1.0 集群版</h1>
 
 <p align="center">
   B 站抽奖助手 · 发现、核验、分享与参与活动
 </p>
 
 <p align="center">
-  <a href="https://github.com/Komerser/bilibinggo/releases/latest"><img src="https://img.shields.io/github/v/release/Komerser/bilibinggo?style=flat-square" alt="Release"></a>
-  <a href="https://github.com/Komerser/bilibinggo/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Komerser/bilibinggo/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
-  <a href="https://github.com/Komerser/bilibinggo/stargazers"><img src="https://img.shields.io/github/stars/Komerser/bilibinggo?style=flat-square" alt="Stars"></a>
+  <a href="https://github.com/Komerser/bilibinggo/releases/tag/v6.1.0"><b>下载集群版</b></a>
+  &nbsp;·&nbsp;
+  <a href="#开始使用"><b>开始使用</b></a>
+  &nbsp;·&nbsp;
+  <a href="#工作集群"><b>工作集群</b></a>
+  &nbsp;·&nbsp;
+  <a href="#603-到-610-更新概要"><b>更新概要</b></a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/Komerser/bilibinggo/releases/tag/v6.0.3"><b>下载 6.0.3</b></a>
-  &nbsp;·&nbsp;
-  <a href="CHANGELOG.md"><b>更新记录</b></a>
-  &nbsp;·&nbsp;
-  <a href="docs/console.md"><b>文档</b></a>
-  &nbsp;·&nbsp;
-  <a href="https://github.com/Komerser/bilibinggo/issues"><b>反馈</b></a>
-</p>
+Binggo 可以从 UP 主合集、追踪动态和视频检索中发现抽奖活动。单台电脑可独立完成检索、核验、导入和参与。多台电脑也可以组成工作集群，共享已看视频记录和活动目录，分工检索与检测。
 
-Binggo 从 UP 主合集、监控用户动态和视频检索中发现抽奖活动。你可以在 Web 控制台核验候选、分享活动清单、逐项参与，并查看任务进度与用量。由 Komerser 维护的这个 fork 基于 victor 的 [bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
+本 fork 由 Komerser 维护，基于 victor 的 [bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
 
-## 使用与转载声明
+## 下载与升级
 
-Binggo 仅供个人学习和研究，是未经哔哩哔哩授权或认可的第三方工具。使用时须遵守适用的法律法规与 B 站平台规则。禁止将本项目或衍生工具用于收费代抽、营销引流等商业用途，禁止批量操作多账号、养号、控号和矩阵运营，也不得用于黑产或其他违法违规活动。账号封禁、功能限制、数据丢失或法律追责等使用后果由使用者自行承担，项目作者及贡献者不承担相关责任。见 [上游免责声明](https://github.com/luovicter-collab/bilibinggo#免责声明)。
-
-转载或二次发布时，请保留使用声明及适用的版权和许可说明，注明原作者 victor 并附上上游仓库链接。转载本 fork 的内容或发行包时，也请注明维护者 Komerser 并附上 [本 fork 的仓库](https://github.com/Komerser/bilibinggo)。
-
-## 6.0.3 更新
-
-- **组合搜索**。主动检索默认将输入词作为一条查询发往 B 站，也可切换到分别搜索。
-- **断点恢复**。主动检索和数据源更新分批保存，在「日志」中可重试失败或中断的任务。
-- **筛选和安全修复**。调用模型前筛除缺少活动证据的候选，修复数据库连接释放，保护 LLM API Key 并避免重复提交评论。
-
-完整的更新内容见 [CHANGELOG](CHANGELOG.md) 和 [6.0.3 发布说明](https://github.com/Komerser/bilibinggo/releases/tag/v6.0.3)。
-
-## 下载与安装
-
-| 平台 | 6.0.3 下载 |
+| 平台 | 6.1.0 下载 |
 | --- | --- |
-| Windows x64 | [安装包](https://github.com/Komerser/bilibinggo/releases/download/v6.0.3/Binggo-Setup-win64.exe) · [便携版](https://github.com/Komerser/bilibinggo/releases/download/v6.0.3/Binggo-Portable-win64.zip) |
-| Ubuntu | [部署包](https://github.com/Komerser/bilibinggo/releases/download/v6.0.3/Binggo-6.0.3-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Komerser/bilibinggo/releases/download/v6.0.3/Binggo-6.0.3-ubuntu.tar.gz.sha256) |
+| Windows x64 | [安装包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.0/Binggo-Setup-win64.exe) · [便携版](https://github.com/Komerser/bilibinggo/releases/download/v6.1.0/Binggo-Portable-win64.zip) |
+| Ubuntu | [部署包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.0/Binggo-6.1.0-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Komerser/bilibinggo/releases/download/v6.1.0/Binggo-6.1.0-ubuntu.tar.gz.sha256) |
 
-### Windows x64
+Windows 运行安装包，或解压便携版后启动 `Binggo-RepostFix.exe`。控制台默认地址为 [127.0.0.1:8182](http://127.0.0.1:8182)。已有用户请先等任务结束，退出程序并备份原目录中的 `user-data`。更新程序文件后保留该目录，即可沿用登录、设置和历史。
 
-运行安装包，或解压便携版后运行 `Binggo-RepostFix.exe`。控制台默认打开在 [127.0.0.1:8182](http://127.0.0.1:8182)，数据位于程序旁的 `user-data`。升级时先等任务结束，再退出 Binggo 并备份整个 `user-data`。覆盖或重装程序时保留该目录。
-
-### Ubuntu
-
-部署包内含预构建前端和安装说明。首次启动会创建空数据库。Ubuntu 24.04 可使用 systemd 安装，使服务开机自启并在进程退出后重启。
+Ubuntu 部署包内含预构建前端和安装说明。Ubuntu 24.04 及以上可用 systemd 安装。
 
 ```bash
-sha256sum -c Binggo-6.0.3-ubuntu.tar.gz.sha256
-tar -xzf Binggo-6.0.3-ubuntu.tar.gz
-cd binggo-server-6.0.3
+sha256sum -c Binggo-6.1.0-ubuntu.tar.gz.sha256
+tar -xzf Binggo-6.1.0-ubuntu.tar.gz
+cd binggo-server-6.1.0
 sudo bash deploy.sh install
 ```
 
-Ubuntu 22.04 可在 Docker Engine 和 Compose 就绪后，运行 `sudo bash deploy.sh docker`。同一台服务器选一种方式即可。systemd 将数据存到 `/var/lib/binggo`，Docker 将数据存到解压目录下的 `user-data`。
-
-在自己的电脑上运行 `ssh -N -L 8182:127.0.0.1:8182 用户名@服务器地址`，再打开 [127.0.0.1:8182](http://127.0.0.1:8182)。SSH 断开后服务继续运行。服务重启后，如页面显示队列或工作流已暂停，可根据任务状态手动恢复。
+Ubuntu 22.04 可在 Docker Engine 和 Compose 就绪后运行 `sudo bash deploy.sh docker`。systemd 的数据目录为 `/var/lib/binggo`，Docker 使用部署目录下的 `user-data`。单人远程使用时可以通过 SSH 端口转发访问控制台。要让其他设备加入集群，请配置成员能够访问的 HTTPS 入口。 [主节点入口配置](docs/cluster.md#主服务器入口)
 
 ## 开始使用
 
-1. 在控制台侧栏扫码登录。需要使用转发解析或模型核验时，在「概览」配置 LLM 并完成连接测试。
-2. 在「数据源」更新指定 UP 主合集或监控用户动态，也可以检索视频、核验候选后导入。刚安装时活动列表为空，更新或导入后即可开始筛选。
-3. 在「活动」查看规则，选择单条参与或「开始顺序参与」。顺序参与会按当前筛选和排序跨页逐项处理未参加活动，遇到失败停止后续操作。
-4. 在「日志」查看任务进度、参与结果和等待队列。等待项可调整顺序或移除，「概览」可查看 B 站请求和模型用量。
+1. 在控制台侧栏扫码登录 B 站。需要模型核验或解析转发活动时，在「概览」配置 LLM 并完成连接测试。
+2. 打开「数据源」。可以更新 UP 主合集、添加追踪 UP 主并检查动态，也可以主动检索视频。主动检索支持组合或分别搜索，进度分批保存，筛选后的候选可以复核并导入。
+3. 在「活动」查看规则和开奖时间，按需选择单条参与或开始顺序参与。顺序参与按当前筛选和排序逐项处理，遇到失败会停止。活动也可导出为 JSON，接收方先预览再导入。
+4. 在「日志」查看执行结果和任务队列。等待项可以调整顺序或移除，失败或中断且支持恢复的任务可以重试。「概览」显示 B 站请求和模型用量。
 
-视频检索会按唯一新视频计数并保存进度，停下后可继续检索。更新、检索和参与共用任务队列，便于在同一处查看与管理。
+更多操作见 [控制台使用指南](docs/console.md)。
 
-## 数据与隐私
+## 工作集群
 
-Cookie、模型配置、活动库和参与历史保存在运行 Binggo 的电脑或服务器。启用 LLM 功能时，需要解析的内容会发给你配置的模型服务。当前数据路径可在「概览 → 项目信息」中查看。下载包只包含程序和配置模板，活动分享文件也只包含上面列出的活动字段。
+### 发起与加入
 
-## 文档与开发
+1. 主节点在「工作集群」填写节点名称和对其他成员可用的 HTTPS 地址，点击「发起工作集群」，然后显示邀请码。
+2. 成员在自己的 Binggo 中登录 B 站，选择「参与工作集群」，填写主节点地址、邀请码和本机节点名称。
+3. 状态显示「同步正常」后，即可同步活动和领取检索任务。视频检测与追踪检查还需要在执行节点配置模型并通过连接测试。
 
-- [控制台使用指南](docs/console.md)
-- [命令行说明](docs/cli.md)
-- [可选的 MCP v2 接入](mcp/README.md)
+Windows 和 Ubuntu 都可以运行主节点或工作节点。成员从本机主动连接主节点，只有主节点需要提供成员可达的 HTTPS 入口。本机的 `127.0.0.1` 可用于在同一台电脑上测试。
 
-Python **3.12+**，Node.js **20+**（仅构建前端时需要）。
+### 集群怎样工作
+
+- **合并 BV 历史。** 支持该功能的成员上传本机已收录的 BV，主节点去重后持久保存。新的检索跳过集群已经看过的视频。
+- **逐轮检索与检测。** 每轮用一个关键词，按发布时间和综合排序检索，共用 **1,000 个不同视频**的收录目标。结果页先用完时，直接检测已收录的视频。在线节点在轮间依次导入活动，随后进入下一个关键词。
+- **指派追踪检查。** 各节点的追踪 UP 主按 UID 合并。主节点可以指定就绪的节点检查某个 UP 主近期是否发布或转发了抽奖信息，核验结果同步到集群活动目录。
+- **查看任务和节点。** 工作集群页显示本轮关键词、待处理视频、各节点历史收录量、当前状态及累计检测命中率。「数据源 → 主动检索 → 成果展示」可以打开集群检出的仍开放活动。
+
+集群共享活动信息、BV 标识和追踪名单。B 站 Cookie、模型密钥及参与记录保存在各节点本机。实际参与仍由使用者在本机发起。完整调度、跨机器入口及旧节点兼容性见 [工作集群手册](docs/cluster.md)。
+
+## 6.0.3 到 6.1.0 更新概要
+
+| 提交 | 更新 |
+| --- | --- |
+| [`7c32e47`](https://github.com/Komerser/bilibinggo/commit/7c32e47) | 加入工作集群预览，支持邀请成员、派发任务和同步活动。 |
+| [`493c95b`](https://github.com/Komerser/bilibinggo/commit/493c95b) | 日志页加入集群事件，可查看领取、完成、重试和限流。 |
+| [`dcb359d`](https://github.com/Komerser/bilibinggo/commit/dcb359d) | 主动检索页展示本机集群任务、本轮贡献和近期结果。 |
+| [`309cf67`](https://github.com/Komerser/bilibinggo/commit/309cf67) | 集群先收录视频，再分配视频检测。 |
+| [`c97f9ef`](https://github.com/Komerser/bilibinggo/commit/c97f9ef) · [`652c160`](https://github.com/Komerser/bilibinggo/commit/652c160) | 显示集群检出活动和视频转化率，补计有记录的首轮结果。 |
+| [`0f7c3fb`](https://github.com/Komerser/bilibinggo/commit/0f7c3fb) | 将集群检出的活动移到主动检索的成果展示中。 |
+| [`cfa5afe`](https://github.com/Komerser/bilibinggo/commit/cfa5afe) | 分享和同步开奖时间待确认的开放活动。 |
+| [`18e4a54`](https://github.com/Komerser/bilibinggo/commit/18e4a54) | 合并节点历史 BV，显示节点统计，轮间顺序导入后立刻开启下一轮。 |
+| [`130519b`](https://github.com/Komerser/bilibinggo/commit/130519b) | 改为每轮一个关键词，简化检索任务队列。 |
+| [`723ec79`](https://github.com/Komerser/bilibinggo/commit/723ec79) | 汇总追踪 UP 主，支持主节点指派检查，展示追踪及参与等节点状态。 |
+
+更早版本见 [CHANGELOG](CHANGELOG.md)。问题和建议可以提交到 [GitHub Issues](https://github.com/Komerser/bilibinggo/issues)。
+
+## 源码与文档
+
+Python **3.12+**，Node.js **20+**（构建前端时使用）。
 
 ```bash
-git clone https://github.com/Komerser/bilibinggo.git && cd bilibinggo
-pip install -r requirements.txt
+git clone https://github.com/Komerser/bilibinggo.git
+cd bilibinggo
+python -m pip install -r requirements.txt
 cd web/frontend && npm ci && npm run build && cd ../..
 python scripts/run_dashboard.py
 ```
 
-源码模式默认使用 `127.0.0.1:8787`。运行测试前安装 `requirements-dev.txt`，然后执行 `python -m pytest tests/ -q`。
+源码模式默认监听 `127.0.0.1:8787`。其他入口见 [命令行说明](docs/cli.md) 与 [MCP v2 接入](mcp/README.md)。
+
+## 使用与转载声明
+
+Binggo 仅供个人学习和研究，是未经哔哩哔哩授权或认可的第三方工具。请遵守适用法律及 B 站平台规则。禁止将本项目或衍生工具用于收费代抽、营销引流等商业用途，禁止批量操作多账号、养号、控号和矩阵运营，也不得用于黑产或其他违法违规活动。账号封禁、功能限制、数据丢失及法律追责等使用后果由使用者承担。 [上游免责声明](https://github.com/luovicter-collab/bilibinggo#免责声明)
+
+转载或二次发布时，请保留使用声明及适用的版权和许可说明，注明原作者 victor 和 fork 维护者 Komerser，并附上 [上游仓库](https://github.com/luovicter-collab/bilibinggo) 与 [本 fork](https://github.com/Komerser/bilibinggo)。上游 README 将项目标注为 MIT，当前仓库未附独立的 `LICENSE` 文件。 [上游许可说明](https://github.com/luovicter-collab/bilibinggo#license)
 
 ## Star History
 
@@ -104,7 +115,3 @@ python scripts/run_dashboard.py
   <img alt="Star history" src="assets/star-history/star-history-light.svg">
 </picture>
 <!-- star-history:end -->
-
-## 许可说明
-
-上游 README 将项目标注为 MIT，当前仓库未附独立的 `LICENSE` 文件。转载与使用声明见上文。参见 [上游许可说明](https://github.com/luovicter-collab/bilibinggo#license)。
