@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.app_logging import get_logger
-from src.app_paths import LLM_ENV_PATH
 from src.config_validate import validate_llm_env_dict
 
 logger = get_logger("llm_config")
@@ -13,7 +12,7 @@ logger = get_logger("llm_config")
 
 @dataclass(frozen=True)
 class LlmConfig:
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str
     model_name: str
 
@@ -51,16 +50,21 @@ def _parse_env_file(path: Path) -> dict[str, str]:
         "LLM_MODEL_NAME": model.LLM_MODEL_NAME,
         "LLM_TEST_PASSED": model.LLM_TEST_PASSED,
         "LLM_TEST_FINGERPRINT": model.LLM_TEST_FINGERPRINT,
+        "LLM_PROFILES_JSON": model.LLM_PROFILES_JSON,
     }
 
 
-def load_llm_config() -> LlmConfig | None:
+def get_environment_llm_config() -> LlmConfig | None:
     api_key = os.environ.get("LLM_API_KEY", "").strip()
     base_url = os.environ.get("LLM_BASE_URL", "").strip()
     model_name = os.environ.get("LLM_MODEL_NAME", "").strip()
     if api_key and base_url and model_name:
         return LlmConfig(api_key=api_key, base_url=base_url.rstrip("/"), model_name=model_name)
 
+    return None
+
+
+def load_llm_config() -> LlmConfig | None:
     from src.llm_settings import get_llm_config
 
-    return get_llm_config()
+    return get_environment_llm_config() or get_llm_config()

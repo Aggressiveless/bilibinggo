@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import date
 from typing import Any
 
 import httpx
 
-from src.llm_config import LlmConfig, load_llm_config
+from src.llm_config import LlmConfig, get_environment_llm_config
+from src.llm_settings import list_llm_profiles, mark_llm_profile_exhausted
 from src.retry_utils import is_transient_http_error, retry_call
 from src.usage_stats import record_llm_request
-
-import threading
 
 _llm_lock = threading.Semaphore(3)
 _LLM_TIMEOUT = 90.0
@@ -24,7 +24,52 @@ class LlmRequestError(RuntimeError):
     """A completion or its response could not be processed."""
 
 
-def _format_llm_http_error(exc: httpx.HTTPStatusError) -> str:
+class LlmQuotaError(LlmRequestError):
+    """The provider rejected the request because its billing quota is exhausted."""
+
+
+_QUOTA_CODES = {
+    "insufficient_quota",
+    "insufficient_balance",
+    "credit_balance_exhausted",
+    "billing_hard_limit_reached",
+    "organization_spend_limit_exceeded",
+    "project_spend_limit_exceeded",
+    "organization_usage_limit_exceeded",
+    "budgetlimitexceeded",
+    "arrearage",
+    "allocationquota.freetieronly",
+}
+_QUOTA_MESSAGE = re.compile(
+    r"\binsufficient (?:account )?(?:balance|credits)\b|"
+    r"\b(?:credit balance|free tier|billing quota) (?:has been |is )?exhausted\b|"
+    r"余额不足|额度(?:已)?(?:耗尽|用完)|用完(?:免费)?额度"
+)
+
+
+def _is_quota_error(response: httpx.Response) -> bool:
+    if response.status_code == 402:
+        return True
+    if response.status_code not in {400, 403, 429}:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return bool(_QUOTA_MESSAGE.search(response.text[:250].lower()))
+    if not isinstance(body, dict):
+        return False
+    for fields in (body, body.get("error"), body.get("detail")):
+        if isinstance(fields, dict):
+            if any(str(fields.get(key, "")).strip().lower() in _QUOTA_CODES for key in ("code", "type")):
+                return True
+            if _QUOTA_MESSAGE.search(str(fields.get("message", "")).lower()):
+                return True
+        elif isinstance(fields, str) and _QUOTA_MESSAGE.search(fields.lower()):
+            return True
+    return False
+
+
+def _format_llm_http_error(exc: httpx.HTTPStatusError, config: LlmConfig) -> str:
     status = exc.response.status_code
     message = ""
     try:
@@ -35,6 +80,8 @@ def _format_llm_http_error(exc: httpx.HTTPStatusError) -> str:
             message = str(body.get("message") or body.get("detail") or "").strip()
     except Exception:
         message = (exc.response.text or "").strip()[:200]
+    if config.api_key:
+        message = message.replace(config.api_key, "****")
     if status == 401:
         return f"API Key 无效或已过期{('：' + message) if message else ''}"
     if status == 404:
@@ -45,6 +92,8 @@ def _format_llm_http_error(exc: httpx.HTTPStatusError) -> str:
 
 
 def _llm_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError) and _is_quota_error(exc.response):
+        return False
     if isinstance(exc, (json.JSONDecodeError, RuntimeError)):
         message = str(exc)
         if "无法解析为 JSON" in message or "不是对象" in message:
@@ -108,21 +157,26 @@ def test_llm_connection(config: LlmConfig) -> str:
         "Content-Type": "application/json",
     }
     try:
-        _post_chat_completion(config=config, headers=headers, payload=payload)
+        data = _post_chat_completion(config=config, headers=headers, payload=payload)
     except httpx.HTTPStatusError as exc:
-        raise RuntimeError(_format_llm_http_error(exc)) from exc
+        if _is_quota_error(exc.response):
+            raise LlmQuotaError("该方案的余额或额度已用尽") from exc
+        raise RuntimeError(_format_llm_http_error(exc, config)) from exc
     except httpx.RequestError as exc:
         raise RuntimeError(f"无法连接接口地址：{exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise LlmRequestError("LLM 接口返回的响应不是有效 JSON") from exc
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise LlmRequestError("LLM 接口未返回有效的模型回复")
+    if not isinstance(choices[0].get("message"), dict):
+        raise LlmRequestError("LLM 接口未返回有效的模型回复")
     return f"{config.model_name} @ {config.base_url}"
 
 
-def chat_json(*, system: str, user: str, config: LlmConfig | None = None) -> dict[str, Any]:
-    cfg = config or load_llm_config()
-    if not cfg:
-        raise RuntimeError("未配置 LLM，请检查 config/llm.env")
-
+def _chat_completion(config: LlmConfig, *, system: str, user: str) -> dict[str, Any]:
     payload = _build_chat_payload(
-        cfg,
+        config,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -130,20 +184,47 @@ def chat_json(*, system: str, user: str, config: LlmConfig | None = None) -> dic
         temperature=0,
     )
     headers = {
-        "Authorization": f"Bearer {cfg.api_key}",
+        "Authorization": f"Bearer {config.api_key}",
         "Content-Type": "application/json",
     }
-    with _llm_lock:
+    try:
+        return _post_chat_completion(config=config, headers=headers, payload=payload)
+    except httpx.HTTPStatusError as exc:
+        if _is_quota_error(exc.response):
+            raise LlmQuotaError("该方案的余额或额度已用尽") from exc
+        error = _format_llm_http_error(exc, config)
+        if exc.response.status_code in {401, 403, 404}:
+            raise RuntimeError(error) from exc
+        raise LlmRequestError(error) from exc
+    except httpx.RequestError as exc:
+        raise LlmRequestError(f"无法连接 LLM 接口：{exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise LlmRequestError("LLM 接口返回的响应不是有效 JSON") from exc
+
+
+def _chat_with_saved_profiles(*, system: str, user: str) -> dict[str, Any]:
+    attempted = set()
+    while True:
+        profiles = list_llm_profiles()
+        profile = next((item for item in profiles if not item.exhausted and item.profile_id not in attempted), None)
+        if profile is None:
+            if profiles or attempted:
+                raise LlmQuotaError("所有 LLM 方案的余额或额度已用尽。请充值后测试连接，或新增方案")
+            raise RuntimeError("未配置 LLM，请检查 config/llm.env")
         try:
-            data = _post_chat_completion(config=cfg, headers=headers, payload=payload)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in {401, 403, 404}:
-                raise RuntimeError(_format_llm_http_error(exc)) from exc
-            raise LlmRequestError(_format_llm_http_error(exc)) from exc
-        except httpx.RequestError as exc:
-            raise LlmRequestError(f"无法连接 LLM 接口：{exc}") from exc
-        except json.JSONDecodeError as exc:
-            raise LlmRequestError("LLM 接口返回的响应不是有效 JSON") from exc
+            return _chat_completion(profile.config, system=system, user=user)
+        except LlmQuotaError:
+            attempted.add(profile.profile_id)
+            mark_llm_profile_exhausted(profile)
+
+
+def chat_json(*, system: str, user: str, config: LlmConfig | None = None) -> dict[str, Any]:
+    with _llm_lock:
+        explicit = config or get_environment_llm_config()
+        if explicit:
+            data = _chat_completion(explicit, system=system, user=user)
+        else:
+            data = _chat_with_saved_profiles(system=system, user=user)
 
     try:
         content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
