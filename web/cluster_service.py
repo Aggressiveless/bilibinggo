@@ -321,24 +321,28 @@ class ClusterService:
             raise RetryCheck("相同内容正在由其他节点分析", reason="analysis_busy")
         return response.get("fields")
 
-    def _publish_watch(self, session, task, activities):
-        body = WatchFindings(node=session["node"], task_id=task.task_id, lease=task.lease, activities=activities)
+    def _publish_watch(self, session, task, **findings):
+        body = WatchFindings(node=session["node"], task_id=task.task_id, lease=task.lease, **findings)
         try:
             if session["role"] == "host":
                 self.store.publish_watch_findings(body, session["token"])
             else:
-                self._remote(session, "/watch-findings", session["token"], body.model_dump())
+                self._remote(session, "/watch-findings", session["token"], body.model_dump(exclude_unset=True))
         except ClusterError as exc:
             raise RetryCheck("追踪结果尚未同步", reason="network") from exc
 
-    def _execute(self, session, task, *, two_stage, watch_batch=False):
+    def _execute(self, session, task, *, two_stage, watch_batch=False, collection_mode=None):
         def publish(activities):
-            self._publish_watch(session, task, activities)
+            self._publish_watch(session, task, activities=activities)
+
+        def publish_references(references):
+            self._publish_watch(session, task, references=references)
 
         return execute(task, self.directory / "worker-cache.json",
                        lambda key: self._analysis(session, task, key),
                        lambda key, result: self._analysis(session, task, key, result),
-                       two_stage=two_stage, publish=publish if watch_batch and task.kind == "watch" else None)
+                       two_stage=two_stage, publish=publish if watch_batch and task.kind == "watch" else None,
+                       collection_mode=collection_mode, publish_references=publish_references)
 
     def _history(self):
         from web.control_service import get_control_service
@@ -468,6 +472,7 @@ class ClusterService:
         batch = batch if unknown_time else [row for row in batch if row.lottery_time is not None and not row.closed]
         video_detection = is_llm_ready()
         watch_batch = session["role"] == "host" or bool(self.status_remote.get("watch_batch_supported"))
+        watch_link_workers = session["role"] == "host" or bool(self.status_remote.get("watch_link_workers"))
         participation_support = session["role"] == "host" or self.status_remote.get("round_participation_supported")
         round_participation = self._round_participation(session, import_round, runner) if (
             participation_support and import_round
@@ -487,13 +492,14 @@ class ClusterService:
                            video_history=history, import_round=import_round,
                            watch_list=watch, local_work=local_work if tracking else None,
                            watch_batch_capable=True if watch_batch else None,
+                           watch_link_workers=True if watch_link_workers else None,
                            round_participation=round_participation)
         if session["role"] == "host":
             feed = self.store.exchange(message, session["token"])
         else:
             payload = message.model_dump()
             for field in ("video_history", "import_round", "watch_list", "local_work",
-                          "watch_batch_capable", "round_participation"):
+                          "watch_batch_capable", "watch_link_workers", "round_participation"):
                 if payload[field] is None:
                     del payload[field]
             if pending_report := payload["report"]:
@@ -532,8 +538,9 @@ class ClusterService:
             self.status_remote, self.last_sync, self.error = feed.status, int(time.time()), ""
             if feed.task and not self.stop_event.is_set():
                 self._task, self._task_node = feed.task, node
+                options = {"collection_mode": feed.status["watch_collection_mode"]} if feed.status.get("watch_collection_mode") else {}
                 self._job = pool.submit(self._execute, session, feed.task, two_stage=bool(feed.status.get("two_stage")),
-                                        watch_batch=watch_batch)
+                                        watch_batch=watch_batch, **options)
             return feed
 
     def _task_node_if_working(self):

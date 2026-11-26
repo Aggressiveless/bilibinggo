@@ -471,6 +471,57 @@ def test_legacy_watch_node_can_check_dynamics_and_modern_node_finishes_collectio
     assert store.tracked_users(1)["items"][0]["hits"] == 1
 
 
+def test_older_nodes_share_collection_links_while_active_discovery_is_paused(tmp_path):
+    from web.cluster_protocol import WatchFindings, WorkAssignments
+
+    store, host, first = _cluster(tmp_path)
+    second = Register(name="另一台旧节点", node=uuid.uuid4().hex, token=secrets.token_hex(32))
+    store.register(second, store.read("invite"))
+    second = second.model_dump()
+    ready = {"video_detection": True, "local_work": "idle"}
+    modern = {**ready, "watch_batch_capable": True, "watch_link_workers": True}
+    _exchange(store, host, **modern, watch_list={
+        "revision": uuid.uuid4().hex, "complete": True, "users": [{"mid": "885439", "name": "合集作者"}],
+    })
+    store.set_work_assignments(WorkAssignments(collection_nodes=[], watch_nodes=[
+        host["node"], first["node"], second["node"],
+    ]))
+    store.set_collection_paused(True)
+    store.start_watch()
+    dynamics = _exchange(store, first, work=True, **ready).task
+    assert dynamics.kind == "watch"
+    previously_found = _activity(prize="已找到")
+    _exchange(store, first, **ready, report=_report(dynamics, activities=[previously_found]))
+    preparation = _exchange(store, host, work=True, **modern)
+    assert preparation.task.task_id == dynamics.task_id
+    assert preparation.status["watch_collection_mode"] == "collection_only"
+    dynamic = Reference(kind="dynamic", key=str(int(KEY) + 1))
+    short = Reference(kind="short", key="link1")
+    upload = WatchFindings(node=host["node"], task_id=preparation.task.task_id, lease=preparation.task.lease, references=[
+        dynamic, short, Reference(kind="dynamic", key=KEY),
+    ])
+    store.publish_watch_findings(upload, host["token"])
+    store.publish_watch_findings(upload, host["token"])
+    assert _exchange(store, first, work=True, **ready).task is None
+    _exchange(store, host, **modern, report=_report(preparation.task))
+    first_lease = _exchange(store, first, work=True, **ready)
+    second_lease = _exchange(store, second, work=True, **ready)
+    assert (first_lease.task.kind, first_lease.task.key) == ("dynamic", dynamic.key)
+    assert (second_lease.task.kind, second_lease.task.key) == ("short", short.key)
+    assert second_lease.status["watch_batch"]["references"] == {"leased": 2}
+    assert sum(node["kind"] == "watch" for node in second_lease.status["nodes"]) == 2
+    new_activity = previously_found.model_copy(update={"dynamic_id": dynamic.key, "source_url": opus_link(dynamic.key)})
+    _exchange(store, first, **ready, report=_report(first_lease.task, activities=[new_activity]))
+    next_link = Reference(kind="dynamic", key=str(int(KEY) + 2))
+    next_task = _exchange(store, second, work=True, **ready,
+                          report=_report(second_lease.task, references=[dynamic, next_link])).task
+    assert (next_task.key, next_task.depth) == (next_link.key, 2)
+    complete = _exchange(store, second, **ready, report=_report(next_task))
+    assert complete.status["watch_batch"]["counts"] == {"done": 1}
+    assert complete.status["watch_batch"]["references"] == {"done": 3}
+    assert store.tracked_users(1)["items"][0]["hits"] == 2
+
+
 def test_collection_assignment_controls_search_and_detection_and_preserves_leases(tmp_path):
     from web.cluster_protocol import WorkAssignments
 

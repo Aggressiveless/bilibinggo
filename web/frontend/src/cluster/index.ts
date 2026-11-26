@@ -56,7 +56,7 @@ type Status = {
     round_keyword?: string | null; upcoming_keywords?: string[];
     watch_tracking?: boolean;
     watch_batch_supported?: boolean;
-    watch_batch?: { counts: Counts; collection_pending?: number; strict?: boolean } | null;
+    watch_batch?: { counts: Counts; collection_pending?: number; strict?: boolean; references?: Counts } | null;
     work_assignments?: Assignment;
     collection_paused?: boolean;
     node_rename_supported?: boolean;
@@ -334,8 +334,13 @@ function updateDispatchControls(snapshot: Status) {
     chosen.watch_nodes.length === 0 || watchTotal === 0;
   const waitingForCollection = batch?.collection_pending && !nodes.some(node => node.online && node.work === 2 &&
     node.watch_batch && (!batch.strict || chosen.watch_nodes.includes(node.id)));
+  const references = batch?.references || {};
+  const referenceTotal = Object.values(references).reduce((sum, value) => sum + value, 0);
+  const referenceProgress = referenceTotal
+    ? `合集线索已核验 ${count(references.done || 0)} / ${count(referenceTotal)} 条${references.leased ? `，${count(references.leased)} 条核验中` : ""}${references.failed ? `，${count(references.failed)} 条失败` : ""}`
+    : "";
   const note = dispatchDirty ? "保存后应用新的节点分工，已领取的任务会继续完成。"
-    : waitingForCollection ? "合集补查正在等待已勾选追踪的新版节点。" : "";
+    : waitingForCollection ? "合集读取正在等待已勾选追踪的新版节点。" : referenceProgress;
   set("dispatch-note", note);
   byId("dispatch-note").hidden = !note;
 }
@@ -410,7 +415,8 @@ async function refreshWatch(page = watchPage) {
     const signature = JSON.stringify(result.items);
     if (watchRows === signature) return;
     watchRows = signature;
-    const states: Record<string, string> = { pending: "待检查", leased: "追踪中", failed: "检查失败", skipped: "已取消" };
+    const states: Record<string, string> = { pending: "待检查", leased: "追踪中", checking: "核验合集线索",
+      failed: "检查失败", skipped: "已取消" };
     byId("watch-list").replaceChildren(...result.items.map(item => {
       const row = document.createElement("li");
       const content = document.createElement("div");
@@ -506,13 +512,12 @@ function renderNodes(snapshot: Status, found: number) {
       ? "等待支持两阶段协作且模型已就绪的节点。"
       : "就绪的空闲节点每次领取一个视频" + (limit ? "，最多 " + limit + " 个并行检测。" : "。");
   set("dispatch-rule", status.counts ? rule : "");
-  const peers = nodes.filter(node => node.id !== snapshot.node);
-  set("nodes-empty", nodes.length ? "暂无其它节点" : "等待节点同步");
-  byId("nodes-empty").hidden = peers.length > 0;
+  set("nodes-empty", "等待节点同步");
+  byId("nodes-empty").hidden = nodes.length > 0;
   const signature = JSON.stringify([nodes.map(({ seen, ...node }) => node), snapshot.node, status.paused, status.phase, importing?.node]);
   if (signature === nodeSignature) return;
   nodeSignature = signature;
-  byId("nodes").replaceChildren(...peers.map((node) => {
+  byId("nodes").replaceChildren(...nodes.map((node) => {
     const row = document.createElement("li");
     const heading = document.createElement("div");
     heading.className = "cluster-node-heading";
@@ -520,7 +525,7 @@ function renderNodes(snapshot: Status, found: number) {
     name.textContent = node.name;
     const role = document.createElement("span");
     role.className = "caption";
-    role.textContent = node.host ? "主节点" : "工作节点";
+    role.textContent = (node.host ? "主节点" : "工作节点") + (node.id === snapshot.node ? "（本机）" : "");
     const state = document.createElement("span");
     state.className = "cluster-pill";
     const importingHere = importing?.node === node.id;

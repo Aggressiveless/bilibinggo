@@ -213,16 +213,20 @@ def _check_watched_author(client, mid, activities, *, publish=None):
         raise retry
 
 
-def _check_collection(client, mid, publish):
+def _collection_references(mid):
     from web.actions import DS_HANDLER_BY_ID
     from web.activity_service import collection_source_for_mid
 
     source = collection_source_for_mid(mid)
     if source is None:
-        return
+        return []
     check, _ = DS_HANDLER_BY_ID[source]
     result = check(force=True)
-    pending = deque((ref, 1) for link in result.activity_links for ref in references(link))
+    return [ref for link in dict.fromkeys(result.activity_links) for ref in references(link)]
+
+
+def _check_collection(client, mid, publish):
+    pending = deque((ref, 1) for ref in _collection_references(mid))
     seen = set()
     retry = None
     while pending:
@@ -243,7 +247,8 @@ def _check_collection(client, mid, publish):
         raise retry
 
 
-def execute(task: Task, cache_path: Path, get_analysis, put_analysis, *, two_stage=True, publish=None) -> Report:
+def execute(task: Task, cache_path: Path, get_analysis, put_analysis, *, two_stage=True, publish=None,
+            collection_mode=None, publish_references=None) -> Report:
     result = {"task_id": task.task_id, "lease": task.lease, "outcome": "done"}
     client = WorkClient(cache_path, get_analysis, put_analysis)
     try:
@@ -251,7 +256,13 @@ def execute(task: Task, cache_path: Path, get_analysis, put_analysis, *, two_sta
             result.update(_search(client, task))
         elif task.kind == "watch":
             result["activities"] = activities = []
-            if publish:
+            if collection_mode:
+                refs = _collection_references(task.key)
+                for start in range(0, len(refs), 120):
+                    publish_references(refs[start:start + 120])
+                if collection_mode == "collection_and_dynamics":
+                    _check_watched_author(client, task.key, activities, publish=publish)
+            elif publish:
                 source_error = None
                 try:
                     _check_collection(client, task.key, publish)

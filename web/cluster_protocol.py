@@ -16,6 +16,7 @@ POLL_SECONDS = 5
 PAGE_SIZE = 100
 HISTORY_PAGE_SIZE = 2000
 WATCH_PAGE_SIZE = 200
+WATCH_LINK_DEPTH = 4
 KEYWORDS = ("抽奖", "福利", "奖品", "转发抽奖", "抽奖活动", "粉丝福利")
 BV = Annotated[str, Field(pattern=r"^BV[0-9A-Za-z]{10}$")]
 Token = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
@@ -167,7 +168,14 @@ class RenameNode(NodeName):
 
 class WatchFindings(Lease):
     node: NodeId
-    activities: list[Activity] = Field(min_length=1, max_length=16)
+    activities: list[Activity] = Field(default_factory=list, max_length=16)
+    references: list[Reference] = Field(default_factory=list, max_length=120)
+
+    @model_validator(mode="after")
+    def require_findings(self):
+        if not self.activities and not self.references:
+            raise ValueError("没有可同步的追踪结果")
+        return self
 
 
 class ParticipationPreference(Payload):
@@ -188,6 +196,7 @@ class Exchange(Payload):
     watch_list: WatchList | None = None
     local_work: LocalWork | None = None
     watch_batch_capable: bool | None = None
+    watch_link_workers: bool | None = None
     round_participation: Literal["ready", "running", "done", "failed", "disabled"] | None = None
 
 
