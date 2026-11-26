@@ -13,6 +13,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(bili_jct=)[^\s;|&]+", re.IGNORECASE), r"\1***"),
     (re.compile(r"(DedeUserID=)[^\s;|&]+", re.IGNORECASE), r"\1***"),
     (re.compile(r"(Bearer\s+)\S+", re.IGNORECASE), r"\1***"),
+    (re.compile(r"(LLM_PROFILES_JSON\s*=\s*)[^\r\n]+", re.IGNORECASE), r"\1***"),
     (re.compile(r"(LLM_API_KEY\s*=\s*)\S+", re.IGNORECASE), r"\1***"),
     (re.compile(r"(api[_-]?key\s*[=:]\s*)\S+", re.IGNORECASE), r"\1***"),
     (re.compile(r"(Authorization\s*:\s*)\S+", re.IGNORECASE), r"\1***"),

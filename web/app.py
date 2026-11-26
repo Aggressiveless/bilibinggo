@@ -14,13 +14,15 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from src.app_logging import get_logger, setup_logging
 from src.app_paths import __version__, ensure_user_dirs
 from src.bilibili_login import QR_IMAGE_PATH
-from src.llm_client import test_llm_connection
+from src.llm_client import LlmQuotaError, test_llm_connection
 from src.llm_settings import (
-    build_llm_config_from_inputs,
-    get_llm_config,
+    delete_llm_profile,
     get_llm_settings_public,
-    load_llm_values,
+    mark_llm_profile_exhausted,
     mark_llm_test_passed,
+    prepare_llm_test,
+    reorder_llm_profiles,
+    save_llm_profile,
     save_llm_settings,
 )
 from src.sources.common import is_valid_dynamic_id, load_previous_output
@@ -66,6 +68,8 @@ from web.schemas import (
     UpdatesCheckOut,
     WatchUserRequest,
 )
+
+from web.schemas.settings import LlmProfileOrderRequest, LlmProfileRequest, LlmProfileTestRequest
 
 ensure_user_dirs()
 setup_logging(console=False)
@@ -423,47 +427,38 @@ def api_settings() -> dict[str, Any]:
     return _build_settings_payload()
 
 
-@app.get("/api/settings/llm", tags=["stable"])
-def api_get_llm_settings() -> dict[str, Any]:
-    account = get_account_profile()
-    llm = get_llm_settings_public()
-    logged_in = bool(account.get("logged_in"))
+def _llm_settings_response(account: dict[str, Any], llm: dict[str, Any]) -> dict[str, Any]:
     return {
         "llm": llm,
-        "setup_complete": logged_in and bool(llm.get("ready")),
+        "setup_complete": bool(account.get("logged_in") and llm.get("ready")),
     }
 
 
+@app.get("/api/settings/llm", tags=["stable"])
+def api_get_llm_settings() -> dict[str, Any]:
+    return _llm_settings_response(get_account_profile(), get_llm_settings_public())
+
+
 @app.post("/api/settings/llm/test", tags=["stable"])
-def api_test_llm_settings(request: LlmSettingsRequest) -> dict[str, Any]:
+def api_test_llm_settings(request: LlmProfileTestRequest) -> dict[str, Any]:
     account = get_account_profile()
     require_login(account, message="请先扫码登录后再测试 LLM")
     try:
-        saved = load_llm_values()
-        test_base = (request.base_url or saved.get("LLM_BASE_URL", "")).strip().rstrip("/")
-        config = build_llm_config_from_inputs(
-            api_key=request.api_key,
-            base_url=test_base,
-            model_name=request.model_name,
-        )
-        if config != get_llm_config():
-            raise ValueError("请先保存配置，再执行连接测试")
-        endpoint = test_llm_connection(config)
-        llm = mark_llm_test_passed(
-            api_key=config.api_key,
-            base_url=test_base,
-            model_name=config.model_name,
-        )
-    except ValueError as exc:
+        profile = prepare_llm_test(**request.model_dump())
+        try:
+            endpoint = test_llm_connection(profile.config)
+        except LlmQuotaError:
+            mark_llm_profile_exhausted(profile)
+            raise
+        llm = mark_llm_test_passed(profile)
+    except (ValueError, RuntimeError) as exc:
         raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
-    except RuntimeError as exc:
-        raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
-    logged_in = bool(account.get("logged_in"))
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, f"保存 LLM 配置失败：{exc}") from exc
     return {
         "ok": True,
         "message": f"连接成功：{endpoint}",
-        "llm": llm,
-        "setup_complete": logged_in and bool(llm.get("ready")),
+        **_llm_settings_response(account, llm),
     }
 
 
@@ -473,20 +468,51 @@ def api_update_llm_settings(request: LlmSettingsRequest) -> dict[str, Any]:
     account = get_account_profile()
     require_login(account, message="请先扫码登录后再配置 LLM")
     try:
-        llm = save_llm_settings(
-            api_key=request.api_key.strip() or None,
-            base_url=request.base_url,
-            model_name=request.model_name,
-        )
+        llm = save_llm_settings(**request.model_dump())
     except ValueError as exc:
         raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
     except OSError as exc:
         raise AppError(ErrorCode.INTERNAL, f"保存 LLM 配置失败：{exc}") from exc
-    logged_in = bool(account.get("logged_in"))
-    return {
-        "llm": llm,
-        "setup_complete": logged_in and bool(llm.get("ready")),
-    }
+    return _llm_settings_response(account, llm)
+
+
+@app.post("/api/settings/llm/profiles", tags=["stable"])
+def api_save_llm_profile(request: LlmProfileRequest) -> dict[str, Any]:
+    account = get_account_profile()
+    require_login(account, message="请先扫码登录后再配置 LLM")
+    try:
+        llm = save_llm_profile(**request.model_dump())
+    except ValueError as exc:
+        raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, f"保存 LLM 配置失败：{exc}") from exc
+    return _llm_settings_response(account, llm)
+
+
+@app.put("/api/settings/llm/profiles/order", tags=["stable"])
+def api_order_llm_profiles(request: LlmProfileOrderRequest) -> dict[str, Any]:
+    account = get_account_profile()
+    require_login(account, message="请先扫码登录后再调整 LLM 方案顺序")
+    try:
+        llm = reorder_llm_profiles(request.profile_ids)
+    except ValueError as exc:
+        raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, f"保存 LLM 配置失败：{exc}") from exc
+    return _llm_settings_response(account, llm)
+
+
+@app.delete("/api/settings/llm/profiles/{profile_id}", tags=["stable"])
+def api_delete_llm_profile(profile_id: str) -> dict[str, Any]:
+    account = get_account_profile()
+    require_login(account, message="请先扫码登录后再删除 LLM 方案")
+    try:
+        llm = delete_llm_profile(profile_id)
+    except ValueError as exc:
+        raise AppError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, f"保存 LLM 配置失败：{exc}") from exc
+    return _llm_settings_response(account, llm)
 
 
 @app.put("/api/settings/participate-text", tags=["stable"])

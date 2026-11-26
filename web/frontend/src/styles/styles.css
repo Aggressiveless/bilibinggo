@@ -1870,6 +1870,102 @@ html.sidebar-init-collapsed .system-btn {
   max-width: 720px;
 }
 
+.llm-profile-settings {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.llm-profile-heading,
+.llm-profile-row,
+.llm-profile-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.llm-profile-heading {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.llm-profile-list:not([hidden]) {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border-block: 1px solid var(--border-soft);
+  list-style: none;
+}
+
+.llm-profile-row {
+  padding: 6px;
+}
+
+.llm-profile-row + .llm-profile-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.llm-profile-edit {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  font: inherit;
+  text-align: left;
+  color: var(--foreground);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.llm-profile-edit:hover,
+.llm-profile-edit[aria-pressed="true"] {
+  background: var(--accent-soft);
+}
+
+.llm-profile-edit:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.llm-profile-position {
+  min-width: 1.3ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground-muted);
+}
+
+.llm-profile-details,
+.llm-profile-details .caption {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.llm-profile-status {
+  white-space: nowrap;
+}
+
+.llm-profile-active {
+  color: var(--success);
+}
+
+.llm-profile-exhausted {
+  color: var(--danger);
+}
+
+.llm-profile-actions {
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.llm-settings .settings-panel-actions {
+  flex-wrap: wrap;
+}
+
 .llm-settings-body {
   display: flex;
   flex-direction: column;

@@ -174,7 +174,7 @@ def discover(service, job_id, params, event, progress=None):
         raise ControlError("VALIDATION_ERROR", "待复核的检索进度已不可用")
     review_params = {key: params[key] for key in (
         "keywords", "keyword_match", "mode", "video_limit", "target_new_videos", "author_dynamic_limit",
-        "expand_keywords", "candidate_limit", "collect_followers",
+        "expand_keywords", "candidate_limit", "collect_followers", "min_interval_seconds",
     ) if key in params}
     review_context = {"checkpoint_id": checkpoint_id, "params": review_params}
     stats_keys = ("target_new_videos", "new_videos_checked", "duplicates_skipped", "search_exhausted",

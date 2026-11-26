@@ -22,6 +22,7 @@ class LlmEnvFileModel(BaseModel):
     LLM_MODEL_NAME: str = ""
     LLM_TEST_PASSED: str = "false"
     LLM_TEST_FINGERPRINT: str = ""
+    LLM_PROFILES_JSON: str = ""
 
 
 def cookie_field_value(cookie_str: str, pattern: re.Pattern[str]) -> str | None:

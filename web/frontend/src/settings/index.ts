@@ -4,38 +4,17 @@
 
 import { state } from "../state";
 import { fetchJSON } from "../api/client";
-import { isLoggedIn, renderAccountViews, renderOnboardingPanel } from "../account/index";
-import { llmActionFeedback, participateTextFeedback } from "../dom";
+import { isLoggedIn } from "../account/index";
+import { participateTextFeedback } from "../dom";
 import { setInlineFeedback, showToast } from "../shell/toast";
 import { clearSaveDirty, flashButtonSuccess, markSaveDirty, prefersReducedMotion, setButtonLoading } from "../utils/motion";
-
-export function toggleLlmApiKeyVisibility() {
-  const input = document.getElementById("llm-api-key-input");
-  const toggle = document.getElementById("llm-api-key-toggle");
-  if (!input || !toggle) return;
-  const showPlain = input.type === "password";
-  input.type = showPlain ? "text" : "password";
-  toggle.textContent = showPlain ? "隐藏" : "显示";
-  toggle.setAttribute("aria-label", showPlain ? "隐藏 API Key" : "显示 API Key");
-  toggle.setAttribute("aria-pressed", showPlain ? "true" : "false");
-}
-
-export function bindLlmApiKeyToggle() {
-  const toggle = document.getElementById("llm-api-key-toggle");
-  if (!toggle || toggle.dataset.bound === "true") return;
-  toggle.dataset.bound = "true";
-  toggle.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    toggleLlmApiKeyVisibility();
-  });
-}
+import { renderLlmSettings } from "./llm";
 
 export async function loadSettings() {
   const settings = await fetchJSON("/api/settings");
   state.settings = settings;
   renderParticipateSettings(settings);
-  renderLlmSettingsForm(settings);
+  renderLlmSettings(settings.llm);
   return settings;
 }
 
@@ -160,141 +139,6 @@ export function bindSettingsDirtyTracking() {
   if (participateInput && participateInput.dataset.dirtyBound !== "true") {
     participateInput.dataset.dirtyBound = "true";
     participateInput.addEventListener("input", () => markSaveDirty(participateSave));
-  }
-
-  const llmSave = document.getElementById("save-llm-settings");
-  ["llm-api-key-input", "llm-base-url-input", "llm-model-name-input"].forEach((id) => {
-    const input = document.getElementById(id);
-    if (!input || input.dataset.dirtyBound === "true") return;
-    input.dataset.dirtyBound = "true";
-    input.addEventListener("input", () => markSaveDirty(llmSave));
-  });
-}
-
-export function getLlmFormValues() {
-  return {
-    api_key: document.getElementById("llm-api-key-input")?.value || "",
-    base_url: document.getElementById("llm-base-url-input")?.value || "",
-    model_name: document.getElementById("llm-model-name-input")?.value || "",
-  };
-}
-
-export function renderLlmSettingsForm(settings) {
-  const llm = settings?.llm || {};
-  const baseInput = document.getElementById("llm-base-url-input");
-  const modelInput = document.getElementById("llm-model-name-input");
-  const keyInput = document.getElementById("llm-api-key-input");
-  const keyHint = document.getElementById("llm-api-key-hint");
-  const baseHint = document.getElementById("llm-base-url-hint");
-  const status = document.getElementById("llm-settings-status");
-  if (baseInput) baseInput.value = llm.base_url || "";
-  if (modelInput) modelInput.value = llm.model_name || "";
-  if (keyInput) {
-    keyInput.value = "";
-    keyInput.placeholder = llm.configured ? "已配置，留空则不修改" : "请输入 API Key";
-  }
-  if (keyHint) {
-    keyHint.textContent = llm.configured
-      ? `当前 Key：${llm.api_key_hint || "****"}（输入新 Key 可覆盖）`
-      : "尚未保存 API Key";
-  }
-  if (baseHint) {
-    baseHint.textContent = `当前接口：${llm.base_url || "（空）"}`;
-  }
-  if (status) {
-    if (!isLoggedIn()) {
-      status.textContent = llm.configured
-        ? "已从本地配置文件读取，登录后可修改并保存"
-        : "需先登录，再保存 LLM 配置";
-    } else if (llm.configured && !llm.test_passed) {
-      status.textContent = "配置已保存，请先测试连接通过后再使用项目功能";
-    } else if (llm.configured) status.textContent = "LLM 已配置且测试通过";
-    else status.textContent = "请填写 API Key 与模型名称并保存，完成后才能使用项目功能";
-  }
-  renderOnboardingPanel();
-}
-
-export async function refreshLlmSettings() {
-  const button = document.getElementById("refresh-llm-settings");
-  setButtonLoading(button, true, { label: "刷新中…" });
-  setInlineFeedback(llmActionFeedback, "", "info");
-  try {
-    const result = await fetchJSON("/api/settings/llm");
-    state.settings = { ...(state.settings || {}), llm: result.llm, setup_complete: result.setup_complete };
-    renderLlmSettingsForm(state.settings);
-    if (state.account) renderAccountViews(state.account);
-    const detail = result.llm?.configured
-      ? `${result.llm.model_name || "已配置"} · ${result.llm.api_key_hint || ""}`
-      : "本地配置文件为空或未完整填写";
-    setInlineFeedback(llmActionFeedback, `配置已刷新 · ${detail}`, "success");
-  } catch (error) {
-    setInlineFeedback(llmActionFeedback, String(error.message || error), "error");
-    throw error;
-  } finally {
-    setButtonLoading(button, false);
-  }
-}
-
-export async function saveLlmSettings() {
-  if (!isLoggedIn()) {
-    setInlineFeedback(llmActionFeedback, "请先扫码登录后再保存", "info", { autoHide: false });
-    return;
-  }
-  const button = document.getElementById("save-llm-settings");
-  setButtonLoading(button, true, { label: "保存中…" });
-  setInlineFeedback(llmActionFeedback, "", "info");
-  try {
-    const result = await fetchJSON("/api/settings/llm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(getLlmFormValues()),
-    });
-    state.settings = { ...(state.settings || {}), llm: result.llm, setup_complete: result.setup_complete };
-    renderLlmSettingsForm(state.settings);
-    if (state.account) renderAccountViews(state.account);
-    setInlineFeedback(
-      llmActionFeedback,
-      `已保存 · ${result.llm.model_name || "已配置"} · ${result.llm.api_key_hint || ""}`,
-      "success"
-    );
-    setButtonLoading(button, false);
-    clearSaveDirty(button);
-    flashButtonSuccess(button);
-  } catch (error) {
-    setButtonLoading(button, false);
-    setInlineFeedback(llmActionFeedback, String(error.message || error), "error");
-    throw error;
-  }
-}
-
-export async function testLlmSettings() {
-  if (!isLoggedIn()) {
-    setInlineFeedback(llmActionFeedback, "请先扫码登录后再测试", "info", { autoHide: false });
-    return;
-  }
-  const button = document.getElementById("test-llm-settings");
-  setButtonLoading(button, true, { label: "测试中…" });
-  setInlineFeedback(llmActionFeedback, "正在测试连接…", "info", { autoHide: false });
-  try {
-    const result = await fetchJSON("/api/settings/llm/test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(getLlmFormValues()),
-      timeoutMs: 60000,
-    });
-    state.settings = {
-      ...(state.settings || {}),
-      llm: result.llm,
-      setup_complete: result.setup_complete,
-    };
-    renderLlmSettingsForm(state.settings);
-    if (state.account) renderAccountViews(state.account);
-    setInlineFeedback(llmActionFeedback, result.message || "LLM 连接正常", "success");
-  } catch (error) {
-    setInlineFeedback(llmActionFeedback, String(error.message || error), "error");
-    throw error;
-  } finally {
-    setButtonLoading(button, false);
   }
 }
 

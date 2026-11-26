@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from web.activity_share import SharedActivity, MAX_LOTTERY_TIME
 
@@ -16,6 +16,7 @@ POLL_SECONDS = 5
 PAGE_SIZE = 100
 HISTORY_PAGE_SIZE = 2000
 WATCH_PAGE_SIZE = 200
+WATCH_LINK_DEPTH = 4
 KEYWORDS = ("抽奖", "福利", "奖品", "转发抽奖", "抽奖活动", "粉丝福利")
 BV = Annotated[str, Field(pattern=r"^BV[0-9A-Za-z]{10}$")]
 Token = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
@@ -141,6 +142,46 @@ class WatchAssignment(Payload):
     node: NodeId
 
 
+class WatchBatch(Payload):
+    nodes: list[NodeId] | None = Field(default=None, min_length=1, max_length=32)
+
+
+class DispatchSettings(Payload):
+    search_nodes: list[NodeId] | None = Field(default=None, min_length=1, max_length=32)
+    video_nodes: list[NodeId] | None = Field(default=None, min_length=1, max_length=32)
+    fallback: bool = False
+    concurrency: int = Field(default=4, ge=1, le=32)
+
+
+class WorkAssignments(Payload):
+    collection_nodes: list[NodeId] = Field(max_length=32)
+    watch_nodes: list[NodeId] = Field(max_length=32)
+
+
+class NodeName(Payload):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
+
+
+class RenameNode(NodeName):
+    node: NodeId
+
+
+class WatchFindings(Lease):
+    node: NodeId
+    activities: list[Activity] = Field(default_factory=list, max_length=16)
+    references: list[Reference] = Field(default_factory=list, max_length=120)
+
+    @model_validator(mode="after")
+    def require_findings(self):
+        if not self.activities and not self.references:
+            raise ValueError("没有可同步的追踪结果")
+        return self
+
+
+class ParticipationPreference(Payload):
+    enabled: bool
+
+
 class Exchange(Payload):
     node: NodeId
     after: int = Field(default=0, ge=0, lt=2**63)
@@ -154,6 +195,9 @@ class Exchange(Payload):
     import_round: int | None = Field(default=None, ge=1)
     watch_list: WatchList | None = None
     local_work: LocalWork | None = None
+    watch_batch_capable: bool | None = None
+    watch_link_workers: bool | None = None
+    round_participation: Literal["ready", "running", "done", "failed", "disabled"] | None = None
 
 
 class Analysis(Lease):

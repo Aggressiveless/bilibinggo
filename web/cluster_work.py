@@ -170,7 +170,7 @@ def _detect_video(client, key, activities):
         raise retry
 
 
-def _check_watched_author(client, mid, activities):
+def _check_watched_author(client, mid, activities, *, publish=None):
     now = int(time.time())
     offset = ""
     seen_offsets, candidates = set(), set()
@@ -205,12 +205,50 @@ def _check_watched_author(client, mid, activities):
         except (RetryCheck, httpx.HTTPError, BilibiliRequestError) as exc:
             retry = retry or exc
             continue
-        activities.extend(matches)
+        if publish and matches:
+            publish(matches)
+        else:
+            activities.extend(matches)
     if retry is not None:
         raise retry
 
 
-def execute(task: Task, cache_path: Path, get_analysis, put_analysis, *, two_stage=True) -> Report:
+def _collection_references(mid):
+    from web.actions import DS_HANDLER_BY_ID
+    from web.activity_service import collection_source_for_mid
+
+    source = collection_source_for_mid(mid)
+    if source is None:
+        return []
+    check, _ = DS_HANDLER_BY_ID[source]
+    result = check(force=True)
+    return [ref for link in dict.fromkeys(result.activity_links) for ref in references(link)]
+
+
+def _check_collection(client, mid, publish):
+    pending = deque((ref, 1) for ref in _collection_references(mid))
+    seen = set()
+    retry = None
+    while pending:
+        ref, depth = pending.popleft()
+        if (ref.kind, ref.key) in seen:
+            continue
+        seen.add((ref.kind, ref.key))
+        try:
+            links, matches = _follow_reference(client, ref, int(time.time()))
+            if matches:
+                publish(matches)
+        except (RetryCheck, httpx.HTTPError, BilibiliRequestError) as exc:
+            retry = retry or exc
+            continue
+        if depth < MAX_REFERENCE_DEPTH:
+            pending.extend((link, depth + 1) for link in links)
+    if retry is not None:
+        raise retry
+
+
+def execute(task: Task, cache_path: Path, get_analysis, put_analysis, *, two_stage=True, publish=None,
+            collection_mode=None, publish_references=None) -> Report:
     result = {"task_id": task.task_id, "lease": task.lease, "outcome": "done"}
     client = WorkClient(cache_path, get_analysis, put_analysis)
     try:
@@ -218,7 +256,23 @@ def execute(task: Task, cache_path: Path, get_analysis, put_analysis, *, two_sta
             result.update(_search(client, task))
         elif task.kind == "watch":
             result["activities"] = activities = []
-            _check_watched_author(client, task.key, activities)
+            if collection_mode:
+                refs = _collection_references(task.key)
+                for start in range(0, len(refs), 120):
+                    publish_references(refs[start:start + 120])
+                if collection_mode == "collection_and_dynamics":
+                    _check_watched_author(client, task.key, activities, publish=publish)
+            elif publish:
+                source_error = None
+                try:
+                    _check_collection(client, task.key, publish)
+                except (RetryCheck, httpx.HTTPError, RuntimeError) as exc:
+                    source_error = exc
+                _check_watched_author(client, task.key, activities, publish=publish)
+                if source_error:
+                    raise source_error
+            else:
+                _check_watched_author(client, task.key, activities)
         elif task.kind == "video" and two_stage:
             activities = []
             result["activities"] = activities

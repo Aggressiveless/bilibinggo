@@ -291,7 +291,22 @@
                   <p class="section-desc">解析<strong>转发抽奖</strong>动态正文，提取奖品与开奖时间。互动 / 预约抽奖不消耗 LLM，推荐使用 <strong>DeepSeek-V4-Flash</strong>。</p>
                 </div>
               </div>
-              <div class="llm-settings-body">
+              <div class="llm-profile-settings">
+                <div class="llm-profile-heading">
+                  <div>
+                    <h3 class="field-label">API 方案使用顺序</h3>
+                    <p class="field-help">从上到下使用。服务商返回余额或额度用尽时，自动重试下一套方案。</p>
+                  </div>
+                  <button type="button" class="btn btn-secondary btn-compact" id="llm-profile-add">新增方案</button>
+                </div>
+                <p class="caption" id="llm-env-override" hidden>当前由 LLM 环境变量指定接口。取消环境变量覆盖后，即可使用下方顺序。</p>
+                <ol class="llm-profile-list" id="llm-profile-list" aria-label="API 方案使用顺序" hidden></ol>
+              </div>
+              <div class="llm-settings-body" id="llm-profile-editor">
+                <div class="settings-field">
+                  <label class="field-label" for="llm-profile-name">方案名称</label>
+                  <input type="text" id="llm-profile-name" class="form-input" maxlength="80" placeholder="留空时使用模型名称" />
+                </div>
                 <div class="settings-field settings-field-full">
                   <div class="settings-field-top">
                     <label class="field-label" for="llm-api-key-input">API Key</label>
@@ -310,7 +325,7 @@
                       <label class="field-label" for="llm-base-url-input">接口地址</label>
                       <span class="field-tag">选填</span>
                     </div>
-                    <p class="field-help">对应本地 <code>llm.env</code> 中的 LLM_BASE_URL，留空即不填写。</p>
+                    <p class="field-help">新增方案时，留空使用默认接口。</p>
                     <input type="text" id="llm-base-url-input" class="form-input" autocomplete="off" placeholder="请输入 BASE URL" />
                     <p class="caption field-hint" id="llm-base-url-hint"></p>
                   </div>
@@ -327,9 +342,10 @@
               <div class="settings-panel-foot">
                 <div class="settings-panel-status">
                   <span class="caption" id="llm-settings-status">需先登录，再保存 LLM 配置</span>
-                  <span class="inline-feedback" id="llm-action-feedback" hidden></span>
+                  <span class="inline-feedback" id="llm-action-feedback" aria-live="polite" hidden></span>
                 </div>
                 <div class="settings-panel-actions">
+                  <button type="button" class="btn btn-secondary btn-pill" id="llm-profile-delete" hidden>删除方案</button>
                   <button type="button" class="btn btn-secondary btn-pill" id="refresh-llm-settings">刷新配置</button>
                   <button type="button" class="btn btn-secondary btn-pill" id="test-llm-settings">测试连接</button>
                   <button type="button" class="btn btn-primary btn-pill" id="save-llm-settings">保存配置</button>
@@ -484,6 +500,13 @@
               <div class="discovery-target-field">
                 <label class="field-label" for="discovery-target">目标新视频数</label>
                 <input id="discovery-target" class="form-input" type="number" min="1" max="10000" step="1" value="100" required aria-describedby="discovery-help" />
+              </div>
+              <div class="discovery-mode">
+                <label class="field-label" for="discovery-request-interval">B 站请求间隔</label>
+                <select id="discovery-request-interval" class="form-input">
+                  <option value="2">2 秒（默认）</option>
+                  <option value="1">1 秒（试用）</option>
+                </select>
               </div>
               <div class="action-row">
                 <button type="submit" class="btn btn-primary btn-pill" id="discovery-start" disabled>开始检索</button>
@@ -766,12 +789,22 @@
             <div class="cluster-layout" id="cluster-monitor" hidden>
               <div class="cluster-toolbar">
                 <div class="cluster-connection">
-                  <strong id="cluster-role"></strong>
+                  <strong id="cluster-local-name"></strong>
+                  <span class="caption" id="cluster-role"></span>
                   <span class="cluster-connection-state" id="cluster-link-state" role="status"></span>
                   <span class="caption" id="cluster-sync-time"></span>
+                  <span class="caption" id="cluster-local-task" hidden></span>
                 </div>
                 <div class="cluster-actions">
-                  <button class="btn btn-secondary" type="button" id="cluster-pause" hidden>暂停协作</button>
+                  <button class="btn btn-secondary" type="button" id="cluster-collection-pause" hidden>暂停主动搜集</button>
+                  <details class="cluster-manage cluster-rename" id="cluster-rename" hidden>
+                    <summary class="btn btn-secondary">改名</summary>
+                    <form class="cluster-manage-body" id="cluster-rename-form">
+                      <label for="cluster-node-name">本机节点名称</label>
+                      <input class="form-input" name="name" id="cluster-node-name" maxlength="40" required>
+                      <button class="btn btn-primary btn-compact" type="submit">保存名称</button>
+                    </form>
+                  </details>
                   <details class="cluster-manage" id="cluster-manage">
                     <summary class="btn btn-secondary">集群管理</summary>
                     <div class="cluster-manage-body">
@@ -780,17 +813,37 @@
                         <button class="btn btn-secondary" type="button" id="cluster-show-invite" aria-expanded="false" aria-controls="cluster-invite-text">显示邀请码</button>
                         <input class="form-input" id="cluster-invite-text" aria-label="集群邀请码" readonly hidden>
                       </div>
+                      <div id="cluster-round-actions" hidden>
+                        <button class="btn btn-secondary" type="button" id="cluster-round-opt-in"></button>
+                        <p class="caption">轮到本机时，导入活动后用当前账号顺序参与全部可参与活动，可能发表转发或评论。</p>
+                      </div>
                       <button class="btn btn-ghost" type="button" id="cluster-leave">退出集群</button>
                     </div>
                   </details>
                 </div>
                 <p class="caption" id="cluster-worker-note" hidden>登录 B 站后可参与检索和同步。完成模型连接测试后可领取检测任务。</p>
               </div>
+              <section class="panel cluster-dispatch" id="cluster-dispatch" aria-labelledby="cluster-dispatch-title" hidden>
+                <form id="cluster-dispatch-form">
+                  <div class="cluster-heading">
+                    <h2 class="section-title" id="cluster-dispatch-title">节点分工</h2>
+                    <div class="cluster-actions">
+                      <button class="btn btn-secondary" id="cluster-watch-start" type="button">开始追踪</button>
+                      <button class="btn btn-primary" id="cluster-dispatch-save" type="submit">保存分工</button>
+                    </div>
+                  </div>
+                  <table class="cluster-assignment-table">
+                    <thead><tr><th scope="col">节点</th><th scope="col">追踪 UP 主</th><th scope="col">主动搜集</th></tr></thead>
+                    <tbody id="cluster-assignment-rows"></tbody>
+                  </table>
+                  <p class="caption" id="cluster-dispatch-note" role="status" hidden></p>
+                </form>
+              </section>
               <div class="cluster-dashboard-grid">
                 <div class="cluster-search-column">
                 <article class="panel cluster-overview" aria-labelledby="cluster-overview-title">
                   <div class="cluster-heading">
-                    <h2 class="section-title" id="cluster-overview-title">检索集合</h2>
+                    <h2 class="section-title" id="cluster-overview-title">主动搜集</h2>
                     <span class="cluster-pill" id="cluster-phase"></span>
                   </div>
                   <dl class="cluster-metrics">
@@ -835,9 +888,6 @@
                     <h2 class="section-title" id="cluster-watch-title">追踪 UP 主</h2>
                     <span class="caption" id="cluster-watch-total"></span>
                   </div>
-                  <label class="cluster-watch-target" id="cluster-watch-target" hidden>
-                    指派节点<select class="form-input" id="cluster-watch-node"></select>
-                  </label>
                   <p class="caption" id="cluster-watch-note" role="status"></p>
                   <ul class="cluster-watch-list" id="cluster-watch-list"></ul>
                   <div class="cluster-watch-pages" id="cluster-watch-pages" hidden>
@@ -849,7 +899,7 @@
                 </div>
                 <article class="panel cluster-workers" aria-labelledby="cluster-workers-title">
                   <div class="cluster-heading">
-                    <h2 class="section-title" id="cluster-workers-title">分配检测</h2>
+                    <h2 class="section-title" id="cluster-workers-title">视频检测</h2>
                     <span class="caption" id="cluster-online"></span>
                   </div>
                   <dl class="cluster-detection" aria-label="本轮视频检测">

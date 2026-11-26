@@ -158,13 +158,13 @@ def test_read_budget_cache_and_persistent_cooldown(monkeypatch, tmp_path):
         with pytest.raises(discovery.DiscoveryStopped, match="预算"):
             client.read(discovery.VIDEO_URL, {"bvid": "two"}, referer="", ttl=600)
         client.save()
-    with discovery.DiscoveryClient(path, budget=3) as client:
+    with discovery.DiscoveryClient(path, budget=3, min_interval_seconds=1) as client:
         client.read(discovery.VIDEO_URL, {"bvid": "one"}, referer="", ttl=600)
         assert client.request_count == 0
         with pytest.raises(discovery.DiscoveryStopped, match="429"):
             client.read(discovery.VIDEO_URL, {"bvid": "two"}, referer="", ttl=600)
         assert client.cache["paused_until"] >= discovery.time.time() + 1795
-    with discovery.DiscoveryClient(path, budget=3) as client:
+    with discovery.DiscoveryClient(path, budget=3, min_interval_seconds=2) as client:
         with pytest.raises(discovery.DiscoveryStopped, match="暂停至"):
             client.read(discovery.VIDEO_URL, {"bvid": "two"}, referer="", ttl=600)
         assert client.request_count == 0

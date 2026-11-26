@@ -126,4 +126,39 @@ test.describe("Binggo smoke @smoke", () => {
     const resp = await settingsResp;
     expect(resp.status()).toBe(200);
   });
+
+  test("6 manages LLM profiles from the overview", async ({ page, request }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await setE2EState(request, { account: "logged_in", llm: "ready" });
+    await gotoOverview(page);
+    const rows = page.locator("#llm-profile-list > li");
+    await expect(rows).toHaveCount(1);
+
+    await page.getByRole("button", { name: "新增方案" }).click();
+    await page.getByLabel("方案名称").fill("备用接口");
+    await page.locator("#llm-api-key-input").fill("offline-backup-api-key");
+    await page.getByLabel("接口地址").fill("https://backup.example/v1");
+    await page.getByLabel("模型名称").fill("backup-model");
+    await page.getByRole("button", { name: "保存配置" }).click();
+
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(1)).toContainText("备用接口");
+    await expect(rows.nth(1)).not.toContainText("offline-backup-api-key");
+    await expect(page.locator("#llm-api-key-input")).toHaveValue("");
+    await page.getByRole("button", { name: "上移 备用接口" }).click();
+    await expect(rows.first()).toContainText("备用接口");
+    await expect(rows.first()).toContainText("当前优先使用");
+
+    await page.reload();
+    await expect(rows.first()).toContainText("备用接口");
+    await expect(page.getByLabel("方案名称")).toHaveValue("备用接口");
+    const panel = page.locator("#llm-settings-panel");
+    await page.setViewportSize({ width: 390, height: 850 });
+    await expect.poll(() => panel.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.getByRole("button", { name: "删除方案" }).click();
+    await confirmModal(page);
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toContainText("原有配置");
+  });
 });

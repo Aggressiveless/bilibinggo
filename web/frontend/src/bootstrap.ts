@@ -10,7 +10,8 @@ import { sidebarLogoutBtn, sidebarRefreshBtn } from "./dom";
 import { bindActionButtons, startPolling } from "./jobs/index";
 import { bindTaskLogs } from "./jobs/task-logs";
 import { startRealtime } from "./realtime/sse";
-import { bindLlmApiKeyToggle, bindParticipateSettings, bindSettingsDirtyTracking, loadSettings, refreshLlmSettings, resetParticipateText, saveLlmSettings, saveParticipateText, testLlmSettings } from "./settings/index";
+import { bindParticipateSettings, bindSettingsDirtyTracking, loadSettings, resetParticipateText, saveParticipateText } from "./settings/index";
+import { bindLlmSettings } from "./settings/llm";
 import { bindNavigation } from "./shell/nav";
 import { initSystemPreferences } from "./shell/theme";
 import { showToast } from "./shell/toast";
@@ -31,7 +32,7 @@ export async function init() {
   bindActivitySharing();
   bindParticipateSettings();
   bindSettingsDirtyTracking();
-  bindLlmApiKeyToggle();
+  bindLlmSettings();
   bindWatchUsers();
   bindOnboardingPanel();
   bindActionButtons();
@@ -54,18 +55,6 @@ export async function init() {
   }
   playOverviewEnter();
 }
-
-document.getElementById("refresh-llm-settings")?.addEventListener("click", () => {
-  refreshLlmSettings().catch(() => {});
-});
-
-document.getElementById("test-llm-settings")?.addEventListener("click", () => {
-  testLlmSettings().catch(() => {});
-});
-
-document.getElementById("save-llm-settings")?.addEventListener("click", () => {
-  saveLlmSettings().catch(() => {});
-});
 
 document.getElementById("save-participate-text")?.addEventListener("click", () => {
   saveParticipateText().catch(() => {});

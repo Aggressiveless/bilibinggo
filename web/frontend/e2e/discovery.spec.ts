@@ -13,16 +13,19 @@ test("combined queries are sent together and separate mode is explicit", async (
   });
   await gotoOverview(page);
   await page.locator('[data-section="sources"]').click();
+  const interval = page.getByLabel("B 站请求间隔");
+  await expect(interval).toHaveValue("2");
   await expect(page.getByLabel("关键词用法")).toHaveValue("combined");
   await expect(page.locator("#discovery-help")).toContainText("抽奖 GTA6 PS5");
   await page.locator("#discovery-start").click();
   await expect.poll(() => submitted.length).toBe(1);
-  expect(submitted[0]).toMatchObject({ keywords: ["抽奖 GTA6 PS5"], keyword_match: "combined" });
+  expect(submitted[0]).toMatchObject({ keywords: ["抽奖 GTA6 PS5"], keyword_match: "combined", min_interval_seconds: 2 });
   await page.getByLabel("关键词用法").selectOption("separate");
+  await interval.selectOption("1");
   await expect(page.locator("#discovery-help")).toContainText("按顺序搜索");
   await page.locator("#discovery-start").click();
   await expect.poll(() => submitted.length).toBe(2);
-  expect(submitted[1]).toMatchObject({ keywords: ["抽奖", "GTA6", "PS5"], keyword_match: "separate" });
+  expect(submitted[1]).toMatchObject({ keywords: ["抽奖", "GTA6", "PS5"], keyword_match: "separate", min_interval_seconds: 1 });
 });
 
 test("deferred videos can be reviewed from the completed search", async ({ page, request }) => {
@@ -58,8 +61,11 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/start")) {
       starts += 1;
-      expect(route.request().postDataJSON()).toEqual({ keywords: ["转发抽奖"], keyword_match: "combined", mode: "comprehensive_page", target_new_videos: 100 });
-      snapshot = { ...snapshot, mode: "comprehensive_page", job: { job_id: starts, state: "running", cancel_requested: false,
+      expect(route.request().postDataJSON()).toEqual({
+        keywords: ["转发抽奖"], keyword_match: "combined", mode: "comprehensive_page", target_new_videos: 100,
+        min_interval_seconds: 1,
+      });
+      snapshot = { ...snapshot, mode: "comprehensive_page", min_interval_seconds: 1, job: { job_id: starts, state: "running", cancel_requested: false,
         progress: { message: "扫描视频 2/36" } }, summary: { videos_checked: 2, requests_used: 5, verification_remaining: 8 } };
     } else if (path.endsWith("/stop")) {
       stops += 1;
@@ -75,10 +81,12 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
   await page.locator('[data-section="sources"]').click();
   await expect(page.locator("#discovery-stop")).toBeDisabled();
   await page.getByLabel("视频排序").selectOption("comprehensive_page");
+  await page.getByLabel("B 站请求间隔").selectOption("1");
   await page.locator("#discovery-start").click();
   await expect(page.locator("#discovery-start")).toBeDisabled();
   await expect(page.locator("#discovery-stop")).toBeEnabled();
   await expect(page.locator("#discovery-keywords")).toBeDisabled();
+  await expect(page.getByLabel("B 站请求间隔")).toBeDisabled();
   await expect(page.getByLabel("视频排序")).toBeDisabled();
   await expect(page.locator("#discovery-videos")).toHaveText("2");
   await page.locator("#discovery-stop").click();
@@ -90,6 +98,7 @@ test("users start, stop, reload and resume discovery", async ({ page, request })
   await page.locator('[data-section="sources"]').click();
   await expect(page.locator("#discovery-start")).toHaveText("继续检索");
   await expect(page.getByLabel("视频排序")).toHaveValue("comprehensive_page");
+  await expect(page.getByLabel("B 站请求间隔")).toHaveValue("1");
   await page.getByLabel("视频排序").selectOption("standard");
   await expect(page.locator("#discovery-start")).toHaveText("开始检索");
   await page.getByLabel("视频排序").selectOption("comprehensive_page");
