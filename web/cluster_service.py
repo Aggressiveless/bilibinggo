@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 
 from src.activity_store import activity_file_lock, append_activities, load_activities, update_activity
+from src.bilibili_auth import get_login_uid
 from src.llm_settings import is_llm_ready
 from src.lottery_classifier import PARTICIPATABLE_TYPES
 from src.lottery_time import confirmed_lottery_time_unix
@@ -21,15 +22,26 @@ from src.pipeline.status_step import apply_initial_status
 from src.sources.common import is_valid_dynamic_id, opus_link
 from src.watch_users import list_watch_users
 from web.account_service import has_login_cookie
-from web.activity_service import invalidate_activity_cache
+from web.activity_service import SOURCE_LABELS, SOURCE_SPACE_URLS, invalidate_activity_cache
 from web.cluster_protocol import (Activity, Analysis, DetectionPageRequest, Exchange, Feed, HISTORY_PAGE_SIZE, Lease,
                                   LINK_PATTERNS, MAX_LOTTERY_TIME, PAGE_SIZE, PEER_PATH, POLL_SECONDS, Register, Report,
-                                  VideoHistory, WATCH_PAGE_SIZE, WatchList, WatchUser, normalize_address)
+                                  VideoHistory, WATCH_PAGE_SIZE, WatchFindings, WatchList, WatchUser, normalize_address)
 from web.cluster_store import ClusterError, ClusterStore
 from web.cluster_work import RetryCheck, execute
 
 logger = logging.getLogger(__name__)
 SYNC_SECONDS = 30
+
+
+def _tracked_creators(*, include_collections):
+    creators = {}
+    if include_collections:
+        for source, url in SOURCE_SPACE_URLS.items():
+            match = re.match(r"https://space\.bilibili\.com/([1-9][0-9]*)/", url)
+            if match:
+                creators[match[1]] = SOURCE_LABELS[source]
+    creators.update((str(user.mid), user.name) for user in list_watch_users(ensure_seeded=False))
+    return [WatchUser(mid=mid, name=name[:64]) for mid, name in sorted(creators.items())]
 
 
 def _export(now, published_unknown=()):
@@ -201,7 +213,52 @@ class ClusterService:
                 "last_sync": self.last_sync if role else 0,
                 "local_cursor": self.store.read(self._cursor_key(config), 0) if role else 0,
                 "worker_ready": has_login_cookie() and is_llm_ready(),
+                "round_participation_enabled": self._participation_uid(config) is not None if role else False,
                 "status": status}
+
+    def _participation_uid(self, session):
+        uid = get_login_uid()
+        return uid if uid and uid == self.store.read(f"round_opt_in:{session['id']}") else None
+
+    def set_round_participation(self, enabled):
+        with self.lock:
+            session = self.store.read("session")
+            uid = get_login_uid() if enabled else None
+            if not session or (enabled and not uid):
+                raise ClusterError("请先登录 B 站并加入工作集群")
+            self.store.write(f"round_opt_in:{session['id']}", uid)
+        self.wake.set()
+
+    def _round_participation(self, session, round_id, runner):
+        key = f"round_participation:{session['id']}"
+        progress = self.store.read(key) or {}
+        if progress.get("round", 0) > round_id:
+            return "failed"
+        if progress.get("round") == round_id:
+            if not progress.get("job"):
+                return "failed"  # An interrupted submission may already have posted actions.
+            job = runner.resolve_job_status(progress["job"])
+            if job.state == "running":
+                return "running"
+            return "done" if job.state == "success" and not (job.result or {}).get("failed") else "failed"
+        uid = self._participation_uid(session)
+        if not uid:
+            return "disabled"
+        turn = self.status_remote.get("round_import") or {}
+        if (not turn.get("participating") or self.status_remote.get("paused") or self._job
+                or not self.last_sync or time.time() - self.last_sync > 20
+                or runner.is_running()):
+            return "ready"
+        if not is_llm_ready():
+            return "failed"
+        with self.lock:
+            if self.store.read("session") != session or self._participation_uid(session) != uid:
+                return "disabled"
+            self.store.write(key, {"round": round_id, "job": None})
+            job = runner.try_start("participate_sequential", {"from_auto": True, "_cluster_account": uid},
+                                   source="auto")
+            self.store.write(key, {"round": round_id, "job": job} if job is not None else progress)
+        return "running" if job is not None else "ready"
 
     def _supports_unknown_time(self, session):
         return session["role"] == "host" or bool(self.status_remote.get("unknown_activity_time"))
@@ -246,11 +303,24 @@ class ClusterService:
             raise RetryCheck("相同内容正在由其他节点分析", reason="analysis_busy")
         return response.get("fields")
 
-    def _execute(self, session, task, *, two_stage):
+    def _publish_watch(self, session, task, activities):
+        body = WatchFindings(node=session["node"], task_id=task.task_id, lease=task.lease, activities=activities)
+        try:
+            if session["role"] == "host":
+                self.store.publish_watch_findings(body, session["token"])
+            else:
+                self._remote(session, "/watch-findings", session["token"], body.model_dump())
+        except ClusterError as exc:
+            raise RetryCheck("追踪结果尚未同步", reason="network") from exc
+
+    def _execute(self, session, task, *, two_stage, watch_batch=False):
+        def publish(activities):
+            self._publish_watch(session, task, activities)
+
         return execute(task, self.directory / "worker-cache.json",
                        lambda key: self._analysis(session, task, key),
                        lambda key, result: self._analysis(session, task, key, result),
-                       two_stage=two_stage)
+                       two_stage=two_stage, publish=publish if watch_batch and task.kind == "watch" else None)
 
     def _history(self):
         from web.control_service import get_control_service
@@ -325,8 +395,8 @@ class ClusterService:
                             watch = None
                             if session["role"] == "host" or self.status_remote.get("watch_tracking"):
                                 if not watch_queue and now >= watch_reload_at:
-                                    users = [WatchUser(mid=str(user.mid), name=user.name[:64])
-                                             for user in list_watch_users(ensure_seeded=False)]
+                                    users = _tracked_creators(include_collections=session["role"] == "host"
+                                                              or self.status_remote.get("watch_batch_supported"))
                                     watch_reload_at = now + SYNC_SECONDS
                                     if users != watch_uploaded:
                                         revision = uuid.uuid4().hex
@@ -379,6 +449,11 @@ class ClusterService:
         cursor_key = self._cursor_key(session)
         batch = batch if unknown_time else [row for row in batch if row.lottery_time is not None and not row.closed]
         video_detection = is_llm_ready()
+        watch_batch = session["role"] == "host" or bool(self.status_remote.get("watch_batch_supported"))
+        participation_support = session["role"] == "host" or self.status_remote.get("round_participation_supported")
+        round_participation = self._round_participation(session, import_round, runner) if (
+            participation_support and import_round
+        ) else None
         local = runner.get_status()
         local_work = "idle"
         if local.state == "running":
@@ -392,12 +467,15 @@ class ClusterService:
                            working=Lease(task_id=active.task_id, lease=active.lease) if active else None,
                            report=Report.model_validate(pending) if pending else None,
                            video_history=history, import_round=import_round,
-                           watch_list=watch, local_work=local_work if tracking else None)
+                           watch_list=watch, local_work=local_work if tracking else None,
+                           watch_batch_capable=True if watch_batch else None,
+                           round_participation=round_participation)
         if session["role"] == "host":
             feed = self.store.exchange(message, session["token"])
         else:
             payload = message.model_dump()
-            for field in ("video_history", "import_round", "watch_list", "local_work"):
+            for field in ("video_history", "import_round", "watch_list", "local_work",
+                          "watch_batch_capable", "round_participation"):
                 if payload[field] is None:
                     del payload[field]
             if pending_report := payload["report"]:
@@ -436,7 +514,8 @@ class ClusterService:
             self.status_remote, self.last_sync, self.error = feed.status, int(time.time()), ""
             if feed.task and not self.stop_event.is_set():
                 self._task, self._task_node = feed.task, node
-                self._job = pool.submit(self._execute, session, feed.task, two_stage=bool(feed.status.get("two_stage")))
+                self._job = pool.submit(self._execute, session, feed.task, two_stage=bool(feed.status.get("two_stage")),
+                                        watch_batch=watch_batch)
             return feed
 
     def _task_node_if_working(self):

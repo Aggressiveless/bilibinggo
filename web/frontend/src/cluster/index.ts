@@ -12,6 +12,7 @@ type Node = {
   key?: string; seen?: number; completed: number; model_calls: number; task_label?: string;
   history_count?: number | null; history_complete?: number | null; search_pages?: number;
   videos_checked?: number; videos_total?: number; videos_counted?: number; videos_matched?: number;
+  watch_batch?: boolean;
   local_work?: "idle" | "watch" | "participating" | "busy" | null;
 };
 type WatchUser = { mid: string; name: string; sources: string[]; assigned: string | null;
@@ -22,7 +23,7 @@ type SearchTask = {
   keyword: string; order: "pubdate" | "totalrank"; queued: QueuedPage[];
 };
 type VideoTask = { key: string; state: "pending" | "leased"; node: string | null };
-type RoundImport = { round: number; node: string | null; pending: number; done: number; skipped: number };
+type RoundImport = { round: number; node: string | null; pending: number; done: number; skipped: number; participating?: boolean };
 type ClusterEvent = {
   id: number;
   at: number;
@@ -39,6 +40,7 @@ type Status = {
   worker_ready: boolean;
   last_sync: number;
   local_cursor: number;
+  round_participation_enabled?: boolean;
   error: string;
   status: {
     round?: number; target?: number; counts?: Record<string, Counts>; nodes?: Node[]; events?: ClusterEvent[];
@@ -51,6 +53,9 @@ type Status = {
     search_tasks?: SearchTask[]; video_queue?: VideoTask[];
     round_keyword?: string | null; upcoming_keywords?: string[];
     watch_tracking?: boolean;
+    watch_batch_supported?: boolean;
+    watch_batch?: { nodes: string[]; counts: Counts } | null;
+    round_participation_supported?: boolean;
   };
 };
 
@@ -137,7 +142,8 @@ function renderDiscoveryWork(snapshot: Status) {
   } else if (status.history_syncing) {
     task = "正在合并节点历史 BV";
   } else if (status.round_import) {
-    task = status.round_import.node === snapshot.node ? "本机正在导入集群活动" : "等待轮间导入结束";
+    task = status.round_import.node === snapshot.node
+      ? (status.round_import.participating ? "本机轮间顺序参与" : "本机正在导入集群活动") : "等待轮间同步";
   } else if (status.next_round) {
     task = "本轮已结束，下一轮 " + time(status.next_round);
   } else {
@@ -274,17 +280,35 @@ function render(snapshot: Status) {
 
 function renderWatchControls(snapshot: Status) {
   byId("watch").hidden = !snapshot.status.watch_tracking;
-  byId("watch-target").hidden = snapshot.role !== "host";
-  const select = byId<HTMLSelectElement>("watch-node");
-  const targets = (snapshot.status.nodes || []).filter(node => node.online && node.work === 2 && node.local_work);
+  byId("watch-target").hidden = snapshot.role !== "host" || !snapshot.status.watch_batch_supported;
+  byId("round-actions").hidden = !snapshot.status.round_participation_supported;
+  set("round-opt-in", snapshot.round_participation_enabled ? "关闭本机轮间参与" : "开启本机轮间参与");
+  byId("round-opt-in").setAttribute("aria-pressed", String(Boolean(snapshot.round_participation_enabled)));
+  const list = byId("watch-nodes");
+  const targets = (snapshot.status.nodes || []).filter(node => node.online && node.work === 2 && node.watch_batch)
+    .sort((left, right) => Number(right.host) - Number(left.host) || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
   const signature = JSON.stringify(targets.map(({ id, name }) => [id, name]));
-  if (select.dataset.targets !== signature) {
-    const value = select.value;
-    select.replaceChildren(...targets.map(node => new Option(node.name, node.id)));
-    if (targets.some(node => node.id === value)) select.value = value;
-    select.dataset.targets = signature;
-    select.disabled = targets.length === 0;
+  if (list.dataset.targets !== signature) {
+    const selected = list.dataset.targets ? watchNodes() : snapshot.status.watch_batch?.nodes || [];
+    list.replaceChildren(...targets.map(node => {
+      const label = document.createElement("label");
+      const choice = document.createElement("input");
+      choice.type = "checkbox";
+      choice.value = node.id;
+      choice.checked = selected.includes(node.id) || (!list.dataset.targets && !selected.length && node.host);
+      label.append(choice, document.createTextNode(node.name));
+      return label;
+    }));
+    list.dataset.targets = signature;
   }
+  const batch = snapshot.status.watch_batch?.counts || {};
+  const active = (batch.pending || 0) + (batch.leased || 0);
+  set("watch-start", active ? "改派剩余任务" : "指派全集合");
+  byId<HTMLButtonElement>("watch-start").disabled = !watchNodes().length;
+}
+
+function watchNodes() {
+  return [...byId("watch-nodes").querySelectorAll<HTMLInputElement>("input:checked")].map(choice => choice.value);
 }
 
 async function refreshWatch(page = watchPage) {
@@ -297,15 +321,20 @@ async function refreshWatch(page = watchPage) {
     });
     if (current?.node !== snapshot.node) return;
     watchPage = result.page;
-    const canAssign = snapshot.role === "host" && Boolean(byId<HTMLSelectElement>("watch-node").value);
     set("watch-total", `${count(result.total)} 位`);
-    set("watch-note", !result.total ? "等待节点同步追踪列表"
-      : snapshot.role === "host" && !canAssign ? "等待支持追踪检查且模型已就绪的节点" : "");
+    const batch = snapshot.status.watch_batch?.counts;
+    set("watch-note", batch ? [
+      `${count(batch.done || 0)} / ${count(Object.values(batch).reduce((sum, value) => sum + value, 0))} 位已检查`,
+      batch.leased ? `${count(batch.leased)} 位追踪中` : "",
+      batch.pending ? `${count(batch.pending)} 位待检查` : "",
+      batch.failed ? `${count(batch.failed)} 位失败` : "",
+    ].filter(Boolean).join(" · ") : result.total ? "合集与监控名单按 UID 合并" : "暂无追踪名单");
+    if (!result.total) byId<HTMLButtonElement>("watch-start").disabled = true;
     byId("watch-pages").hidden = result.pages <= 1;
     set("watch-page", `${result.page} / ${result.pages} 页`);
     byId<HTMLButtonElement>("watch-prev").disabled = result.page <= 1;
     byId<HTMLButtonElement>("watch-next").disabled = result.page >= result.pages;
-    const signature = JSON.stringify([result.items, canAssign]);
+    const signature = JSON.stringify(result.items);
     if (watchRows === signature) return;
     watchRows = signature;
     const states: Record<string, string> = { pending: "待检查", leased: "追踪中", failed: "检查失败", skipped: "已取消" };
@@ -327,18 +356,6 @@ async function refreshWatch(page = watchPage) {
         ? `${eventTime.format(item.checked * 1000)} 检查 · ${count(item.hits ?? undefined)} 项开放活动` : "尚未检查";
       content.append(link, sources, detail);
       row.append(content);
-      if (snapshot.role === "host") {
-        const assign = document.createElement("button");
-        assign.type = "button";
-        assign.className = "btn btn-secondary btn-compact";
-        assign.textContent = item.state === "pending" ? "改派" : "指派检查";
-        assign.disabled = !canAssign || item.state === "leased";
-        assign.addEventListener("click", () => {
-          const node = byId<HTMLSelectElement>("watch-node").value;
-          if (node) void action("watch-assignment", { mid: item.mid, node });
-        });
-        row.append(assign);
-      }
       return row;
     }));
   } catch {
@@ -401,7 +418,8 @@ function renderNodes(snapshot: Status, found: number) {
   const limit = status.concurrency_limit;
   const importing = status.round_import;
   const importNode = importing && nodes.find((node) => node.id === importing.node);
-  const rule = importing ? [importNode ? `${importNode.name} 正在导入活动` : "轮间导入已完成",
+  const rule = importing ? [importNode
+    ? `${importNode.name} ${importing.participating ? "正在轮间顺序参与" : "正在导入活动"}` : "轮间处理已完成",
     `完成 ${importing.done} / ${importing.done + importing.pending + importing.skipped} 个节点`,
     importing.skipped ? `跳过 ${importing.skipped} 个` : ""].filter(Boolean).join(" · ")
     : status.history_syncing ? "历史 BV 合并完成后继续派发任务。"
@@ -547,6 +565,16 @@ export function bindCluster() {
   byId("pause").addEventListener("click", () => void action("pause?paused=" + String(byId("pause").dataset.paused !== "true")));
   byId("watch-prev").addEventListener("click", () => void refreshWatch(watchPage - 1));
   byId("watch-next").addEventListener("click", () => void refreshWatch(watchPage + 1));
+  byId("watch-nodes").addEventListener("change", () => {
+    byId<HTMLButtonElement>("watch-start").disabled = !watchNodes().length;
+  });
+  byId("watch-start").addEventListener("click", () => {
+    const nodes = watchNodes();
+    if (nodes.length) void action("watch-batch", { nodes });
+  });
+  byId("round-opt-in").addEventListener("click", () => {
+    void action("round-participation", { enabled: !current?.round_participation_enabled });
+  });
   byId("show-invite").addEventListener("click", () => {
     if (byId("invite-text").hidden) void action("invite");
     else hideInvite();

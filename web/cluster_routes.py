@@ -12,7 +12,7 @@ from src.app_paths import DATA_DIR
 from web.account_service import get_account_profile, has_login_cookie
 from web.api_errors import AppError, ErrorCode, require_login
 from web.cluster_protocol import (Analysis, DetectionPageRequest, Exchange, HostRequest, JoinRequest, NodeId,
-                                  PEER_PATH, Register, WatchAssignment)
+                                  PEER_PATH, ParticipationPreference, Register, WatchAssignment, WatchBatch, WatchFindings)
 from web.cluster_service import ClusterService
 from web.cluster_store import ClusterError
 
@@ -103,6 +103,21 @@ def install_cluster(app):
         service.wake.set()
         return service.snapshot()
 
+    @dashboard.post("/watch-batch")
+    def watch_batch(request: Request, body: WatchBatch):
+        _dashboard(request, check_login=True)
+        service = request.app.state.cluster
+        _run(service.store.assign_watch_batch, body)
+        service.wake.set()
+        return service.snapshot()
+
+    @dashboard.post("/round-participation")
+    def round_participation(request: Request, body: ParticipationPreference):
+        _dashboard(request, check_login=body.enabled)
+        service = request.app.state.cluster
+        _run(service.set_round_participation, body.enabled)
+        return service.snapshot()
+
     @dashboard.post("/join")
     def join(request: Request, body: JoinRequest):
         _dashboard(request, check_login=True)
@@ -130,6 +145,12 @@ def install_cluster(app):
         service = request.app.state.cluster
         _run(service.store.set_paused, paused)
         return service.snapshot()
+
+    @peer.post("/watch-findings")
+    async def watch_findings(request: Request):
+        token = _bearer(request)
+        body = await _read(request, WatchFindings)
+        return await run_in_threadpool(_run, request.app.state.cluster.store.publish_watch_findings, body, token)
 
     @peer.post("/join")
     async def register(request: Request):

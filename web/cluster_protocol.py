@@ -141,6 +141,19 @@ class WatchAssignment(Payload):
     node: NodeId
 
 
+class WatchBatch(Payload):
+    nodes: list[NodeId] = Field(min_length=1, max_length=32)
+
+
+class WatchFindings(Lease):
+    node: NodeId
+    activities: list[Activity] = Field(min_length=1, max_length=16)
+
+
+class ParticipationPreference(Payload):
+    enabled: bool
+
+
 class Exchange(Payload):
     node: NodeId
     after: int = Field(default=0, ge=0, lt=2**63)
@@ -154,6 +167,8 @@ class Exchange(Payload):
     import_round: int | None = Field(default=None, ge=1)
     watch_list: WatchList | None = None
     local_work: LocalWork | None = None
+    watch_batch_capable: bool | None = None
+    round_participation: Literal["ready", "running", "done", "failed", "disabled"] | None = None
 
 
 class Analysis(Lease):

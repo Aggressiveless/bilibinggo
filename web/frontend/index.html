@@ -796,6 +796,10 @@
                         <button class="btn btn-secondary" type="button" id="cluster-show-invite" aria-expanded="false" aria-controls="cluster-invite-text">显示邀请码</button>
                         <input class="form-input" id="cluster-invite-text" aria-label="集群邀请码" readonly hidden>
                       </div>
+                      <div id="cluster-round-actions" hidden>
+                        <button class="btn btn-secondary" type="button" id="cluster-round-opt-in"></button>
+                        <p class="caption">轮到本机时，导入活动后用当前账号顺序参与全部可参与活动，可能发表转发或评论。</p>
+                      </div>
                       <button class="btn btn-ghost" type="button" id="cluster-leave">退出集群</button>
                     </div>
                   </details>
@@ -851,9 +855,11 @@
                     <h2 class="section-title" id="cluster-watch-title">追踪 UP 主</h2>
                     <span class="caption" id="cluster-watch-total"></span>
                   </div>
-                  <label class="cluster-watch-target" id="cluster-watch-target" hidden>
-                    指派节点<select class="form-input" id="cluster-watch-node"></select>
-                  </label>
+                  <fieldset class="cluster-watch-target" id="cluster-watch-target" hidden>
+                    <legend>指派节点</legend>
+                    <div id="cluster-watch-nodes"></div>
+                    <button class="btn btn-secondary btn-compact" type="button" id="cluster-watch-start">指派全集合</button>
+                  </fieldset>
                   <p class="caption" id="cluster-watch-note" role="status"></p>
                   <ul class="cluster-watch-list" id="cluster-watch-list"></ul>
                   <div class="cluster-watch-pages" id="cluster-watch-pages" hidden>

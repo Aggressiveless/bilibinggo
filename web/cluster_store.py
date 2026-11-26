@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from web.cluster_protocol import (Activity, Analysis, Change, Exchange, Feed, KEYWORDS, Lease, PAGE_SIZE,
-                                  Register, Report, TARGET, Task, WatchAssignment)
+                                  Register, Report, TARGET, Task, WatchAssignment, WatchBatch, WatchFindings)
 
 LEASE_SECONDS = 120
 MAX_ATTEMPTS = 4
@@ -80,6 +80,8 @@ class ClusterStore:
                 CREATE TABLE IF NOT EXISTS nodes(
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL,
                     seen INTEGER NOT NULL, work INTEGER NOT NULL DEFAULT 0,
+                    search_ready INTEGER NOT NULL DEFAULT 0,
+                    watch_batch INTEGER NOT NULL DEFAULT 0,
                     completed INTEGER NOT NULL DEFAULT 0, model_calls INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS catalog(
@@ -113,6 +115,11 @@ class ClusterStore:
                 );
             """)
             db.execute("BEGIN IMMEDIATE")
+            node_columns = {row["name"] for row in db.execute("PRAGMA table_info(nodes)")}
+            if "search_ready" not in node_columns:
+                db.execute("ALTER TABLE nodes ADD COLUMN search_ready INTEGER NOT NULL DEFAULT 0")
+            if "watch_batch" not in node_columns:
+                db.execute("ALTER TABLE nodes ADD COLUMN watch_batch INTEGER NOT NULL DEFAULT 0")
             self._migrate_round(db)
             self._restore_video_results(db)
             if not self.get(db, "detection_totals_initialized"):
@@ -294,6 +301,7 @@ class ClusterStore:
             db.execute("DELETE FROM watch_sources WHERE node=?", (node,))
             db.execute("UPDATE jobs SET until=0 WHERE node=? AND state='leased'", (node,))
             db.execute("""UPDATE jobs SET state='skipped' WHERE kind='watch' AND state='pending' AND
+                          json_extract(params,'$.batch') IS NULL AND
                           (json_extract(params,'$.assigned')=? OR key NOT IN (SELECT mid FROM watch_sources))""", (node,))
 
     def analysis(self, body: Analysis, token: str):
@@ -341,15 +349,14 @@ class ClusterStore:
         keyword = self._upcoming_keywords(self.get(db, "round_keyword"))[0]
         self.put(db, "round", round_id)
         self.put(db, "round_keyword", keyword)
+        self.put(db, "round_search", {"round": round_id, "node": None})
         self.put(db, "phase", "collecting")
         self.put(db, "next_round", 0)
         self._event(db, now, f"第 {round_id} 轮开始，目标 {TARGET} 个不同视频")
-        # Both sorts contribute to the same keyword's target.
-        for order in ("pubdate", "totalrank"):
-            self._queue(db, round_id, "search", f"{order}:{keyword}:1", keyword=keyword, order=order, page=1)
+        self._queue(db, round_id, "search", f"pubdate:{keyword}:1", keyword=keyword, order="pubdate", page=1)
         db.execute("DELETE FROM cluster_node_round WHERE round<?", (round_id - 2,))
         db.execute("DELETE FROM cluster_video_results WHERE round<?", (round_id - 2,))
-        db.execute("DELETE FROM sightings WHERE round<?", (round_id - 2,))
+        db.execute("DELETE FROM sightings WHERE round>0 AND round<?", (round_id - 2,))
         # Keep a cumulative page count when old rounds are pruned. Older installations
         # can recover only the rounds whose job rows still exist at upgrade time.
         cutoff = round_id - 2
@@ -400,17 +407,40 @@ class ClusterStore:
         if job["kind"] == "video" and db.execute("SELECT 1 FROM checked_videos WHERE id=?", (job["key"],)).fetchone():
             db.execute("UPDATE jobs SET state='skipped',node=NULL,lease=NULL,until=0 WHERE id=?", (job["id"],))
             return
-        if job["kind"] == "watch" and not db.execute("""SELECT 1 FROM watch_sources
-            WHERE mid=? AND EXISTS (SELECT 1 FROM nodes WHERE id=?)""",
-            (job["key"], json.loads(job["params"])["assigned"])).fetchone():
-            db.execute("UPDATE jobs SET state='skipped',node=NULL,lease=NULL,until=0 WHERE id=?", (job["id"],))
-            return
+        if job["kind"] == "watch":
+            assigned = json.loads(job["params"]).get("assigned")
+            if assigned and not db.execute("""SELECT 1 FROM watch_sources
+                WHERE mid=? AND EXISTS (SELECT 1 FROM nodes WHERE id=?)""", (job["key"], assigned)).fetchone():
+                db.execute("UPDATE jobs SET state='skipped',node=NULL,lease=NULL,until=0 WHERE id=?", (job["id"],))
+                return
         failed = job["attempts"] >= MAX_ATTEMPTS
         db.execute("UPDATE jobs SET state=?,node=NULL,lease=NULL,until=0,due=? WHERE id=?",
                    ("failed" if failed else "pending", now + delay, job["id"]))
         result = "已达到重试上限" if failed else f"{delay} 秒后可重试" if delay else "已重新排队"
         self._event(db, now, f"{self._job_label(job)}：{reason}，{result}",
                     node=job["node"], level="error" if failed else "warning")
+
+    def _publish_findings(self, db, job, node, activities, now):
+        for item in activities:
+            self._catalog(db, item, 2, now, node)
+            if not item.closed and item.expires_at > now:
+                db.execute("INSERT OR IGNORE INTO sightings VALUES(?,?,'open_activity',?)",
+                           (job["round"], job["id"], item.dynamic_id))
+            else:
+                db.execute("DELETE FROM sightings WHERE round=? AND job=? AND kind='open_activity' AND key=?",
+                           (job["round"], job["id"], item.dynamic_id))
+
+    def publish_watch_findings(self, body: WatchFindings, token):
+        now = int(time.time())
+        with self.tx() as db:
+            self._authenticate(db, body.node, token)
+            job = db.execute("""SELECT * FROM jobs WHERE id=? AND node=? AND lease=?
+                                AND state='leased' AND until>? AND kind='watch'""",
+                             (body.task_id, body.node, body.lease, now)).fetchone()
+            if not job:
+                raise ClusterError("追踪任务已交回")
+            self._publish_findings(db, job, body.node, body.activities, now)
+        return {"ok": True}
 
     def _finish(self, db, node, report: Report, now):
         job = db.execute("SELECT * FROM jobs WHERE id=? AND node=? AND lease=? AND state='leased' AND until>?",
@@ -421,11 +451,7 @@ class ClusterStore:
         db.execute("DELETE FROM analyses WHERE lease=? AND fields IS NULL", (report.lease,))
         kind = job["kind"]
         activities = {item.dynamic_id: item for item in report.activities} if kind in {"video", "watch"} else {}
-        for item in activities.values():
-            self._catalog(db, item, 2, now, node)
-            if kind == "video" and not item.closed and item.expires_at > now:
-                db.execute("INSERT OR IGNORE INTO sightings VALUES(?,?,'open_activity',?)",
-                           (job["round"], job["id"], item.dynamic_id))
+        self._publish_findings(db, job, node, activities.values(), now)
         if report.outcome == "cooldown":
             until = max(now + report.cooldown, self.get(db, "cooldown_until", 0))
             self.put(db, "cooldown_until", until)
@@ -451,8 +477,8 @@ class ClusterStore:
             db.execute("""INSERT INTO node_detection_totals VALUES(?,1,1,?) ON CONFLICT(node) DO UPDATE SET
                           videos=videos+1,counted=counted+1,matched=node_detection_totals.matched+excluded.matched""",
                        (node, matched))
-        open_activities = sum(not item.closed and item.expires_at > now
-                              for item in activities.values())
+        open_activities = db.execute("SELECT count(*) FROM sightings WHERE round=? AND job=? AND kind='open_activity'",
+                                     (round_id, job["id"])).fetchone()[0]
         summary = f"核验 {open_activities} 项开放活动" if open_activities else "未确认开放活动"
         if kind == "watch":
             db.execute("""INSERT INTO watch_checks VALUES(?,?,?) ON CONFLICT(mid) DO UPDATE SET
@@ -544,7 +570,25 @@ class ClusterStore:
         while pending:
             node = pending[0]
             seen = db.execute("SELECT seen FROM nodes WHERE id=?", (node,)).fetchone()
-            imported = body.node == node and body.import_round == state["round"] and body.after >= latest
+            acknowledged = body.node == node and body.import_round == state["round"]
+            if acknowledged and state.get("participating") == node and body.round_participation == "running":
+                state["deadline"] = now + IMPORT_TIMEOUT
+            imported = acknowledged and body.after >= latest
+            if imported:
+                outcome = body.round_participation
+                if outcome in {"ready", "running"}:
+                    if not advance_round and state.get("participating") != node:
+                        break
+                    if state.get("participating") != node:
+                        state["participating"] = node
+                        state["deadline"] = now + IMPORT_TIMEOUT
+                        self._event(db, now, "已导入集群活动，安排轮间顺序参与", node=node)
+                    if state["deadline"] > now:
+                        break
+                    imported = False
+                if outcome in {"done", "failed"} and state.get("participating") == node:
+                    self._event(db, now, "轮间顺序参与完成" if outcome == "done" else "轮间顺序参与未全部完成",
+                                node=node, level="info" if outcome == "done" else "warning")
             if imported:
                 state["done"] += 1
                 self._event(db, now, "轮间活动导入完成", node=node)
@@ -555,6 +599,7 @@ class ClusterStore:
             else:
                 break
             pending.pop(0)
+            state.pop("participating", None)
             state["deadline"] = now + IMPORT_TIMEOUT
         self.put(db, "round_import", state)
         if not pending and advance_round:
@@ -603,6 +648,28 @@ class ClusterStore:
         return db.execute("""SELECT 1 FROM jobs WHERE round=? AND kind=?
                              AND state IN ('pending','leased') LIMIT 1""", (round_id, kind)).fetchone() is not None
 
+    def _search_turn(self, db, job, node, now):
+        search = self.get(db, "round_search", {})
+        if search.get("round") != job["round"]:  # Allow an in-flight round from the previous scheduler to finish.
+            return True
+        owner = search["node"]
+        if owner and db.execute("SELECT 1 FROM nodes WHERE id=? AND seen>?",
+                                (owner, now - ONLINE_SECONDS)).fetchone():
+            return node == owner
+        # Rotate in registration order and wrap, skipping nodes that cannot take work.
+        cursor = self.get(db, "search_rotation_cursor", 0)
+        candidate = db.execute("""SELECT n.id,n.rowid FROM nodes n
+            WHERE n.seen>? AND n.search_ready=1 AND NOT EXISTS (
+                SELECT 1 FROM jobs WHERE node=n.id AND state='leased'
+            ) ORDER BY n.rowid<=?,n.rowid LIMIT 1""", (now - ONLINE_SECONDS, cursor)).fetchone()
+        if not candidate or candidate["id"] != node:
+            return False
+        self.put(db, "round_search", {"round": job["round"], "node": node})
+        self.put(db, "search_rotation_cursor", candidate["rowid"])
+        if owner:
+            self._event(db, now, "原检索节点离线，接续本轮检索", node=node)
+        return True
+
     def _claim(self, db, node, now, *, video_detection, watch_ready=False):
         phase = self.get(db, "phase")
         kind = {"collecting": "search", "detecting": "video"}.get(phase)
@@ -612,13 +679,16 @@ class ClusterStore:
             return None
         job = None
         if watch_ready and video_detection and phase != "importing":
+            batch = self.get(db, "watch_batch") or {}
             job = db.execute("""SELECT * FROM jobs WHERE round=0 AND kind='watch' AND state='pending' AND due<=?
-                AND json_extract(params,'$.assigned')=? AND key IN (SELECT mid FROM watch_sources)
-                ORDER BY id LIMIT 1""", (now, node)).fetchone()
+                AND ((json_extract(params,'$.assigned')=? AND key IN (SELECT mid FROM watch_sources))
+                     OR (json_extract(params,'$.batch')=? AND ? AND
+                         EXISTS (SELECT 1 FROM nodes WHERE id=? AND watch_batch=1)))
+                ORDER BY id LIMIT 1""", (now, node, batch.get("id"), node in batch.get("nodes", []), node)).fetchone()
         if job is None and kind and (kind != "video" or video_detection):
             job = db.execute("""SELECT * FROM jobs WHERE round=? AND kind=? AND state='pending' AND due<=?
                                 ORDER BY id LIMIT 1""", (self.get(db, "round", 0), kind, now)).fetchone()
-        if job is None:
+        if job is None or (job["kind"] == "search" and not self._search_turn(db, job, node, now)):
             return None
         lease = uuid.uuid4().hex
         db.execute("UPDATE jobs SET state='leased',node=?,lease=?,until=?,attempts=attempts+1 WHERE id=?",
@@ -639,6 +709,8 @@ class ClusterStore:
             if not target:
                 raise ClusterError("选择在线、支持追踪检查且模型已就绪的节点")
             existing = db.execute("SELECT state,params FROM jobs WHERE round=0 AND kind='watch' AND key=?", (body.mid,)).fetchone()
+            if existing and "batch" in json.loads(existing["params"]):
+                raise ClusterError("请在整批追踪中指派这个 UP 主")
             if existing and existing["state"] in {"pending", "leased"}:
                 if json.loads(existing["params"])["assigned"] == body.node:
                     return
@@ -649,6 +721,35 @@ class ClusterStore:
                 node=NULL,lease=NULL,until=0,due=0,attempts=0""", (body.mid, _dump({"assigned": body.node})))
             self._event(db, now, f"追踪 UP 主 {body.mid} 已指派给 {target['name']}")
 
+    def assign_watch_batch(self, body: WatchBatch):
+        now = int(time.time())
+        nodes = list(dict.fromkeys(body.nodes))
+        with self.tx() as db:
+            if (self.get(db, "session") or {}).get("role") != "host":
+                raise ClusterError("只有主节点可以指派追踪检查")
+            ready = {row[0] for row in db.execute("SELECT id FROM nodes WHERE seen>? AND work=2 AND watch_batch=1",
+                                                 (now - ONLINE_SECONDS,))}
+            if not set(nodes) <= ready:
+                raise ClusterError("请选择在线且模型已就绪的新版节点")
+            current = self.get(db, "watch_batch") or {}
+            if db.execute("""SELECT 1 FROM jobs WHERE kind='watch' AND state IN ('pending','leased')
+                             AND json_extract(params,'$.batch')=?""", (current.get("id"),)).fetchone():
+                self.put(db, "watch_batch", {**current, "nodes": nodes})
+                self._event(db, now, f"整批追踪剩余任务改由 {len(nodes)} 个节点领取")
+                return
+            if self._has_work(db, 0, "watch"):
+                raise ClusterError("请等待已指派的单项追踪检查结束")
+            mids = [row[0] for row in db.execute("SELECT DISTINCT mid FROM watch_sources ORDER BY mid")]
+            if not mids:
+                raise ClusterError("集群尚无可追踪的 UP 主")
+            batch = uuid.uuid4().hex
+            db.execute("DELETE FROM sightings WHERE round=0")
+            db.execute("DELETE FROM jobs WHERE round=0 AND kind='watch'")
+            db.executemany("INSERT INTO jobs(round,kind,key,params) VALUES(0,'watch',?,?)",
+                           ((mid, _dump({"batch": batch})) for mid in mids))
+            self.put(db, "watch_batch", {"id": batch, "nodes": nodes})
+            self._event(db, now, f"已指派 {len(nodes)} 个节点追踪全部 {len(mids)} 位 UP 主")
+
     @staticmethod
     def _sync_watch_list(db, node, watch_list):
         db.executemany("""INSERT INTO watch_sources VALUES(?,?,?,?) ON CONFLICT(node,mid) DO UPDATE SET
@@ -657,6 +758,7 @@ class ClusterStore:
         if watch_list.complete:
             db.execute("DELETE FROM watch_sources WHERE node=? AND revision<>?", (node, watch_list.revision))
             db.execute("""UPDATE jobs SET state='skipped' WHERE kind='watch' AND state='pending'
+                          AND json_extract(params,'$.batch') IS NULL
                           AND key NOT IN (SELECT mid FROM watch_sources)""")
 
     def exchange(self, body: Exchange, token: str) -> Feed:
@@ -664,7 +766,9 @@ class ClusterStore:
         with self.tx() as db:
             session = self._authenticate(db, body.node, token)
             readiness = 2 if body.video_detection else int(body.work)
-            db.execute("UPDATE nodes SET seen=?,work=? WHERE id=?", (now, readiness, body.node))
+            ready_to_claim = body.work and not body.working and body.local_work in {None, "idle"}
+            db.execute("UPDATE nodes SET seen=?,work=?,search_ready=?,watch_batch=? WHERE id=?",
+                       (now, readiness, ready_to_claim, bool(body.watch_batch_capable), body.node))
             if body.local_work is None:
                 db.execute("DELETE FROM node_local_work WHERE node=?", (body.node,))
             else:
@@ -686,7 +790,7 @@ class ClusterStore:
                 self._finish(db, body.node, body.report, now)
             self._tick(db, now, body, session)
             task = None
-            if body.work and not body.working and body.local_work in {None, "idle"}:
+            if ready_to_claim:
                 task = self._claim(db, body.node, now, video_detection=body.video_detection,
                                    watch_ready=body.local_work == "idle")
             pending = self.get(db, "round_import", {}).get("pending", [])
@@ -741,7 +845,7 @@ class ClusterStore:
                 ORDER BY name,s.mid LIMIT ? OFFSET ?
             ) SELECT u.*, j.state, n.name AS assigned, w.checked, w.hits FROM users u
               LEFT JOIN jobs j ON j.round=0 AND j.kind='watch' AND j.key=u.mid
-              LEFT JOIN nodes n ON n.id=json_extract(j.params,'$.assigned')
+              LEFT JOIN nodes n ON n.id=coalesce(j.node,json_extract(j.params,'$.assigned'))
               LEFT JOIN watch_checks w ON w.mid=u.mid ORDER BY u.name,u.mid""",
                               (TRACKED_USERS_PER_PAGE, (page - 1) * TRACKED_USERS_PER_PAGE))
             return {"total": total, "pages": pages, "page": page,
@@ -779,7 +883,7 @@ class ClusterStore:
         search = db.execute("""SELECT min(round),count(CASE WHEN kind='search' AND state='done' THEN 1 END)
                                FROM jobs WHERE round>=?""", (max(1, round_id - 2),)).fetchone()
         nodes = [dict(row) for row in db.execute("""
-            SELECT n.id,n.name,n.seen,n.work,n.completed,n.model_calls,j.kind,j.key,j.params,
+            SELECT n.id,n.name,n.seen,n.work,n.watch_batch,n.completed,n.model_calls,j.kind,j.key,j.params,
                    h.complete AS history_complete,l.state AS local_work,
                    CASE WHEN j.kind='watch' THEN (SELECT min(name) FROM watch_sources WHERE mid=j.key) END AS watch_name,
                    CASE WHEN h.node IS NOT NULL THEN (SELECT count(*) FROM node_video_history WHERE node=n.id) END AS history_count,
@@ -815,18 +919,24 @@ class ClusterStore:
         phase = self.get(db, "phase", "collecting")
         importing = self.get(db, "round_import", {}) if phase == "importing" else {}
         import_pending = importing.get("pending", [])
+        batch = self.get(db, "watch_batch")
+        if batch:
+            batch = {**batch, "counts": dict(db.execute("""SELECT state,count(*) FROM jobs WHERE kind='watch'
+                                 AND json_extract(params,'$.batch')=? GROUP BY state""", (batch["id"],)))}
         video_queue = [dict(row) for row in db.execute("""SELECT j.key,j.state,n.name AS node FROM jobs j
                        LEFT JOIN nodes n ON n.id=j.node WHERE j.round=? AND j.kind='video'
                        AND j.state IN ('pending','leased') ORDER BY j.state,j.id LIMIT 12""", (round_id,))]
         return {"round": round_id, "target": TARGET, "counts": counts, "nodes": nodes, "events": events,
                 "round_keyword": keyword, "upcoming_keywords": self._upcoming_keywords(keyword),
                 "concurrency_limit": MAX_CONCURRENT, "two_stage": True,
-                "watch_tracking": True,
+                "watch_tracking": True, "watch_batch_supported": True, "watch_batch": batch,
+                "round_participation_supported": True,
                 "video_history": True,
                 "known_videos": db.execute("SELECT count(*) FROM checked_videos").fetchone()[0],
                 "history_syncing": self._history_syncing(db, now),
                 "search_tasks": self._search_tasks(db, round_id), "video_queue": video_queue,
                 "round_import": {"round": round_id, "node": import_pending[0] if import_pending else None,
+                                 **({"participating": True} if importing.get("participating") else {}),
                                  "pending": len(import_pending), "done": importing.get("done", 0),
                                  "skipped": importing.get("skipped", 0)} if importing else None,
                 "search_pages_total": self.get(db, "search_pages_archived", 0) + search[1],

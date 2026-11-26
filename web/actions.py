@@ -10,6 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Callable
 
 from src.app_logging import get_logger
+from src.bilibili_auth import get_login_uid
 from src.bilibili_client import BilibiliClient
 from src.bilibili_login import login_with_qrcode
 from src.fetch_activity_info import mark_enriched_joined
@@ -728,6 +729,9 @@ def run_action(
     if action in {"participate_triple", "participate_sequential"}:
         _raise_if_cancelled(cancel_event)
 
+        account = params.get("_cluster_account")
+        if account and get_login_uid() != account:
+            raise ValueError("登录账号已变化，轮间顺序参与已停止")
         filters = _list_filter_params(params)
         sequential = action == "participate_sequential"
         targets = (pick_triple_participate_targets(**filters, limit=None) if sequential
@@ -845,6 +849,8 @@ def run_action(
         def _participate_triple_target(target: dict[str, Any]) -> dict[str, Any]:
             if cancel_event and cancel_event.is_set():
                 raise ValueError("任务已取消")
+            if account and get_login_uid() != account:
+                raise ValueError("登录账号已变化，轮间顺序参与已停止")
 
             dynamic_id = str(target.get("dynamic_id") or "")
             title = str(target.get("activity_title") or dynamic_id)
@@ -862,6 +868,8 @@ def run_action(
                 )
                 if cancel_event and cancel_event.is_set():
                     raise ValueError("任务已取消")
+                if account and get_login_uid() != account:
+                    raise ValueError("登录账号已变化，轮间顺序参与已停止")
 
                 def on_step(step: int, total: int, message: str, _action_name: str) -> None:
                     _report_task_progress(dynamic_id, step, total, message)
