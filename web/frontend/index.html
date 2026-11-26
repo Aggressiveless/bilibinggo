@@ -806,6 +806,39 @@
                 </div>
                 <p class="caption" id="cluster-worker-note" hidden>登录 B 站后可参与检索和同步。完成模型连接测试后可领取检测任务。</p>
               </div>
+              <details class="panel cluster-dispatch" id="cluster-dispatch" hidden>
+                <summary>任务指派</summary>
+                <form id="cluster-dispatch-form">
+                  <div class="cluster-dispatch-pools">
+                    <fieldset class="cluster-node-picker">
+                      <legend>关键词检索</legend>
+                      <select class="form-input" id="cluster-search-mode" aria-label="关键词检索指派方式">
+                        <option value="auto">所有可用节点轮换</option>
+                        <option value="manual">仅指定节点轮换</option>
+                      </select>
+                      <div class="cluster-node-choices" id="cluster-search-nodes"></div>
+                    </fieldset>
+                    <fieldset class="cluster-node-picker">
+                      <legend>视频检测</legend>
+                      <select class="form-input" id="cluster-video-mode" aria-label="视频检测指派方式">
+                        <option value="auto">所有可用节点领取</option>
+                        <option value="manual">仅指定节点领取</option>
+                      </select>
+                      <div class="cluster-node-choices" id="cluster-video-nodes"></div>
+                    </fieldset>
+                  </div>
+                  <div class="cluster-dispatch-options">
+                    <label><input type="checkbox" id="cluster-dispatch-fallback"> 所选节点均不可用时允许其它节点接手</label>
+                    <label>并行任务上限 <input class="form-input" id="cluster-dispatch-limit" type="number" min="1" max="32" required></label>
+                    <button class="btn btn-secondary btn-compact" type="submit">保存任务指派</button>
+                  </div>
+                </form>
+                <form class="cluster-dispatch-video" id="cluster-video-assignment-form">
+                  <label>待检测视频 <input class="form-input" id="cluster-video-assignment-bvid" placeholder="粘贴 BV 号或视频链接" required></label>
+                  <label>指派给 <select class="form-input" id="cluster-video-assignment-node"></select></label>
+                  <button class="btn btn-secondary btn-compact" type="submit">保存视频指派</button>
+                </form>
+              </details>
               <div class="cluster-dashboard-grid">
                 <div class="cluster-search-column">
                 <article class="panel cluster-overview" aria-labelledby="cluster-overview-title">
@@ -857,7 +890,11 @@
                   </div>
                   <fieldset class="cluster-watch-target" id="cluster-watch-target" hidden>
                     <legend>指派节点</legend>
-                    <div id="cluster-watch-nodes"></div>
+                    <select class="form-input" id="cluster-watch-mode" aria-label="整批追踪指派方式">
+                      <option value="auto">所有可用节点</option>
+                      <option value="manual">指定节点</option>
+                    </select>
+                    <div class="cluster-node-choices" id="cluster-watch-nodes"></div>
                     <button class="btn btn-secondary btn-compact" type="button" id="cluster-watch-start">指派全集合</button>
                   </fieldset>
                   <p class="caption" id="cluster-watch-note" role="status"></p>

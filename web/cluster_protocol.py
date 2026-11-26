@@ -142,7 +142,19 @@ class WatchAssignment(Payload):
 
 
 class WatchBatch(Payload):
-    nodes: list[NodeId] = Field(min_length=1, max_length=32)
+    nodes: list[NodeId] | None = Field(default=None, min_length=1, max_length=32)
+
+
+class DispatchSettings(Payload):
+    search_nodes: list[NodeId] | None = Field(default=None, min_length=1, max_length=32)
+    video_nodes: list[NodeId] | None = Field(default=None, min_length=1, max_length=32)
+    fallback: bool = False
+    concurrency: int = Field(default=4, ge=1, le=32)
+
+
+class VideoAssignment(Payload):
+    bvid: BV
+    node: NodeId | None
 
 
 class WatchFindings(Lease):

@@ -215,10 +215,9 @@ def _check_watched_author(client, mid, activities, *, publish=None):
 
 def _check_collection(client, mid, publish):
     from web.actions import DS_HANDLER_BY_ID
-    from web.activity_service import SOURCE_SPACE_URLS
+    from web.activity_service import collection_source_for_mid
 
-    source = next((key for key, url in SOURCE_SPACE_URLS.items()
-                   if url.startswith(f"https://space.bilibili.com/{mid}/")), None)
+    source = collection_source_for_mid(mid)
     if source is None:
         return
     check, _ = DS_HANDLER_BY_ID[source]

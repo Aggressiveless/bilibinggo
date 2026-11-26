@@ -448,6 +448,73 @@ def test_watch_batch_distributes_every_uid_once_and_shares_partial_findings(tmp_
         store.publish_watch_findings(finding, host["token"])
 
 
+def test_legacy_watch_node_can_check_dynamics_and_modern_node_finishes_collection(tmp_path):
+    from web.cluster_protocol import WatchBatch
+
+    store, host, legacy = _cluster(tmp_path)
+    ready = {"video_detection": True, "local_work": "idle"}
+    _exchange(store, host, **ready, watch_batch_capable=True, watch_list={
+        "revision": uuid.uuid4().hex, "complete": True, "users": [{"mid": "885439", "name": "合集作者"}],
+    })
+    store.assign_watch_batch(WatchBatch(nodes=[legacy["node"]]))
+    task = _exchange(store, legacy, work=True, **ready).task
+    assert (task.kind, task.key) == ("watch", "885439")
+    found = _exchange(store, legacy, **ready, report=_report(task, activities=[_activity(prize="动态活动")]))
+    assert found.status["watch_batch"]["counts"] == {"pending": 1}
+    assert found.status["watch_batch"]["collection_pending"] == 1
+    assert found.changes[0].activity.dynamic_id == KEY
+    follow_up = _exchange(store, host, work=True, **ready, watch_batch_capable=True).task
+    assert (follow_up.kind, follow_up.task_id) == ("watch", task.task_id)
+    assert follow_up.lease != task.lease
+    result = _exchange(store, host, **ready, watch_batch_capable=True, report=_report(follow_up))
+    assert result.status["watch_batch"]["counts"] == {"done": 1}
+    assert store.tracked_users(1)["items"][0]["hits"] == 1
+
+
+def test_dispatch_pools_and_individual_video_pin_preserve_existing_leases(tmp_path):
+    from web.cluster_protocol import DispatchSettings, VideoAssignment
+
+    store, host, member = _cluster(tmp_path)
+    store.set_dispatch(DispatchSettings(search_nodes=[host["node"]], video_nodes=[member["node"]], concurrency=1))
+    assert _exchange(store, member, work=True, video_detection=True).task is None
+    search = _exchange(store, host, work=True).task
+    store.set_dispatch(DispatchSettings(search_nodes=[member["node"]], video_nodes=[member["node"]], concurrency=1))
+    assert _exchange(store, member, work=True, video_detection=True).task is None
+    other_video = "BV0000000032"
+    _exchange(store, host, report=_report(search, more_pages=True, references=[Reference(kind="video", key=BVID)]))
+    page = _exchange(store, member, work=True).task
+    assert (page.kind, page.page, page.order) == ("search", 2, "pubdate")
+    _exchange(store, member, report=_report(page, references=[Reference(kind="video", key=other_video)]))
+    assert _exchange(store, host, work=True, video_detection=True).task is None
+    store.assign_video(VideoAssignment(bvid=BVID, node=host["node"]))
+    assert next(row for row in store.status()["video_queue"] if row["key"] == BVID)["assigned_id"] == host["node"]
+    assigned = _exchange(store, host, work=True, video_detection=True).task
+    assert (assigned.kind, assigned.key) == ("video", BVID)
+    assert _exchange(store, member, work=True, video_detection=True).task is None
+    with pytest.raises(ClusterError):
+        store.assign_video(VideoAssignment(bvid=BVID, node=None))
+    _exchange(store, host, report=_report(assigned))
+    assert _exchange(store, member, work=True, video_detection=True).task.key == other_video
+    assert ClusterStore(tmp_path).status()["concurrency_limit"] == 1
+
+
+def test_dispatch_falls_back_only_when_selected_search_nodes_are_offline(tmp_path, monkeypatch):
+    from web.cluster_protocol import DispatchSettings
+
+    now = int(time.time())
+    monkeypatch.setattr("web.cluster_store.time.time", lambda: now)
+    store, host, member = _cluster(tmp_path)
+    store.set_dispatch(DispatchSettings(search_nodes=[member["node"]], fallback=True))
+    assert _exchange(store, host, work=True).task is None
+    now += 31
+    first = _exchange(store, host, work=True).task
+    assert first.kind == "search"
+    assert _exchange(store, member, work=True).task is None
+    assert _exchange(store, host, work=True, report=_report(first, more_pages=True,
+                     references=[Reference(kind="video", key=BVID)])).task is None
+    assert _exchange(store, member, work=True).task.page == 2
+
+
 def test_round_import_waits_for_enabled_nodes_and_worker_starts_only_once(tmp_path, monkeypatch):
     from web import cluster_service
 

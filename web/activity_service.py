@@ -47,6 +47,11 @@ SOURCE_SPACE_URLS = {
 }
 
 
+def collection_source_for_mid(mid: str) -> str | None:
+    return next((source for source, url in SOURCE_SPACE_URLS.items()
+                 if url.startswith(f"https://space.bilibili.com/{mid}/")), None)
+
+
 def _load_source_snapshot(source_id: str) -> dict:
     if source_id == "WATCH":
         return load_watch_sync_dict() or {}

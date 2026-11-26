@@ -12,8 +12,10 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from web.cluster_protocol import (Activity, Analysis, Change, Exchange, Feed, KEYWORDS, Lease, PAGE_SIZE,
-                                  Register, Report, TARGET, Task, WatchAssignment, WatchBatch, WatchFindings)
+from web.activity_service import collection_source_for_mid
+from web.cluster_protocol import (Activity, Analysis, Change, DispatchSettings, Exchange, Feed, KEYWORDS, Lease,
+                                  PAGE_SIZE, Register, Report, TARGET, Task, VideoAssignment, WatchAssignment,
+                                  WatchBatch, WatchFindings)
 
 LEASE_SECONDS = 120
 MAX_ATTEMPTS = 4
@@ -300,6 +302,15 @@ class ClusterStore:
             db.execute("DELETE FROM node_local_work WHERE node=?", (node,))
             db.execute("DELETE FROM watch_sources WHERE node=?", (node,))
             db.execute("UPDATE jobs SET until=0 WHERE node=? AND state='leased'", (node,))
+            db.execute("""UPDATE jobs SET params=json_remove(params,'$.assigned') WHERE kind='video'
+                          AND state IN ('pending','leased') AND json_extract(params,'$.assigned')=?""", (node,))
+            for setting, fields in (("dispatch", ("search_nodes", "video_nodes")), ("watch_batch", ("nodes",))):
+                current = self.get(db, setting)
+                if current:
+                    for field in fields:
+                        if current.get(field) and node in current[field]:
+                            current[field] = [selected for selected in current[field] if selected != node] or None
+                    self.put(db, setting, current)
             db.execute("""UPDATE jobs SET state='skipped' WHERE kind='watch' AND state='pending' AND
                           json_extract(params,'$.batch') IS NULL AND
                           (json_extract(params,'$.assigned')=? OR key NOT IN (SELECT mid FROM watch_sources))""", (node,))
@@ -466,6 +477,15 @@ class ClusterStore:
             self._retry(db, job, now, delay=30 * 2 ** (job["attempts"] - 1),
                         reason=RETRY_LABEL.get(report.reason, "任务未能完成"))
             return
+        if kind == "watch":
+            params = json.loads(job["params"])
+            if params.get("legacy_batch_check") and collection_source_for_mid(job["key"]):
+                params.update(legacy_batch_check=False, collection_pending=True)
+                db.execute("""UPDATE jobs SET params=?,state='pending',node=NULL,lease=NULL,until=0,due=0,attempts=0
+                              WHERE id=?""", (_dump(params), job["id"]))
+                db.execute("UPDATE nodes SET completed=completed+1 WHERE id=?", (node,))
+                self._event(db, now, "已完成动态检查，等待新版节点补查合集", node=node)
+                return
         round_id = job["round"]
         db.execute("UPDATE jobs SET state='done',node=NULL,lease=NULL,until=0 WHERE id=?", (job["id"],))
         db.execute("UPDATE nodes SET completed=completed+1 WHERE id=?", (node,))
@@ -648,54 +668,115 @@ class ClusterStore:
         return db.execute("""SELECT 1 FROM jobs WHERE round=? AND kind=?
                              AND state IN ('pending','leased') LIMIT 1""", (round_id, kind)).fetchone() is not None
 
-    def _search_turn(self, db, job, node, now):
+    def _effective_pool(self, db, nodes, fallback, now, *, video=False):
+        if nodes is None or not fallback:
+            return nodes
+        available = db.execute("""SELECT id FROM nodes WHERE seen>? AND (?=0 OR work=2)""",
+                               (now - ONLINE_SECONDS, video))
+        return nodes if any(row[0] in nodes for row in available) else None
+
+    def _search_turn(self, db, job, node, now, pool):
+        if pool is not None and node not in pool:
+            return False
         search = self.get(db, "round_search", {})
         if search.get("round") != job["round"]:  # Allow an in-flight round from the previous scheduler to finish.
             return True
         owner = search["node"]
-        if owner and db.execute("SELECT 1 FROM nodes WHERE id=? AND seen>?",
+        if owner and (pool is None or owner in pool) and db.execute("SELECT 1 FROM nodes WHERE id=? AND seen>?",
                                 (owner, now - ONLINE_SECONDS)).fetchone():
             return node == owner
         # Rotate in registration order and wrap, skipping nodes that cannot take work.
         cursor = self.get(db, "search_rotation_cursor", 0)
         candidate = db.execute("""SELECT n.id,n.rowid FROM nodes n
-            WHERE n.seen>? AND n.search_ready=1 AND NOT EXISTS (
+            WHERE n.seen>? AND n.search_ready=1
+              AND (? OR n.id IN (SELECT value FROM json_each(?))) AND NOT EXISTS (
                 SELECT 1 FROM jobs WHERE node=n.id AND state='leased'
-            ) ORDER BY n.rowid<=?,n.rowid LIMIT 1""", (now - ONLINE_SECONDS, cursor)).fetchone()
+            ) ORDER BY n.rowid<=?,n.rowid LIMIT 1""", (now - ONLINE_SECONDS, pool is None, _dump(pool), cursor)).fetchone()
         if not candidate or candidate["id"] != node:
             return False
         self.put(db, "round_search", {"round": job["round"], "node": node})
         self.put(db, "search_rotation_cursor", candidate["rowid"])
         if owner:
-            self._event(db, now, "原检索节点离线，接续本轮检索", node=node)
+            self._event(db, now, "接续本轮关键词检索", node=node)
         return True
+
+    def _watch_job(self, db, node, now):
+        batch = self.get(db, "watch_batch") or {}
+        pool = batch.get("nodes")
+        modern = bool(db.execute("SELECT watch_batch FROM nodes WHERE id=?", (node,)).fetchone()[0])
+        in_pool = pool is None or node in pool
+        # A legacy worker can check dynamics. Collection follow-ups prefer selected
+        # modern nodes, and otherwise use any online modern node with a ready model.
+        preferred_modern = modern and (in_pool or not db.execute("""SELECT 1 FROM nodes
+            WHERE watch_batch=1 AND work=2 AND seen>? AND id IN (SELECT value FROM json_each(?))""",
+            (now - ONLINE_SECONDS, _dump(pool))).fetchone())
+        return db.execute("""SELECT * FROM jobs WHERE round=0 AND kind='watch' AND state='pending' AND due<=?
+            AND ((json_extract(params,'$.assigned')=? AND key IN (SELECT mid FROM watch_sources))
+                 OR (json_extract(params,'$.batch')=? AND
+                     CASE WHEN json_extract(params,'$.collection_pending') THEN ? ELSE ? END))
+            ORDER BY coalesce(json_extract(params,'$.collection_pending'),0),id LIMIT 1""",
+            (now, node, batch.get("id"), preferred_modern, in_pool)).fetchone(), modern
 
     def _claim(self, db, node, now, *, video_detection, watch_ready=False):
         phase = self.get(db, "phase")
         kind = {"collecting": "search", "detecting": "video"}.get(phase)
+        dispatch = self.get(db, "dispatch", {})
         if (self.get(db, "paused", False) or self.get(db, "cooldown_until", 0) > now or self._history_syncing(db, now)
                 or db.execute("SELECT 1 FROM jobs WHERE node=? AND state='leased'", (node,)).fetchone()
-                or db.execute("SELECT count(*) FROM jobs WHERE state='leased'").fetchone()[0] >= MAX_CONCURRENT):
+                or db.execute("SELECT count(*) FROM jobs WHERE state='leased'").fetchone()[0] >= dispatch.get("concurrency", MAX_CONCURRENT)):
             return None
         job = None
         if watch_ready and video_detection and phase != "importing":
-            batch = self.get(db, "watch_batch") or {}
-            job = db.execute("""SELECT * FROM jobs WHERE round=0 AND kind='watch' AND state='pending' AND due<=?
-                AND ((json_extract(params,'$.assigned')=? AND key IN (SELECT mid FROM watch_sources))
-                     OR (json_extract(params,'$.batch')=? AND ? AND
-                         EXISTS (SELECT 1 FROM nodes WHERE id=? AND watch_batch=1)))
-                ORDER BY id LIMIT 1""", (now, node, batch.get("id"), node in batch.get("nodes", []), node)).fetchone()
+            job, modern = self._watch_job(db, node, now)
         if job is None and kind and (kind != "video" or video_detection):
+            pool = self._effective_pool(db, dispatch.get(f"{kind}_nodes"), dispatch.get("fallback"),
+                                        now, video=kind == "video")
             job = db.execute("""SELECT * FROM jobs WHERE round=? AND kind=? AND state='pending' AND due<=?
-                                ORDER BY id LIMIT 1""", (self.get(db, "round", 0), kind, now)).fetchone()
-        if job is None or (job["kind"] == "search" and not self._search_turn(db, job, node, now)):
+                AND (json_extract(params,'$.assigned')=? OR
+                     (json_extract(params,'$.assigned') IS NULL AND ?))
+                ORDER BY json_extract(params,'$.assigned') IS NULL,id LIMIT 1""",
+                (self.get(db, "round", 0), kind, now, node, pool is None or node in pool)).fetchone()
+            if job and kind == "search" and not self._search_turn(db, job, node, now, pool):
+                return None
+        if job is None:
             return None
+        params = json.loads(job["params"])
+        if job["kind"] == "watch" and params.get("batch"):
+            params["legacy_batch_check"] = not modern
+            db.execute("UPDATE jobs SET params=? WHERE id=?", (_dump(params), job["id"]))
         lease = uuid.uuid4().hex
         db.execute("UPDATE jobs SET state='leased',node=?,lease=?,until=?,attempts=attempts+1 WHERE id=?",
                    (node, lease, now + LEASE_SECONDS, job["id"]))
         self._event(db, now, f"开始{self._job_label(job)}（第 {job['attempts'] + 1} 次）", node=node)
-        params = {} if job["kind"] == "watch" else json.loads(job["params"])
+        params = params if job["kind"] == "search" else {}
         return Task(task_id=job["id"], lease=lease, kind=job["kind"], key=job["key"], **params)
+
+    def _require_dispatch_nodes(self, db, nodes):
+        known = {row[0] for row in db.execute("SELECT id FROM nodes")}
+        if not set(nodes) <= known:
+            raise ClusterError("有节点已退出集群，请重新选择")
+
+    def set_dispatch(self, body: DispatchSettings):
+        with self.tx() as db:
+            if (self.get(db, "session") or {}).get("role") != "host":
+                raise ClusterError("只有主节点可以设置任务指派")
+            self._require_dispatch_nodes(db, (body.search_nodes or []) + (body.video_nodes or []))
+            self.put(db, "dispatch", body.model_dump())
+            self._event(db, int(time.time()), f"已更新检索和视频指派，并行上限 {body.concurrency}")
+
+    def assign_video(self, body: VideoAssignment):
+        with self.tx() as db:
+            if (self.get(db, "session") or {}).get("role") != "host":
+                raise ClusterError("只有主节点可以指派视频检测")
+            if body.node:
+                self._require_dispatch_nodes(db, [body.node])
+            updated = db.execute("""UPDATE jobs SET params=? WHERE round=? AND kind='video' AND key=? AND state='pending'""",
+                                 (_dump({"assigned": body.node}) if body.node else "{}",
+                                  self.get(db, "round", 0), body.bvid))
+            if not updated.rowcount:
+                raise ClusterError("仅可改派本轮待检测的视频")
+            self._event(db, int(time.time()), f"视频 {body.bvid} 已指定检测节点" if body.node
+                        else f"视频 {body.bvid} 已恢复自动分配", node=body.node)
 
     def assign_watch(self, body: WatchAssignment):
         now = int(time.time())
@@ -723,19 +804,17 @@ class ClusterStore:
 
     def assign_watch_batch(self, body: WatchBatch):
         now = int(time.time())
-        nodes = list(dict.fromkeys(body.nodes))
+        nodes = list(dict.fromkeys(body.nodes)) if body.nodes is not None else None
         with self.tx() as db:
             if (self.get(db, "session") or {}).get("role") != "host":
                 raise ClusterError("只有主节点可以指派追踪检查")
-            ready = {row[0] for row in db.execute("SELECT id FROM nodes WHERE seen>? AND work=2 AND watch_batch=1",
-                                                 (now - ONLINE_SECONDS,))}
-            if not set(nodes) <= ready:
-                raise ClusterError("请选择在线且模型已就绪的新版节点")
+            self._require_dispatch_nodes(db, nodes or [])
+            workers = "所有可用节点" if nodes is None else f"{len(nodes)} 个节点"
             current = self.get(db, "watch_batch") or {}
             if db.execute("""SELECT 1 FROM jobs WHERE kind='watch' AND state IN ('pending','leased')
                              AND json_extract(params,'$.batch')=?""", (current.get("id"),)).fetchone():
                 self.put(db, "watch_batch", {**current, "nodes": nodes})
-                self._event(db, now, f"整批追踪剩余任务改由 {len(nodes)} 个节点领取")
+                self._event(db, now, f"整批追踪剩余任务改由{workers}领取")
                 return
             if self._has_work(db, 0, "watch"):
                 raise ClusterError("请等待已指派的单项追踪检查结束")
@@ -748,7 +827,7 @@ class ClusterStore:
             db.executemany("INSERT INTO jobs(round,kind,key,params) VALUES(0,'watch',?,?)",
                            ((mid, _dump({"batch": batch})) for mid in mids))
             self.put(db, "watch_batch", {"id": batch, "nodes": nodes})
-            self._event(db, now, f"已指派 {len(nodes)} 个节点追踪全部 {len(mids)} 位 UP 主")
+            self._event(db, now, f"已指派{workers}追踪全部 {len(mids)} 位 UP 主")
 
     @staticmethod
     def _sync_watch_list(db, node, watch_list):
@@ -923,12 +1002,19 @@ class ClusterStore:
         if batch:
             batch = {**batch, "counts": dict(db.execute("""SELECT state,count(*) FROM jobs WHERE kind='watch'
                                  AND json_extract(params,'$.batch')=? GROUP BY state""", (batch["id"],)))}
-        video_queue = [dict(row) for row in db.execute("""SELECT j.key,j.state,n.name AS node FROM jobs j
-                       LEFT JOIN nodes n ON n.id=j.node WHERE j.round=? AND j.kind='video'
+            batch["collection_pending"] = db.execute("""SELECT count(*) FROM jobs WHERE kind='watch'
+                AND state='pending' AND json_extract(params,'$.batch')=?
+                AND json_extract(params,'$.collection_pending')""", (batch["id"],)).fetchone()[0]
+        dispatch = self.get(db, "dispatch", DispatchSettings().model_dump())
+        video_queue = [dict(row) for row in db.execute("""SELECT j.key,j.state,n.name AS node,
+                       assigned.name AS assigned,assigned.id AS assigned_id FROM jobs j
+                       LEFT JOIN nodes n ON n.id=j.node
+                       LEFT JOIN nodes assigned ON assigned.id=json_extract(j.params,'$.assigned')
+                       WHERE j.round=? AND j.kind='video'
                        AND j.state IN ('pending','leased') ORDER BY j.state,j.id LIMIT 12""", (round_id,))]
         return {"round": round_id, "target": TARGET, "counts": counts, "nodes": nodes, "events": events,
                 "round_keyword": keyword, "upcoming_keywords": self._upcoming_keywords(keyword),
-                "concurrency_limit": MAX_CONCURRENT, "two_stage": True,
+                "concurrency_limit": dispatch["concurrency"], "two_stage": True, "dispatch": dispatch,
                 "watch_tracking": True, "watch_batch_supported": True, "watch_batch": batch,
                 "round_participation_supported": True,
                 "video_history": True,

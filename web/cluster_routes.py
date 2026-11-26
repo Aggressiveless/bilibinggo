@@ -11,8 +11,9 @@ from starlette.concurrency import run_in_threadpool
 from src.app_paths import DATA_DIR
 from web.account_service import get_account_profile, has_login_cookie
 from web.api_errors import AppError, ErrorCode, require_login
-from web.cluster_protocol import (Analysis, DetectionPageRequest, Exchange, HostRequest, JoinRequest, NodeId,
-                                  PEER_PATH, ParticipationPreference, Register, WatchAssignment, WatchBatch, WatchFindings)
+from web.cluster_protocol import (Analysis, DetectionPageRequest, DispatchSettings, Exchange, HostRequest,
+                                  JoinRequest, NodeId, PEER_PATH, ParticipationPreference, Register, VideoAssignment,
+                                  WatchAssignment, WatchBatch, WatchFindings)
 from web.cluster_service import ClusterService
 from web.cluster_store import ClusterError
 
@@ -108,6 +109,22 @@ def install_cluster(app):
         _dashboard(request, check_login=True)
         service = request.app.state.cluster
         _run(service.store.assign_watch_batch, body)
+        service.wake.set()
+        return service.snapshot()
+
+    @dashboard.post("/dispatch")
+    def dispatch(request: Request, body: DispatchSettings):
+        _dashboard(request, check_login=True)
+        service = request.app.state.cluster
+        _run(service.store.set_dispatch, body)
+        service.wake.set()
+        return service.snapshot()
+
+    @dashboard.post("/video-assignment")
+    def video_assignment(request: Request, body: VideoAssignment):
+        _dashboard(request, check_login=True)
+        service = request.app.state.cluster
+        _run(service.store.assign_video, body)
         service.wake.set()
         return service.snapshot()
 
