@@ -14,8 +14,8 @@ from pathlib import Path
 
 from web.activity_service import collection_source_for_mid
 from web.cluster_protocol import (Activity, Analysis, Change, DispatchSettings, Exchange, Feed, KEYWORDS, Lease,
-                                  PAGE_SIZE, Register, Report, TARGET, Task, VideoAssignment, WatchAssignment,
-                                  WatchBatch, WatchFindings)
+                                  PAGE_SIZE, Register, RenameNode, Report, TARGET, Task, WatchAssignment,
+                                  WatchBatch, WatchFindings, WorkAssignments)
 
 LEASE_SECONDS = 120
 MAX_ATTEMPTS = 4
@@ -123,6 +123,9 @@ class ClusterStore:
             if "watch_batch" not in node_columns:
                 db.execute("ALTER TABLE nodes ADD COLUMN watch_batch INTEGER NOT NULL DEFAULT 0")
             self._migrate_round(db)
+            if (self.get(db, "session") or {}).get("role") == "host" and self.get(db, "collection_paused") is None:
+                self.put(db, "collection_paused", self.get(db, "paused", False))
+                self.put(db, "paused", False)
             self._restore_video_results(db)
             if not self.get(db, "detection_totals_initialized"):
                 db.execute("""INSERT INTO node_detection_totals
@@ -250,6 +253,7 @@ class ClusterStore:
             if video_history:
                 db.execute("INSERT INTO node_history VALUES(?,0)", (session["node"],))
             self.put(db, "round", 0)
+            self.put(db, "collection_paused", False)
             self.put(db, "phase", "collecting")
             self.put(db, "two_stage", True)
             self.put(db, "video_results_backfilled", True)
@@ -292,6 +296,17 @@ class ClusterStore:
             raise ClusterError("节点授权失效，请重新加入集群", 401)
         return session
 
+    def rename_node(self, body: RenameNode, token: str):
+        with self.tx() as db:
+            session = self._authenticate(db, body.node, token)
+            old = db.execute("SELECT name FROM nodes WHERE id=?", (body.node,)).fetchone()[0]
+            if old != body.name:
+                db.execute("UPDATE nodes SET name=? WHERE id=?", (body.name, body.node))
+                if body.node == session["node"]:
+                    self.put(db, "session", {**session, "name": body.name})
+                self._event(db, int(time.time()), f"节点名称从「{old}」改为「{body.name}」", node=body.node)
+        return {"ok": True}
+
     def leave(self, node, token):
         with self.tx() as db:
             self._authenticate(db, node, token)
@@ -302,14 +317,14 @@ class ClusterStore:
             db.execute("DELETE FROM node_local_work WHERE node=?", (node,))
             db.execute("DELETE FROM watch_sources WHERE node=?", (node,))
             db.execute("UPDATE jobs SET until=0 WHERE node=? AND state='leased'", (node,))
-            db.execute("""UPDATE jobs SET params=json_remove(params,'$.assigned') WHERE kind='video'
-                          AND state IN ('pending','leased') AND json_extract(params,'$.assigned')=?""", (node,))
-            for setting, fields in (("dispatch", ("search_nodes", "video_nodes")), ("watch_batch", ("nodes",))):
+            for setting, fields in (("dispatch", ("search_nodes", "video_nodes")), ("watch_batch", ("nodes",)),
+                                    ("work_assignments", ("collection_nodes", "watch_nodes"))):
                 current = self.get(db, setting)
                 if current:
                     for field in fields:
                         if current.get(field) and node in current[field]:
-                            current[field] = [selected for selected in current[field] if selected != node] or None
+                            remaining = [selected for selected in current[field] if selected != node]
+                            current[field] = remaining if setting == "work_assignments" or current.get("strict") else remaining or None
                     self.put(db, setting, current)
             db.execute("""UPDATE jobs SET state='skipped' WHERE kind='watch' AND state='pending' AND
                           json_extract(params,'$.batch') IS NULL AND
@@ -343,6 +358,14 @@ class ClusterStore:
             if paused != self.get(db, "paused", False):
                 self.put(db, "paused", paused)
                 self._event(db, int(time.time()), "暂停领取新任务" if paused else "恢复领取任务")
+
+    def set_collection_paused(self, paused):
+        with self.tx() as db:
+            if (self.get(db, "session") or {}).get("role") != "host":
+                raise ClusterError("只有主节点可以控制主动搜集")
+            if paused != self.get(db, "collection_paused", False):
+                self.put(db, "collection_paused", paused)
+                self._event(db, int(time.time()), "主动搜集已暂停" if paused else "主动搜集已恢复")
 
     def _queue(self, db, round_id, kind, key, **params):
         db.execute("INSERT OR IGNORE INTO jobs(round,kind,key,params) VALUES(?,?,?,?)",
@@ -622,7 +645,7 @@ class ClusterStore:
             state.pop("participating", None)
             state["deadline"] = now + IMPORT_TIMEOUT
         self.put(db, "round_import", state)
-        if not pending and advance_round:
+        if not pending and advance_round and not self.get(db, "collection_paused", False):
             self._next_round(db, now)
 
     def _tick(self, db, now, body, session):
@@ -633,7 +656,7 @@ class ClusterStore:
         if self.get(db, "phase") == "importing":
             self._advance_import(db, body, now, advance_round=can_advance)
             return
-        if not can_advance:
+        if not can_advance or self.get(db, "collection_paused", False):
             return
         round_id = self.get(db, "round", 0)
         if not round_id:
@@ -707,9 +730,9 @@ class ClusterStore:
         in_pool = pool is None or node in pool
         # A legacy worker can check dynamics. Collection follow-ups prefer selected
         # modern nodes, and otherwise use any online modern node with a ready model.
-        preferred_modern = modern and (in_pool or not db.execute("""SELECT 1 FROM nodes
+        preferred_modern = modern and (in_pool or (not batch.get("strict") and not db.execute("""SELECT 1 FROM nodes
             WHERE watch_batch=1 AND work=2 AND seen>? AND id IN (SELECT value FROM json_each(?))""",
-            (now - ONLINE_SECONDS, _dump(pool))).fetchone())
+            (now - ONLINE_SECONDS, _dump(pool))).fetchone()))
         return db.execute("""SELECT * FROM jobs WHERE round=0 AND kind='watch' AND state='pending' AND due<=?
             AND ((json_extract(params,'$.assigned')=? AND key IN (SELECT mid FROM watch_sources))
                  OR (json_extract(params,'$.batch')=? AND
@@ -721,21 +744,25 @@ class ClusterStore:
         phase = self.get(db, "phase")
         kind = {"collecting": "search", "detecting": "video"}.get(phase)
         dispatch = self.get(db, "dispatch", {})
+        assignments = self.get(db, "work_assignments")
+        collection_paused = self.get(db, "collection_paused", False)
         if (self.get(db, "paused", False) or self.get(db, "cooldown_until", 0) > now or self._history_syncing(db, now)
                 or db.execute("SELECT 1 FROM jobs WHERE node=? AND state='leased'", (node,)).fetchone()
                 or db.execute("SELECT count(*) FROM jobs WHERE state='leased'").fetchone()[0] >= dispatch.get("concurrency", MAX_CONCURRENT)):
             return None
         job = None
-        if watch_ready and video_detection and phase != "importing":
+        watch_allowed = phase != "importing" or (
+            collection_paused and not self.get(db, "round_import", {}).get("pending")
+        )
+        if watch_ready and video_detection and watch_allowed:
             job, modern = self._watch_job(db, node, now)
-        if job is None and kind and (kind != "video" or video_detection):
-            pool = self._effective_pool(db, dispatch.get(f"{kind}_nodes"), dispatch.get("fallback"),
-                                        now, video=kind == "video")
+        if job is None and kind and not collection_paused and (kind != "video" or video_detection):
+            pool = assignments["collection_nodes"] if assignments is not None else self._effective_pool(
+                db, dispatch.get(f"{kind}_nodes"), dispatch.get("fallback"), now, video=kind == "video")
+            if pool is not None and node not in pool:
+                return None
             job = db.execute("""SELECT * FROM jobs WHERE round=? AND kind=? AND state='pending' AND due<=?
-                AND (json_extract(params,'$.assigned')=? OR
-                     (json_extract(params,'$.assigned') IS NULL AND ?))
-                ORDER BY json_extract(params,'$.assigned') IS NULL,id LIMIT 1""",
-                (self.get(db, "round", 0), kind, now, node, pool is None or node in pool)).fetchone()
+                ORDER BY id LIMIT 1""", (self.get(db, "round", 0), kind, now)).fetchone()
             if job and kind == "search" and not self._search_turn(db, job, node, now, pool):
                 return None
         if job is None:
@@ -764,19 +791,18 @@ class ClusterStore:
             self.put(db, "dispatch", body.model_dump())
             self._event(db, int(time.time()), f"已更新检索和视频指派，并行上限 {body.concurrency}")
 
-    def assign_video(self, body: VideoAssignment):
+    def set_work_assignments(self, body: WorkAssignments):
         with self.tx() as db:
             if (self.get(db, "session") or {}).get("role") != "host":
-                raise ClusterError("只有主节点可以指派视频检测")
-            if body.node:
-                self._require_dispatch_nodes(db, [body.node])
-            updated = db.execute("""UPDATE jobs SET params=? WHERE round=? AND kind='video' AND key=? AND state='pending'""",
-                                 (_dump({"assigned": body.node}) if body.node else "{}",
-                                  self.get(db, "round", 0), body.bvid))
-            if not updated.rowcount:
-                raise ClusterError("仅可改派本轮待检测的视频")
-            self._event(db, int(time.time()), f"视频 {body.bvid} 已指定检测节点" if body.node
-                        else f"视频 {body.bvid} 已恢复自动分配", node=body.node)
+                raise ClusterError("只有主节点可以设置节点分工")
+            plan = {key: list(dict.fromkeys(nodes)) for key, nodes in body.model_dump().items()}
+            self._require_dispatch_nodes(db, plan["collection_nodes"] + plan["watch_nodes"])
+            self.put(db, "work_assignments", plan)
+            batch = self.get(db, "watch_batch")
+            if batch:
+                self.put(db, "watch_batch", {**batch, "nodes": plan["watch_nodes"], "strict": True})
+            self._event(db, int(time.time()),
+                        f"已保存节点分工，{len(plan['collection_nodes'])} 台主动搜集，{len(plan['watch_nodes'])} 台追踪")
 
     def assign_watch(self, body: WatchAssignment):
         now = int(time.time())
@@ -803,31 +829,47 @@ class ClusterStore:
             self._event(db, now, f"追踪 UP 主 {body.mid} 已指派给 {target['name']}")
 
     def assign_watch_batch(self, body: WatchBatch):
-        now = int(time.time())
-        nodes = list(dict.fromkeys(body.nodes)) if body.nodes is not None else None
         with self.tx() as db:
             if (self.get(db, "session") or {}).get("role") != "host":
                 raise ClusterError("只有主节点可以指派追踪检查")
-            self._require_dispatch_nodes(db, nodes or [])
-            workers = "所有可用节点" if nodes is None else f"{len(nodes)} 个节点"
-            current = self.get(db, "watch_batch") or {}
-            if db.execute("""SELECT 1 FROM jobs WHERE kind='watch' AND state IN ('pending','leased')
-                             AND json_extract(params,'$.batch')=?""", (current.get("id"),)).fetchone():
-                self.put(db, "watch_batch", {**current, "nodes": nodes})
-                self._event(db, now, f"整批追踪剩余任务改由{workers}领取")
-                return
-            if self._has_work(db, 0, "watch"):
-                raise ClusterError("请等待已指派的单项追踪检查结束")
-            mids = [row[0] for row in db.execute("SELECT DISTINCT mid FROM watch_sources ORDER BY mid")]
-            if not mids:
-                raise ClusterError("集群尚无可追踪的 UP 主")
-            batch = uuid.uuid4().hex
-            db.execute("DELETE FROM sightings WHERE round=0")
-            db.execute("DELETE FROM jobs WHERE round=0 AND kind='watch'")
-            db.executemany("INSERT INTO jobs(round,kind,key,params) VALUES(0,'watch',?,?)",
-                           ((mid, _dump({"batch": batch})) for mid in mids))
-            self.put(db, "watch_batch", {"id": batch, "nodes": nodes})
-            self._event(db, now, f"已指派{workers}追踪全部 {len(mids)} 位 UP 主")
+            nodes = list(dict.fromkeys(body.nodes)) if body.nodes is not None else None
+            plan = self.get(db, "work_assignments")
+            if plan is not None:
+                nodes = plan["watch_nodes"]
+            self._assign_watch_batch(db, nodes, strict=plan is not None)
+
+    def start_watch(self):
+        with self.tx() as db:
+            if (self.get(db, "session") or {}).get("role") != "host":
+                raise ClusterError("只有主节点可以开始追踪")
+            plan = self.get(db, "work_assignments")
+            nodes = plan["watch_nodes"] if plan is not None else (self.get(db, "watch_batch") or {}).get("nodes")
+            self._assign_watch_batch(db, nodes, strict=plan is not None, start_only=True)
+
+    def _assign_watch_batch(self, db, nodes, *, strict, start_only=False):
+        if nodes == []:
+            raise ClusterError("请先勾选要追踪的节点")
+        self._require_dispatch_nodes(db, nodes or [])
+        current = self.get(db, "watch_batch") or {}
+        now = int(time.time())
+        if db.execute("""SELECT 1 FROM jobs WHERE kind='watch' AND state IN ('pending','leased')
+                         AND json_extract(params,'$.batch')=?""", (current.get("id"),)).fetchone():
+            if not start_only:
+                self.put(db, "watch_batch", {**current, "nodes": nodes, "strict": strict})
+                self._event(db, now, "已更新本批追踪的执行节点")
+            return
+        if self._has_work(db, 0, "watch"):
+            raise ClusterError("请等待已指派的单项追踪检查结束")
+        mids = [row[0] for row in db.execute("SELECT DISTINCT mid FROM watch_sources ORDER BY mid")]
+        if not mids:
+            raise ClusterError("集群尚无可追踪的 UP 主")
+        batch = uuid.uuid4().hex
+        db.execute("DELETE FROM sightings WHERE round=0")
+        db.execute("DELETE FROM jobs WHERE round=0 AND kind='watch'")
+        db.executemany("INSERT INTO jobs(round,kind,key,params) VALUES(0,'watch',?,?)",
+                       ((mid, _dump({"batch": batch})) for mid in mids))
+        self.put(db, "watch_batch", {"id": batch, "nodes": nodes, "strict": strict})
+        self._event(db, now, f"开始追踪全部 {len(mids)} 位 UP 主")
 
     @staticmethod
     def _sync_watch_list(db, node, watch_list):
@@ -1006,15 +1048,22 @@ class ClusterStore:
                 AND state='pending' AND json_extract(params,'$.batch')=?
                 AND json_extract(params,'$.collection_pending')""", (batch["id"],)).fetchone()[0]
         dispatch = self.get(db, "dispatch", DispatchSettings().model_dump())
-        video_queue = [dict(row) for row in db.execute("""SELECT j.key,j.state,n.name AS node,
-                       assigned.name AS assigned,assigned.id AS assigned_id FROM jobs j
+        plan = self.get(db, "work_assignments")
+        if plan is None:
+            search_nodes = dispatch.get("search_nodes")
+            video_nodes = dispatch.get("video_nodes")
+            plan = {"collection_nodes": None if search_nodes is None or video_nodes is None
+                    else sorted(set(search_nodes + video_nodes)),
+                    "watch_nodes": batch.get("nodes") if batch else None}
+        video_queue = [dict(row) for row in db.execute("""SELECT j.key,j.state,n.name AS node FROM jobs j
                        LEFT JOIN nodes n ON n.id=j.node
-                       LEFT JOIN nodes assigned ON assigned.id=json_extract(j.params,'$.assigned')
                        WHERE j.round=? AND j.kind='video'
                        AND j.state IN ('pending','leased') ORDER BY j.state,j.id LIMIT 12""", (round_id,))]
         return {"round": round_id, "target": TARGET, "counts": counts, "nodes": nodes, "events": events,
                 "round_keyword": keyword, "upcoming_keywords": self._upcoming_keywords(keyword),
                 "concurrency_limit": dispatch["concurrency"], "two_stage": True, "dispatch": dispatch,
+                "work_assignments": plan, "collection_paused": self.get(db, "collection_paused", False),
+                "node_rename_supported": True,
                 "watch_tracking": True, "watch_batch_supported": True, "watch_batch": batch,
                 "round_participation_supported": True,
                 "video_history": True,

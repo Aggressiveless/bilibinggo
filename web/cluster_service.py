@@ -25,7 +25,8 @@ from web.account_service import has_login_cookie
 from web.activity_service import SOURCE_LABELS, SOURCE_SPACE_URLS, invalidate_activity_cache
 from web.cluster_protocol import (Activity, Analysis, DetectionPageRequest, Exchange, Feed, HISTORY_PAGE_SIZE, Lease,
                                   LINK_PATTERNS, MAX_LOTTERY_TIME, PAGE_SIZE, PEER_PATH, POLL_SECONDS, Register, Report,
-                                  VideoHistory, WATCH_PAGE_SIZE, WatchFindings, WatchList, WatchUser, normalize_address)
+                                  RenameNode, VideoHistory, WATCH_PAGE_SIZE, WatchFindings, WatchList, WatchUser,
+                                  normalize_address)
 from web.cluster_store import ClusterError, ClusterStore
 from web.cluster_work import RetryCheck, execute
 
@@ -203,12 +204,29 @@ class ClusterService:
             except ClusterError:
                 pass
 
+    def rename(self, name):
+        with self.lock:
+            session = self.store.read("session")
+            if not session:
+                raise ClusterError("请先加入工作集群")
+            body = RenameNode(node=session["node"], name=name)
+            if session["role"] == "host":
+                self.store.rename_node(body, session["token"])
+            else:
+                if not self.status_remote.get("node_rename_supported"):
+                    raise ClusterError("等待主节点更新或重新连接后再修改名称")
+                result = self._remote(session, "/rename", session["token"], body.model_dump())
+                if result.get("ok") is not True:
+                    raise ClusterError("主节点未确认名称修改")
+                self.store.write("session", {**session, "name": body.name})
+        self.wake.set()
+
     def snapshot(self):
         config = self.store.read("session") or {}
         role = config.get("role")
         connected = bool(self.last_sync and self.last_sync > time.time() - 30)
         status = self.store.status() if role == "host" else self.status_remote if role else {}
-        return {"role": role, "address": config.get("address"), "node": config.get("node"),
+        return {"role": role, "address": config.get("address"), "node": config.get("node"), "node_name": config.get("name"),
                 "connected": connected if role else False, "error": self.error if role else "",
                 "last_sync": self.last_sync if role else 0,
                 "local_cursor": self.store.read(self._cursor_key(config), 0) if role else 0,

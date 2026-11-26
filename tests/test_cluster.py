@@ -471,14 +471,14 @@ def test_legacy_watch_node_can_check_dynamics_and_modern_node_finishes_collectio
     assert store.tracked_users(1)["items"][0]["hits"] == 1
 
 
-def test_dispatch_pools_and_individual_video_pin_preserve_existing_leases(tmp_path):
-    from web.cluster_protocol import DispatchSettings, VideoAssignment
+def test_collection_assignment_controls_search_and_detection_and_preserves_leases(tmp_path):
+    from web.cluster_protocol import WorkAssignments
 
     store, host, member = _cluster(tmp_path)
-    store.set_dispatch(DispatchSettings(search_nodes=[host["node"]], video_nodes=[member["node"]], concurrency=1))
+    store.set_work_assignments(WorkAssignments(collection_nodes=[host["node"]], watch_nodes=[]))
     assert _exchange(store, member, work=True, video_detection=True).task is None
     search = _exchange(store, host, work=True).task
-    store.set_dispatch(DispatchSettings(search_nodes=[member["node"]], video_nodes=[member["node"]], concurrency=1))
+    store.set_work_assignments(WorkAssignments(collection_nodes=[member["node"]], watch_nodes=[]))
     assert _exchange(store, member, work=True, video_detection=True).task is None
     other_video = "BV0000000032"
     _exchange(store, host, report=_report(search, more_pages=True, references=[Reference(kind="video", key=BVID)]))
@@ -486,16 +486,65 @@ def test_dispatch_pools_and_individual_video_pin_preserve_existing_leases(tmp_pa
     assert (page.kind, page.page, page.order) == ("search", 2, "pubdate")
     _exchange(store, member, report=_report(page, references=[Reference(kind="video", key=other_video)]))
     assert _exchange(store, host, work=True, video_detection=True).task is None
-    store.assign_video(VideoAssignment(bvid=BVID, node=host["node"]))
-    assert next(row for row in store.status()["video_queue"] if row["key"] == BVID)["assigned_id"] == host["node"]
-    assigned = _exchange(store, host, work=True, video_detection=True).task
+    assigned = _exchange(store, member, work=True, video_detection=True).task
     assert (assigned.kind, assigned.key) == ("video", BVID)
+    store.set_work_assignments(WorkAssignments(collection_nodes=[], watch_nodes=[]))
+    _exchange(store, member, report=_report(assigned))
     assert _exchange(store, member, work=True, video_detection=True).task is None
+    assert store.status()["counts"]["video"] == {"done": 1, "pending": 1}
+    assert ClusterStore(tmp_path).status()["work_assignments"]["collection_nodes"] == []
+
+
+def test_collection_pause_leaves_tracking_available_and_resumes_pending_search(tmp_path):
+    from web.cluster_protocol import WorkAssignments
+
+    store, host, member = _cluster(tmp_path)
+    first = _exchange(store, host, work=True).task
+    store.set_work_assignments(WorkAssignments(collection_nodes=[host["node"]], watch_nodes=[member["node"]]))
+    store.set_collection_paused(True)
+    _exchange(store, host, report=_report(first, more_pages=True, references=[Reference(kind="video", key=BVID)]))
+    ready = {"video_detection": True, "local_work": "idle", "watch_batch_capable": True}
+    _exchange(store, member, **ready, watch_list={
+        "revision": uuid.uuid4().hex, "complete": True, "users": [{"mid": "31", "name": "作者"}],
+    })
+    store.start_watch()
+    tracking = _exchange(store, member, work=True, **ready).task
+    assert tracking.kind == "watch"
+    assert _exchange(store, host, work=True).task is None
+    store.set_work_assignments(WorkAssignments(collection_nodes=[host["node"]], watch_nodes=[]))
+    _exchange(store, member, report=_report(tracking), **ready)
+    assert store.status()["watch_batch"]["counts"] == {"done": 1}
+    store.set_collection_paused(False)
+    assert _exchange(store, host, work=True).task.page == 2
+
+
+def test_legacy_pause_migrates_to_collection_pause(tmp_path):
+    store, _, _ = _cluster(tmp_path)
+    with store.tx() as db:
+        db.execute("DELETE FROM settings WHERE key='collection_paused'")
+        store.put(db, "paused", True)
+    updated = ClusterStore(tmp_path)
+    assert updated.status()["collection_paused"]
+    assert not updated.status()["paused"]
+    updated.set_paused(True)
+    assert ClusterStore(tmp_path).status()["paused"]
+
+
+def test_rename_only_changes_the_authenticated_node_name(tmp_path):
+    from web.cluster_protocol import RenameNode
+
+    store, host, member = _cluster(tmp_path)
+    first = _exchange(store, host, work=True).task
     with pytest.raises(ClusterError):
-        store.assign_video(VideoAssignment(bvid=BVID, node=None))
-    _exchange(store, host, report=_report(assigned))
-    assert _exchange(store, member, work=True, video_detection=True).task.key == other_video
-    assert ClusterStore(tmp_path).status()["concurrency_limit"] == 1
+        store.rename_node(RenameNode(node=member["node"], name="冒名节点"), host["token"])
+    store.rename_node(RenameNode(node=member["node"], name=" 新工作节点 "), member["token"])
+    store.rename_node(RenameNode(node=host["node"], name="新主节点"), host["token"])
+    assert store.read("session") == {**host, "name": "新主节点"}
+    feed = _exchange(store, host, report=_report(first, references=[Reference(kind="video", key=BVID)]))
+    assert feed.status["counts"]["search"] == {"done": 1}
+    assert {row["id"]: row["name"] for row in feed.status["nodes"]} == {
+        host["node"]: "新主节点", member["node"]: "新工作节点",
+    }
 
 
 def test_dispatch_falls_back_only_when_selected_search_nodes_are_offline(tmp_path, monkeypatch):

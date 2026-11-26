@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from web.activity_share import SharedActivity, MAX_LOTTERY_TIME
 
@@ -152,9 +152,17 @@ class DispatchSettings(Payload):
     concurrency: int = Field(default=4, ge=1, le=32)
 
 
-class VideoAssignment(Payload):
-    bvid: BV
-    node: NodeId | None
+class WorkAssignments(Payload):
+    collection_nodes: list[NodeId] = Field(max_length=32)
+    watch_nodes: list[NodeId] = Field(max_length=32)
+
+
+class NodeName(Payload):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
+
+
+class RenameNode(NodeName):
+    node: NodeId
 
 
 class WatchFindings(Lease):

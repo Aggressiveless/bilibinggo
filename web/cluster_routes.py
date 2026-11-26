@@ -12,8 +12,8 @@ from src.app_paths import DATA_DIR
 from web.account_service import get_account_profile, has_login_cookie
 from web.api_errors import AppError, ErrorCode, require_login
 from web.cluster_protocol import (Analysis, DetectionPageRequest, DispatchSettings, Exchange, HostRequest,
-                                  JoinRequest, NodeId, PEER_PATH, ParticipationPreference, Register, VideoAssignment,
-                                  WatchAssignment, WatchBatch, WatchFindings)
+                                  JoinRequest, NodeId, NodeName, PEER_PATH, ParticipationPreference, Register, RenameNode,
+                                  WatchAssignment, WatchBatch, WatchFindings, WorkAssignments)
 from web.cluster_service import ClusterService
 from web.cluster_store import ClusterError
 
@@ -120,11 +120,34 @@ def install_cluster(app):
         service.wake.set()
         return service.snapshot()
 
-    @dashboard.post("/video-assignment")
-    def video_assignment(request: Request, body: VideoAssignment):
+    @dashboard.post("/work-assignments")
+    def work_assignments(request: Request, body: WorkAssignments):
         _dashboard(request, check_login=True)
         service = request.app.state.cluster
-        _run(service.store.assign_video, body)
+        _run(service.store.set_work_assignments, body)
+        service.wake.set()
+        return service.snapshot()
+
+    @dashboard.post("/watch-start")
+    def watch_start(request: Request):
+        _dashboard(request, check_login=True)
+        service = request.app.state.cluster
+        _run(service.store.start_watch)
+        service.wake.set()
+        return service.snapshot()
+
+    @dashboard.post("/node-name")
+    def node_name(request: Request, body: NodeName):
+        _dashboard(request, check_login=True)
+        service = request.app.state.cluster
+        _run(service.rename, body.name)
+        return service.snapshot()
+
+    @dashboard.post("/collection-pause")
+    def collection_pause(request: Request, paused: bool = True):
+        _dashboard(request, check_login=True)
+        service = request.app.state.cluster
+        _run(service.store.set_collection_paused, paused)
         service.wake.set()
         return service.snapshot()
 
@@ -168,6 +191,12 @@ def install_cluster(app):
         token = _bearer(request)
         body = await _read(request, WatchFindings)
         return await run_in_threadpool(_run, request.app.state.cluster.store.publish_watch_findings, body, token)
+
+    @peer.post("/rename")
+    async def rename(request: Request):
+        token = _bearer(request)
+        body = await _read(request, RenameNode)
+        return await run_in_threadpool(_run, request.app.state.cluster.store.rename_node, body, token)
 
     @peer.post("/join")
     async def register(request: Request):

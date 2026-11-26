@@ -782,12 +782,22 @@
             <div class="cluster-layout" id="cluster-monitor" hidden>
               <div class="cluster-toolbar">
                 <div class="cluster-connection">
-                  <strong id="cluster-role"></strong>
+                  <strong id="cluster-local-name"></strong>
+                  <span class="caption" id="cluster-role"></span>
                   <span class="cluster-connection-state" id="cluster-link-state" role="status"></span>
                   <span class="caption" id="cluster-sync-time"></span>
+                  <span class="caption" id="cluster-local-task" hidden></span>
                 </div>
                 <div class="cluster-actions">
-                  <button class="btn btn-secondary" type="button" id="cluster-pause" hidden>暂停协作</button>
+                  <button class="btn btn-secondary" type="button" id="cluster-collection-pause" hidden>暂停主动搜集</button>
+                  <details class="cluster-manage cluster-rename" id="cluster-rename" hidden>
+                    <summary class="btn btn-secondary">改名</summary>
+                    <form class="cluster-manage-body" id="cluster-rename-form">
+                      <label for="cluster-node-name">本机节点名称</label>
+                      <input class="form-input" name="name" id="cluster-node-name" maxlength="40" required>
+                      <button class="btn btn-primary btn-compact" type="submit">保存名称</button>
+                    </form>
+                  </details>
                   <details class="cluster-manage" id="cluster-manage">
                     <summary class="btn btn-secondary">集群管理</summary>
                     <div class="cluster-manage-body">
@@ -806,44 +816,27 @@
                 </div>
                 <p class="caption" id="cluster-worker-note" hidden>登录 B 站后可参与检索和同步。完成模型连接测试后可领取检测任务。</p>
               </div>
-              <details class="panel cluster-dispatch" id="cluster-dispatch" hidden>
-                <summary>任务指派</summary>
+              <section class="panel cluster-dispatch" id="cluster-dispatch" aria-labelledby="cluster-dispatch-title" hidden>
                 <form id="cluster-dispatch-form">
-                  <div class="cluster-dispatch-pools">
-                    <fieldset class="cluster-node-picker">
-                      <legend>关键词检索</legend>
-                      <select class="form-input" id="cluster-search-mode" aria-label="关键词检索指派方式">
-                        <option value="auto">所有可用节点轮换</option>
-                        <option value="manual">仅指定节点轮换</option>
-                      </select>
-                      <div class="cluster-node-choices" id="cluster-search-nodes"></div>
-                    </fieldset>
-                    <fieldset class="cluster-node-picker">
-                      <legend>视频检测</legend>
-                      <select class="form-input" id="cluster-video-mode" aria-label="视频检测指派方式">
-                        <option value="auto">所有可用节点领取</option>
-                        <option value="manual">仅指定节点领取</option>
-                      </select>
-                      <div class="cluster-node-choices" id="cluster-video-nodes"></div>
-                    </fieldset>
+                  <div class="cluster-heading">
+                    <h2 class="section-title" id="cluster-dispatch-title">节点分工</h2>
+                    <div class="cluster-actions">
+                      <button class="btn btn-secondary" id="cluster-watch-start" type="button">开始追踪</button>
+                      <button class="btn btn-primary" id="cluster-dispatch-save" type="submit">保存分工</button>
+                    </div>
                   </div>
-                  <div class="cluster-dispatch-options">
-                    <label><input type="checkbox" id="cluster-dispatch-fallback"> 所选节点均不可用时允许其它节点接手</label>
-                    <label>并行任务上限 <input class="form-input" id="cluster-dispatch-limit" type="number" min="1" max="32" required></label>
-                    <button class="btn btn-secondary btn-compact" type="submit">保存任务指派</button>
-                  </div>
+                  <table class="cluster-assignment-table">
+                    <thead><tr><th scope="col">节点</th><th scope="col">追踪 UP 主</th><th scope="col">主动搜集</th></tr></thead>
+                    <tbody id="cluster-assignment-rows"></tbody>
+                  </table>
+                  <p class="caption" id="cluster-dispatch-note" role="status" hidden></p>
                 </form>
-                <form class="cluster-dispatch-video" id="cluster-video-assignment-form">
-                  <label>待检测视频 <input class="form-input" id="cluster-video-assignment-bvid" placeholder="粘贴 BV 号或视频链接" required></label>
-                  <label>指派给 <select class="form-input" id="cluster-video-assignment-node"></select></label>
-                  <button class="btn btn-secondary btn-compact" type="submit">保存视频指派</button>
-                </form>
-              </details>
+              </section>
               <div class="cluster-dashboard-grid">
                 <div class="cluster-search-column">
                 <article class="panel cluster-overview" aria-labelledby="cluster-overview-title">
                   <div class="cluster-heading">
-                    <h2 class="section-title" id="cluster-overview-title">检索集合</h2>
+                    <h2 class="section-title" id="cluster-overview-title">主动搜集</h2>
                     <span class="cluster-pill" id="cluster-phase"></span>
                   </div>
                   <dl class="cluster-metrics">
@@ -888,15 +881,6 @@
                     <h2 class="section-title" id="cluster-watch-title">追踪 UP 主</h2>
                     <span class="caption" id="cluster-watch-total"></span>
                   </div>
-                  <fieldset class="cluster-watch-target" id="cluster-watch-target" hidden>
-                    <legend>指派节点</legend>
-                    <select class="form-input" id="cluster-watch-mode" aria-label="整批追踪指派方式">
-                      <option value="auto">所有可用节点</option>
-                      <option value="manual">指定节点</option>
-                    </select>
-                    <div class="cluster-node-choices" id="cluster-watch-nodes"></div>
-                    <button class="btn btn-secondary btn-compact" type="button" id="cluster-watch-start">指派全集合</button>
-                  </fieldset>
                   <p class="caption" id="cluster-watch-note" role="status"></p>
                   <ul class="cluster-watch-list" id="cluster-watch-list"></ul>
                   <div class="cluster-watch-pages" id="cluster-watch-pages" hidden>
@@ -908,7 +892,7 @@
                 </div>
                 <article class="panel cluster-workers" aria-labelledby="cluster-workers-title">
                   <div class="cluster-heading">
-                    <h2 class="section-title" id="cluster-workers-title">分配检测</h2>
+                    <h2 class="section-title" id="cluster-workers-title">视频检测</h2>
                     <span class="caption" id="cluster-online"></span>
                   </div>
                   <dl class="cluster-detection" aria-label="本轮视频检测">
