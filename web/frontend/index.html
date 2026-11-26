@@ -388,7 +388,7 @@
                     </li>
                   </ul>
                   <div class="project-showcase-actions">
-                    <a class="btn btn-primary btn-pill project-btn" href="https://github.com/Komerser/bilibinggo" target="_blank" rel="noopener">访问 Fork 仓库</a>
+                    <a class="btn btn-primary btn-pill project-btn" href="https://github.com/Aggressiveless/bilibinggo" target="_blank" rel="noopener">访问 Fork 仓库</a>
                     <a class="btn btn-secondary btn-pill project-btn" href="https://github.com/Komerser" target="_blank" rel="noopener">维护者 Komerser</a>
                     <a class="btn btn-ghost btn-pill project-btn" href="https://github.com/luovicter-collab/bilibinggo" target="_blank" rel="noopener">上游项目</a>
                     <button type="button" class="btn btn-ghost btn-pill" id="export-diagnostics">导出诊断包</button>
@@ -398,12 +398,12 @@
                   <div class="project-meta">
                     <div class="project-meta-row">
                       <span class="project-info-label">Repository</span>
-                      <span class="project-info-value">Komerser / bilibinggo</span>
+                      <span class="project-info-value">Aggressiveless / bilibinggo</span>
                     </div>
                     <div class="project-meta-pairs">
                       <div class="project-meta-item">
                         <span class="project-info-label">Fork 维护者</span>
-                        <a class="project-info-value" href="https://github.com/Komerser" target="_blank" rel="noopener">Komerser</a>
+                        <a class="project-info-value" href="https://github.com/Aggressiveless" target="_blank" rel="noopener">Aggressiveless</a>
                       </div>
                       <div class="project-meta-item">
                         <span class="project-info-label">原作者</span>
@@ -433,9 +433,27 @@
                   </div>
                   <div class="project-showcase-side-actions">
                     <button type="button" class="btn btn-secondary btn-pill btn-compact" id="check-updates">检查更新</button>
-                    <a class="btn btn-ghost btn-pill btn-compact" id="open-releases" href="https://github.com/Komerser/bilibinggo/releases" target="_blank" rel="noopener">Releases</a>
+                    <button type="button" class="btn btn-primary btn-pill btn-compact" id="apply-local-update">更新版本</button>
+                    <a class="btn btn-ghost btn-pill btn-compact" id="open-releases" href="https://github.com/Aggressiveless/bilibinggo/releases" target="_blank" rel="noopener">Releases</a>
                   </div>
                   <p class="caption" id="runtime-health-hint" hidden></p>
+                  <p class="caption" id="local-update-support"></p>
+                  <div class="local-update-demo" id="local-update-demo" hidden>
+                    <span class="caption">演示模式 · 不修改程序和数据</span>
+                    <button type="button" class="btn btn-ghost btn-compact" id="preview-update">演示更新成功</button>
+                    <button type="button" class="btn btn-ghost btn-compact" id="preview-update-failure">演示失败恢复</button>
+                  </div>
+                  <div class="local-update-progress" id="local-update-progress" hidden aria-live="polite">
+                    <strong id="local-update-title">更新进度</strong>
+                    <p id="local-update-message"></p>
+                    <ol id="local-update-steps"></ol>
+                    <p class="caption" id="local-update-data"></p>
+                    <div class="local-update-actions">
+                      <button type="button" class="btn btn-secondary btn-compact" id="cancel-local-update" hidden>取消等待</button>
+                      <button type="button" class="btn btn-primary btn-compact" id="reload-after-update" hidden>刷新页面</button>
+                      <button type="button" class="btn btn-ghost btn-compact" id="open-update-log">查看本机日志</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </article>
@@ -946,6 +964,11 @@
         </template>
 
         <section class="view-section" id="section-logs" data-title="任务日志" data-subtitle="查看执行顺序、任务进度和结果。">
+          <article class="panel local-update-history" id="local-update-history">
+            <div class="task-panel-heading"><h2>本机更新日志</h2><span class="caption">仅保存在本机，不同步到集群</span></div>
+            <p class="caption" id="local-update-log-empty">暂无更新记录</p>
+            <div id="local-update-log-list"></div>
+          </article>
           <div data-cluster-log="local"></div>
           <div class="task-layout">
             <div class="task-left">

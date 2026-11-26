@@ -2,14 +2,14 @@
   <img src="docs/images/logo.svg" alt="Binggo" width="80" height="80">
 </p>
 
-<h1 align="center">Binggo 6.1.1 集群版</h1>
+<h1 align="center">Binggo 6.1.1.01 集群版</h1>
 
 <p align="center">
   B 站抽奖助手 · 发现、核验、分享与参与活动
 </p>
 
 <p align="center">
-  <a href="https://github.com/Komerser/bilibinggo/releases/tag/v6.1.1"><b>下载集群版</b></a>
+  <a href="https://github.com/Aggressiveless/bilibinggo/releases/tag/v6.1.1.01"><b>下载集群版</b></a>
   &nbsp;·&nbsp;
   <a href="#开始使用"><b>开始使用</b></a>
   &nbsp;·&nbsp;
@@ -20,25 +20,35 @@
 
 Binggo 可以从 UP 主合集、追踪动态和视频检索中发现抽奖活动。单台电脑可独立完成检索、核验、导入和参与。多台电脑也可以组成工作集群，共享已看视频记录和活动目录，分工检索与检测。
 
-本 fork 由 Komerser 维护，基于 victor 的 [bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
+本版本由 Aggressiveless 从 [Komerser 的 6.1.1 集群版](https://github.com/Komerser/bilibinggo/releases/tag/v6.1.1) 派生。原项目为 victor 的 [bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
+
+## 6.1.1.01 更新
+
+- Ubuntu systemd 控制台新增「更新此服务器」。确认后下载并校验正式版，等待当前任务结束，再备份、安装和重启。
+- 启动后校验运行版本、网页与原集群连接。验证失败时尝试恢复旧程序和升级前数据。
+- Windows 控制台新增「更新版本」。更新时保留 `user-data`，等待期间可取消。
+- 进度、备份和恢复结果保存在「日志 → 本机更新日志」，各节点独立维护自己的版本。
 
 ## 下载与升级
 
-| 平台 | 6.1.1 下载 |
+| 平台 | 6.1.1.01 下载 |
 | --- | --- |
-| Windows x64 | [安装包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-Setup-win64.exe) · [便携版](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-Portable-win64.zip) |
-| Ubuntu | [部署包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-6.1.1-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-6.1.1-ubuntu.tar.gz.sha256) |
+| Windows x64 | [安装包](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/Binggo-Setup-win64.exe) · [便携版](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/Binggo-Portable-win64.zip) |
+| Ubuntu | [部署包](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/Binggo-6.1.1.01-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/Binggo-6.1.1.01-ubuntu.tar.gz.sha256) |
+| 源码与校验 | [源码 ZIP](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/Binggo-6.1.1.01-source.zip) · [SHA256SUMS.txt](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/SHA256SUMS.txt) |
 
 Windows 运行安装包，或解压便携版后启动 `Binggo-RepostFix.exe`。控制台默认地址为 [127.0.0.1:8182](http://127.0.0.1:8182)。已有用户请先等任务结束，退出程序并备份原目录中的 `user-data`。更新程序文件后保留该目录，即可沿用登录、设置和历史。
 
 Ubuntu 部署包内含预构建前端和安装说明。Ubuntu 24.04 及以上可用 systemd 安装。
 
 ```bash
-sha256sum -c Binggo-6.1.1-ubuntu.tar.gz.sha256
-tar -xzf Binggo-6.1.1-ubuntu.tar.gz
-cd binggo-server-6.1.1
+sha256sum -c Binggo-6.1.1.01-ubuntu.tar.gz.sha256
+tar -xzf Binggo-6.1.1.01-ubuntu.tar.gz
+cd binggo-server-6.1.1.01
 sudo bash deploy.sh install
 ```
+
+已有 systemd 部署请等待运行中的任务结束，从解压目录执行 `sudo bash deploy.sh upgrade`，首次装入更新服务并保留 `/var/lib/binggo`。以后可在「概览 → 项目信息 → 更新此服务器」确认安装。管理员通过 SSH 查看本机更新口令，见 [版本更新说明](docs/local-version-update.md)。
 
 Ubuntu 22.04 可在 Docker Engine 和 Compose 就绪后运行 `sudo bash deploy.sh docker`。systemd 的数据目录为 `/var/lib/binggo`，Docker 使用部署目录下的 `user-data`。单人远程使用时可以通过 SSH 端口转发访问控制台。要让其他设备加入集群，请配置成员能够访问的 HTTPS 入口。 [主节点入口配置](docs/cluster.md#主服务器入口)
 
@@ -92,7 +102,7 @@ Windows 和 Ubuntu 都可以运行主节点或工作节点。成员从本机主�
 Python **3.12+**，Node.js **20+**（构建前端时使用）。
 
 ```bash
-git clone https://github.com/Komerser/bilibinggo.git
+git clone https://github.com/Aggressiveless/bilibinggo.git
 cd bilibinggo
 python -m pip install -r requirements.txt
 cd web/frontend && npm ci && npm run build && cd ../..
@@ -105,7 +115,7 @@ python scripts/run_dashboard.py
 
 Binggo 仅供个人学习和研究，是未经哔哩哔哩授权或认可的第三方工具。请遵守适用法律及 B 站平台规则。禁止将本项目或衍生工具用于收费代抽、营销引流等商业用途，禁止批量操作多账号、养号、控号和矩阵运营，也不得用于黑产或其他违法违规活动。账号封禁、功能限制、数据丢失及法律追责等使用后果由使用者承担。 [上游免责声明](https://github.com/luovicter-collab/bilibinggo#免责声明)
 
-转载或二次发布时，请保留使用声明及适用的版权和许可说明，注明原作者 victor 和 fork 维护者 Komerser，并附上 [上游仓库](https://github.com/luovicter-collab/bilibinggo) 与 [本 fork](https://github.com/Komerser/bilibinggo)。上游 README 将项目标注为 MIT，当前仓库未附独立的 `LICENSE` 文件。 [上游许可说明](https://github.com/luovicter-collab/bilibinggo#license)
+转载或二次发布时，请保留使用声明及适用的版权和许可说明，注明原作者 victor、集群版维护者 Komerser 及本 fork 维护者 Aggressiveless，并附上 [原项目](https://github.com/luovicter-collab/bilibinggo)、[集群版仓库](https://github.com/Komerser/bilibinggo) 与 [本 fork](https://github.com/Aggressiveless/bilibinggo)。原项目 README 将项目标注为 MIT，当前仓库未附独立的 `LICENSE` 文件。 [上游许可说明](https://github.com/luovicter-collab/bilibinggo#license)
 
 ## Star History
 
