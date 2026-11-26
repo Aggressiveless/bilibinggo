@@ -2,14 +2,14 @@
   <img src="docs/images/logo.svg" alt="Binggo" width="80" height="80">
 </p>
 
-<h1 align="center">Binggo 6.1.1 集群版</h1>
+<h1 align="center">Binggo 6.1.2 集群版</h1>
 
 <p align="center">
   B 站抽奖助手 · 发现、核验、分享与参与活动
 </p>
 
 <p align="center">
-  <a href="https://github.com/Komerser/bilibinggo/releases/tag/v6.1.1"><b>下载集群版</b></a>
+  <a href="https://github.com/Komerser/bilibinggo/releases/tag/v6.1.2"><b>下载集群版</b></a>
   &nbsp;·&nbsp;
   <a href="#开始使用"><b>开始使用</b></a>
   &nbsp;·&nbsp;
@@ -24,19 +24,19 @@ Binggo 可以从 UP 主合集、追踪动态和视频检索中发现抽奖活动
 
 ## 下载与升级
 
-| 平台 | 6.1.1 下载 |
+| 平台 | 6.1.2 下载 |
 | --- | --- |
-| Windows x64 | [安装包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-Setup-win64.exe) · [便携版](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-Portable-win64.zip) |
-| Ubuntu | [部署包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-6.1.1-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-6.1.1-ubuntu.tar.gz.sha256) |
+| Windows x64 | [安装包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.2/Binggo-Setup-win64.exe) · [便携版](https://github.com/Komerser/bilibinggo/releases/download/v6.1.2/Binggo-Portable-win64.zip) |
+| Ubuntu | [部署包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.2/Binggo-6.1.2-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Komerser/bilibinggo/releases/download/v6.1.2/Binggo-6.1.2-ubuntu.tar.gz.sha256) |
 
 Windows 运行安装包，或解压便携版后启动 `Binggo-RepostFix.exe`。控制台默认地址为 [127.0.0.1:8182](http://127.0.0.1:8182)。已有用户请先等任务结束，退出程序并备份原目录中的 `user-data`。更新程序文件后保留该目录，即可沿用登录、设置和历史。
 
 Ubuntu 部署包内含预构建前端和安装说明。Ubuntu 24.04 及以上可用 systemd 安装。
 
 ```bash
-sha256sum -c Binggo-6.1.1-ubuntu.tar.gz.sha256
-tar -xzf Binggo-6.1.1-ubuntu.tar.gz
-cd binggo-server-6.1.1
+sha256sum -c Binggo-6.1.2-ubuntu.tar.gz.sha256
+tar -xzf Binggo-6.1.2-ubuntu.tar.gz
+cd binggo-server-6.1.2
 sudo bash deploy.sh install
 ```
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from src.bilibili_client import BilibiliClient
 from src.sources.common import (
     CheckResult,
+    collection_already_checked,
     extract_t_bilibili_links_with_hints,
     load_previous_output,
     save_result as write_result,
@@ -21,10 +22,12 @@ def video_url(bvid: str) -> str:
     return f"https://www.bilibili.com/video/{bvid}"
 
 
-def check_update(*, force: bool = False) -> CheckResult:
+def check_update(*, force: bool = False, covered: dict | None = None) -> CheckResult | None:
     with BilibiliClient() as client:
         latest = client.get_latest_video(MID)
         bvid = latest["bvid"]
+        if collection_already_checked(covered, bvid, latest.get("created")):
+            return None
         container_url = video_url(bvid)
         previous = get_last_container(SOURCE_ID)
 

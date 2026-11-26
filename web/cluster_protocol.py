@@ -100,11 +100,20 @@ class Task(Lease):
         return self
 
 
+class CollectionCoverage(Payload):
+    container_id: str = Field(min_length=1, max_length=80)
+    published_at: int = Field(gt=0, lt=2**63)
+
+
 class Report(Lease):
     outcome: Literal["done", "retry", "cooldown"]
     references: list[Reference] = Field(default_factory=list, max_length=120)
     activities: list[Activity] = Field(default_factory=list, max_length=16)
     more_pages: bool = False
+    search_dates: dict[BV, Annotated[int, Field(gt=0, lt=2**63)]] | None = Field(default=None, max_length=36)
+    search_exhausted: bool | None = None
+    watch_through: int | None = Field(default=None, gt=0, lt=2**63)
+    watch_collection: CollectionCoverage | None = None
     cooldown: int = Field(default=900, ge=900, le=86400)
     model_calls: int = Field(default=0, ge=0, le=128)
     reason: Literal["platform", "model", "network", "analysis_busy", "worker",

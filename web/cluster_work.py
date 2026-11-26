@@ -13,16 +13,16 @@ import httpx
 
 from src import lottery_discovery as d
 from src.bilibili_client import BilibiliRequestError
+from src.discovery_coverage import ordered_page_times, publication_time, search_page_exhausted
 from src.llm_settings import get_llm_config
 from src.lottery_discovery_broad import has_direct_video_entry, has_video_clue, search_author_lotteries
 from src.sources.common import opus_link
-from src.watch_feed import SPACE_FEED_URL, extract_feed_pub_ts, extract_forward_orig_id
-from web.cluster_protocol import Activity, Reference, Report, Task
+from src.watch_feed import DEFAULT_MAX_PAGES, SPACE_FEED_URL, extract_feed_pub_ts, extract_forward_orig_id
+from web.cluster_protocol import Activity, CollectionCoverage, Reference, Report, Task
 
 MAX_VIDEO_REFERENCES = 16
 MAX_REFERENCE_DEPTH = 4
 WATCH_LOOKBACK = 24 * 3600
-WATCH_SCAN_PAGES = 3
 
 
 class RetryCheck(Exception):
@@ -76,10 +76,17 @@ def _search(client, task):
     data = read_data(client, d.SEARCH_URL, {"search_type": "video", "keyword": task.keyword, "page": task.page,
                                            "page_size": 36, "order": task.order},
                      referer="https://search.bilibili.com/", wbi=True, ttl=1800)
-    seen = dict.fromkeys(str(row.get("bvid") or "") for row in data.get("result") or [] if isinstance(row, dict))
-    refs = [Reference(kind="video", key=key) for key in seen if d.BV_RE.fullmatch(key)]
+    videos = {}
+    for row in data.get("result") or []:
+        if isinstance(row, dict) and d.BV_RE.fullmatch(key := str(row.get("bvid") or "")):
+            videos.setdefault(key, publication_time(row.get("pubdate")))
+    refs = [Reference(kind="video", key=key) for key in list(videos)[:36]]
     pages = data.get("numPages")
-    return {"references": refs[:36], "more_pages": bool(refs) and (type(pages) is not int or task.page < pages)}
+    result = {"references": refs, "more_pages": bool(refs) and (type(pages) is not int or task.page < pages)}
+    if task.order == "pubdate" and len(videos) <= 36:
+        result["search_dates"] = {key: date for key, date in videos.items() if date is not None}
+        result["search_exhausted"] = search_page_exhausted(data, task.page)
+    return result
 
 
 def _video(client, key):
@@ -170,23 +177,43 @@ def _detect_video(client, key, activities):
         raise retry
 
 
-def _check_watched_author(client, mid, activities, *, publish=None):
+def _check_watched_author(client, mid, activities, *, publish=None, covered_through=0):
     now = int(time.time())
+    lower = covered_through or now - WATCH_LOOKBACK
     offset = ""
     seen_offsets, candidates = set(), set()
-    for _ in range(WATCH_SCAN_PAGES):
+    newest = oldest = None
+    dated = True
+    ordered = True
+    complete = False
+    for _ in range(DEFAULT_MAX_PAGES):
         data = read_data(client, SPACE_FEED_URL,
                          {"host_mid": int(mid), "offset": offset, "type": "all", "platform": "web",
                           "timezone_offset": -480, "web_location": "333.1365"},
                          referer=f"https://space.bilibili.com/{mid}/dynamic", wbi=True, ttl=90)
-        for item in data.get("items") or []:
+        items = data.get("items")
+        if not isinstance(items, list):
+            if data.get("has_more") is False and items is None:
+                items = []
+            else:
+                break
+        timestamps = [extract_feed_pub_ts(item) if isinstance(item, dict) else None for item in items]
+        if any(stamp is None or stamp > now for stamp in timestamps):
+            dated = False
+        elif timestamps:
+            newest = max(newest or 0, *timestamps)
+        page_times = ordered_page_times(timestamps, now, oldest)
+        if items and page_times is None:
+            ordered = False
+        elif page_times is not None:
+            _, oldest = page_times
+        for item, published in zip(items, timestamps):
             if not isinstance(item, dict):
                 continue
-            published = extract_feed_pub_ts(item)
-            if published and not now - WATCH_LOOKBACK <= published <= now:
+            if published and not lower <= published <= now:
                 continue
             original = extract_forward_orig_id(item)
-            if original and len(original) in (18, 19) and original.isascii():
+            if original and len(original) in (18, 19) and original.isascii() and original.isdecimal():
                 candidates.add(original)
             # The official lottery marker can be present even when the body is short.
             text = d._extract_from_detail_item(d._normalize_dynamic_item(item))
@@ -195,11 +222,18 @@ def _check_watched_author(client, mid, activities, *, publish=None):
                     and (d.LOTTERY_RE.search(text) or "RICH_TEXT_NODE_TYPE_LOTTERY" in json.dumps(item))):
                 candidates.add(key)
         offset = str(data.get("offset") or "")
+        if data.get("has_more") is False or (ordered and page_times is not None and page_times[0] < lower):
+            complete = True
+            break
         if not data.get("has_more") or not offset or offset in seen_offsets:
             break
         seen_offsets.add(offset)
     retry = None
-    for key in sorted(candidates, key=int, reverse=True)[:MAX_VIDEO_REFERENCES]:
+    keys = sorted(candidates, key=int, reverse=True)
+    if not publish and len(keys) > MAX_VIDEO_REFERENCES:
+        complete = False
+        keys = keys[:MAX_VIDEO_REFERENCES]
+    for key in keys:
         try:
             _, matches = _dynamic(client, key, now)
         except (RetryCheck, httpx.HTTPError, BilibiliRequestError) as exc:
@@ -211,22 +245,30 @@ def _check_watched_author(client, mid, activities, *, publish=None):
             activities.extend(matches)
     if retry is not None:
         raise retry
+    if dated and complete and newest is not None and newest >= lower:
+        return newest
 
 
-def _collection_references(mid):
+def _collection_references(mid, covered=None):
     from web.actions import DS_HANDLER_BY_ID
     from web.activity_service import collection_source_for_mid
 
     source = collection_source_for_mid(mid)
     if source is None:
-        return []
+        return [], None
     check, _ = DS_HANDLER_BY_ID[source]
-    result = check(force=True)
-    return [ref for link in dict.fromkeys(result.activity_links) for ref in references(link)]
+    result = check(force=True, covered=covered) if covered else check(force=True)
+    if result is None:
+        return [], None
+    stamp = publication_time(result.published_at)
+    container_id = result.cv_id or result.container_id
+    coverage = CollectionCoverage(container_id=container_id, published_at=stamp) if stamp and container_id else None
+    return [ref for link in dict.fromkeys(result.activity_links) for ref in references(link)], coverage
 
 
-def _check_collection(client, mid, publish):
-    pending = deque((ref, 1) for ref in _collection_references(mid))
+def _check_collection(client, mid, publish, covered=None):
+    refs, coverage = _collection_references(mid, covered)
+    pending = deque((ref, 1) for ref in refs)
     seen = set()
     retry = None
     while pending:
@@ -245,10 +287,11 @@ def _check_collection(client, mid, publish):
             pending.extend((link, depth + 1) for link in links)
     if retry is not None:
         raise retry
+    return coverage
 
 
 def execute(task: Task, cache_path: Path, get_analysis, put_analysis, *, two_stage=True, publish=None,
-            collection_mode=None, publish_references=None) -> Report:
+            collection_mode=None, publish_references=None, watch_coverage=None) -> Report:
     result = {"task_id": task.task_id, "lease": task.lease, "outcome": "done"}
     client = WorkClient(cache_path, get_analysis, put_analysis)
     try:
@@ -256,23 +299,23 @@ def execute(task: Task, cache_path: Path, get_analysis, put_analysis, *, two_sta
             result.update(_search(client, task))
         elif task.kind == "watch":
             result["activities"] = activities = []
+            watch_coverage = watch_coverage or {}
+            covered_through = watch_coverage.get("dynamics", 0)
+            covered_collection = watch_coverage.get("collection")
             if collection_mode:
-                refs = _collection_references(task.key)
+                refs, result["watch_collection"] = _collection_references(task.key, covered_collection)
                 for start in range(0, len(refs), 120):
                     publish_references(refs[start:start + 120])
-                if collection_mode == "collection_and_dynamics":
-                    _check_watched_author(client, task.key, activities, publish=publish)
             elif publish:
-                source_error = None
                 try:
-                    _check_collection(client, task.key, publish)
-                except (RetryCheck, httpx.HTTPError, RuntimeError) as exc:
-                    source_error = exc
-                _check_watched_author(client, task.key, activities, publish=publish)
-                if source_error:
-                    raise source_error
-            else:
-                _check_watched_author(client, task.key, activities)
+                    result["watch_collection"] = _check_collection(client, task.key, publish, covered_collection)
+                except (RetryCheck, httpx.HTTPError, RuntimeError):
+                    _check_watched_author(client, task.key, activities, publish=publish, covered_through=covered_through)
+                    raise
+            if collection_mode != "collection_only":
+                result["watch_through"] = _check_watched_author(
+                    client, task.key, activities, publish=publish, covered_through=covered_through,
+                )
         elif task.kind == "video" and two_stage:
             activities = []
             result["activities"] = activities

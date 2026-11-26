@@ -62,6 +62,9 @@ class ControlStore:
                     id TEXT PRIMARY KEY, saved_at INTEGER NOT NULL, payload TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS discovery_checkpoints_age ON discovery_checkpoints(saved_at);
+                CREATE TABLE IF NOT EXISTS discovery_search_coverage (
+                    keyword TEXT PRIMARY KEY, published_at INTEGER NOT NULL
+                );
             """)
 
     def connect(self):
@@ -138,7 +141,16 @@ class ControlStore:
             db.execute("INSERT INTO discovery_checkpoints VALUES(?,?,?) "
                        "ON CONFLICT(id) DO UPDATE SET saved_at=excluded.saved_at,payload=excluded.payload",
                        (checkpoint_id, now, json.dumps(state, ensure_ascii=False)))
+            if state.get("completed_search_coverage"):
+                db.executemany("""INSERT INTO discovery_search_coverage VALUES(?,?)
+                                  ON CONFLICT(keyword) DO UPDATE SET
+                                  published_at=max(published_at,excluded.published_at)""",
+                               state["completed_search_coverage"].items())
             db.execute("DELETE FROM discovery_checkpoints WHERE saved_at<?", (now - 7 * 86400,))
+
+    def discovery_search_coverage(self) -> dict[str, int]:
+        with self.transaction() as db:
+            return dict(db.execute("SELECT keyword,published_at FROM discovery_search_coverage"))
 
     def discovery_video_count(self) -> int:
         with self.transaction() as db:

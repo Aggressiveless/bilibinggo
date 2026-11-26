@@ -12,6 +12,7 @@ from datetime import datetime
 import httpx
 
 from src import lottery_discovery as d
+from src.discovery_coverage import ordered_page_times, publication_time, search_page_exhausted
 from src.discovery_video_audit import audit_note, snapshot_video_checks, video_title
 
 AUTHOR_SEARCH_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space/search"
@@ -156,10 +157,11 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                   candidate_limit=9, known_ids=None, joined_ids=None, author_dynamic_limit=2,
                   resume=True, replay_completed=True, on_progress=None, on_video_page=None, collect_followers=False,
                   target_new_videos=None, known_bvids=None, checkpoint_state=None, checkpoint_batches=False,
-                  review_deferred=False, screen_videos=False):
+                  review_deferred=False, screen_videos=False, search_cutoffs=None):
     now = int(time.time()) if now is None else now
     known_ids, joined_ids = set(known_ids or []), set(joined_ids or [])
     known_bvids = set(known_bvids or [])
+    search_cutoffs = search_cutoffs or {}
     if target_new_videos is not None:
         video_limit = target_new_videos
     cache = getattr(client, "cache", {})
@@ -425,9 +427,30 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             if d.api_code(response) != 0 or not isinstance(response.get("data"), dict):
                 raise RuntimeError(f"视频搜索未返回有效结果（业务码 {d.api_code(response)}）")
             seen = {row["bvid"] for row in state["videos"]}
-            page = [row for row in response["data"].get("result") or [] if d.BV_RE.fullmatch(str(row.get("bvid") or ""))]
+            data = response["data"]
+            page = [row for row in data.get("result") or [] if isinstance(row, dict)
+                    and d.BV_RE.fullmatch(str(row.get("bvid") or ""))]
+            if not comprehensive_page:
+                if page_number == 1:
+                    state["timed_search"] = {"cutoff": search_cutoffs.get(word, 0), "ordered": True}
+                timed = state.get("timed_search", {})
+                cutoff = timed.get("cutoff", 0)
+                timestamps = [publication_time(row.get("pubdate")) for row in page]
+                page_times = ordered_page_times(timestamps, now, timed.get("oldest"))
+                if page and page_times is None:
+                    timed["ordered"] = False
+                elif page_times is not None:
+                    newest, timed["oldest"] = page_times
+                    timed.setdefault("newest", newest)
+                covered = bool(timed.get("ordered") and page_times and page_times[0] < cutoff)
+                eligible_page = [row for row, stamp in zip(page, timestamps) if stamp is None or stamp >= cutoff]
+            else:
+                timed = {}
+                covered = False
+                eligible_page = page
             accepted = []
-            for row in page:
+            overflow = False
+            for row in eligible_page:
                 identifier = row["bvid"]
                 if target_new_videos is not None and (identifier in seen or identifier in known_bvids):
                     state["duplicates_skipped"] = state.get("duplicates_skipped", 0) + 1
@@ -436,9 +459,11 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                     state["videos"].append(row)
                     seen.add(identifier)
                     accepted.append(row)
+                elif identifier not in seen:
+                    overflow = True
             video_page = {
                 "videos": [{"bvid": row["bvid"], "title": video_title(row.get("title"))}
-                           for row in (accepted if target_new_videos is not None else page)],
+                           for row in (accepted if target_new_videos is not None else eligible_page)],
                 "id": f"{capture_id}:{state['search_index']}:{page_number}",
             }
             if on_video_page:
@@ -448,14 +473,18 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
             signature = [row["bvid"] for row in page]
             repeated = signature == state.get("last_page_bvids")
             state["last_page_bvids"] = signature
-            pages = response["data"].get("numPages")
+            pages = data.get("numPages")
             exhausted = not page or (isinstance(pages, (int, float)) and page_number >= pages)
             # Some endpoints repeat the last page without pagination metadata.
-            exhausted = exhausted or (pages is None and repeated)
+            exhausted = exhausted or covered or (pages is None and repeated)
+            if (timed.get("ordered") and timed.get("newest") and not overflow and not repeated
+                    and (covered or search_page_exhausted(data, page_number))):
+                state.setdefault("search_coverage_candidates", {})[word] = timed["newest"]
             if target_new_videos is None or exhausted:
                 state["search_index"] += 1
                 state["search_page"] = 1
                 state.pop("last_page_bvids", None)
+                state.pop("timed_search", None)
             else:
                 state["search_page"] = page_number + 1
             emit(f"已收集新视频 {len(state['videos'])}/{video_limit}" if target_new_videos else f"已读取 {len(state['videos'])} 个视频",
@@ -586,6 +615,13 @@ def discover_page(client, keywords, *, video_limit=36, now=None, comprehensive_p
                 emit(f"读取发布者粉丝数 {index}/{len(publishers)}")
                 followers_for(uid)
         state["done"] = state["verify_index"] == len(state["tasks"])
+        unresolved_sources = any((task.get("audit") or {}).get("status") == "pending"
+                                 for tasks in (state["source_tasks"], state["tasks"]) for task in tasks)
+        unresolved_videos = any(note["status"] == "pending" for detail in scan_notes.values()
+                                for note in detail.get("notes", []))
+        if (state["done"] and state["source_index"] == len(state["source_tasks"])
+                and not state["errors"] and not unresolved_sources and not unresolved_videos):
+            state["completed_search_coverage"] = state.get("search_coverage_candidates", {})
         if target_new_videos is not None and state["done"]:
             completion = "target_reached" if state["scan_index"] >= video_limit else "search_exhausted"
     except d.DiscoveryStopped as exc:
