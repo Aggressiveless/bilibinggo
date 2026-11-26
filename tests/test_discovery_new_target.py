@@ -34,6 +34,51 @@ class PaginatedClient:
         return {"code": 0, "data": {"owner": {}}}
 
 
+def test_time_search_persists_per_keyword_cutoff_and_skips_old_pages(tmp_path):
+    class DatedClient(PaginatedClient):
+        def __init__(self, pages):
+            super().__init__()
+            self.pages = pages
+
+        def read(self, url, params, **kwargs):
+            self.calls.append((url, params))
+            self.request_count += 1
+            if url == d.SEARCH_URL:
+                return {"code": 0, "data": {"numPages": len(self.pages), "result": [
+                    {"bvid": bv(index), "pubdate": published} for index, published in self.pages[params["page"] - 1]
+                ]}}
+            assert url == d.VIDEO_URL
+            return {"code": 0, "data": {"title": "今天散步", "owner": {}}}
+
+    def discover(store, client, *, comprehensive=False, target=10):
+        def publish(snapshot):
+            store.save_discovery_checkpoint("timed", snapshot["checkpoint_state"], job_id=1, report={},
+                                            checks=snapshot["video_checks"], video_page=snapshot["video_page"])
+
+        return discover_page(client, ["抽奖"], target_new_videos=target, now=1000,
+                             known_bvids=store.discovery_video_ids(), comprehensive_page=comprehensive,
+                             candidate_limit=0, screen_videos=True, search_cutoffs=store.discovery_search_coverage(),
+                             on_progress=publish, checkpoint_batches=True)
+
+    store = ControlStore(tmp_path)
+    partial = discover(store, DatedClient([[(0, 800), (1, 700)]]), target=1)
+    assert partial["completion_reason"] == "target_reached"
+    assert store.discovery_search_coverage() == {}
+    first = discover(store, DatedClient([[(0, 800)], [(1, 700)]]))
+    assert first["search_exhausted"]
+    store = ControlStore(tmp_path)
+    assert store.discovery_search_coverage() == {"抽奖": 800}
+    later = DatedClient([[(2, 900), (3, 800), (4, 750)], [(5, 700)], [(6, 650)]])
+    result = discover(store, later)
+    assert result["new_videos_checked"] == 2
+    assert [params["page"] for url, params in later.calls if url == d.SEARCH_URL] == [1, 2]
+    assert [params["bvid"] for url, params in later.calls if url == d.VIDEO_URL] == [bv(2), bv(3)]
+    assert store.discovery_search_coverage() == {"抽奖": 900}
+    ranked = DatedClient([[(4, 750)], [(5, 700)]])
+    assert discover(store, ranked, comprehensive=True)["new_videos_checked"] == 2
+    assert store.discovery_search_coverage() == {"抽奖": 900}
+
+
 @pytest.mark.parametrize("comprehensive", [False, True])
 def test_100_new_bvs_skip_existing_and_cross_page_duplicates(tmp_path, comprehensive):
     store = ControlStore(tmp_path)

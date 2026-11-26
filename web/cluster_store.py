@@ -12,9 +12,10 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from src.discovery_coverage import ordered_page_times
 from web.activity_service import collection_source_for_mid
 from web.cluster_protocol import (Activity, Analysis, Change, DispatchSettings, Exchange, Feed, KEYWORDS, Lease,
-                                  PAGE_SIZE, Register, RenameNode, Report, TARGET, Task, WATCH_LINK_DEPTH, WatchAssignment,
+                                  PAGE_SIZE, Reference, Register, RenameNode, Report, TARGET, Task, WATCH_LINK_DEPTH, WatchAssignment,
                                   WatchBatch, WatchFindings, WorkAssignments)
 
 LEASE_SECONDS = 120
@@ -28,6 +29,8 @@ EVENT_RETENTION = 2000
 RECENT_EVENTS = 80
 DETECTIONS_PER_PAGE = 10
 TRACKED_USERS_PER_PAGE = 12
+WATCH_VERIFIED_TTL = 7 * 86400
+WATCH_FAILED_TTL = 6 * 3600
 JOB_LABEL = {"search": "检索", "video": "视频检查", "watch_ref": "合集线索核验", "dynamic": "动态核验",
              "article": "专栏检查", "short": "短链展开", "author": "发布者检查", "watch": "追踪 UP 主"}
 RETRY_LABEL = {"platform": "平台内容暂不可读", "model": "模型未返回有效结果",
@@ -97,6 +100,9 @@ class ClusterStore:
                     attempts INTEGER NOT NULL DEFAULT 0, UNIQUE(round,kind,key)
                 );
                 CREATE INDEX IF NOT EXISTS jobs_ready ON jobs(round,state,due,id);
+                CREATE INDEX IF NOT EXISTS watch_ref_identity ON jobs(
+                    json_extract(params,'$.reference_kind'),json_extract(params,'$.target'),state
+                ) WHERE round=0 AND kind='watch_ref';
                 CREATE TABLE IF NOT EXISTS analyses(
                     key TEXT PRIMARY KEY, lease TEXT NOT NULL, until INTEGER NOT NULL, fields TEXT
                 );
@@ -111,6 +117,10 @@ class ClusterStore:
                 );
                 CREATE INDEX IF NOT EXISTS watch_sources_mid ON watch_sources(mid);
                 CREATE TABLE IF NOT EXISTS watch_checks(mid TEXT PRIMARY KEY, checked INTEGER, hits INTEGER);
+                CREATE TABLE IF NOT EXISTS watch_ref_results(
+                    kind TEXT NOT NULL, target TEXT NOT NULL, expires INTEGER NOT NULL, payload TEXT,
+                    PRIMARY KEY(kind,target)
+                );
                 CREATE TABLE IF NOT EXISTS sightings(
                     round INTEGER, job INTEGER, kind TEXT, key TEXT,
                     PRIMARY KEY(round,job,kind,key)
@@ -244,7 +254,8 @@ class ClusterStore:
                 raise ClusterError("请先退出当前集群")
             for table in ("nodes", "catalog", "jobs", "checked_videos", "sightings", "analyses",
                           "cluster_events", "cluster_node_round", "cluster_video_results", "node_history",
-                          "node_video_history", "node_detection_totals", "node_local_work", "watch_sources", "watch_checks"):
+                          "node_video_history", "node_detection_totals", "node_local_work", "watch_sources", "watch_checks",
+                          "watch_ref_results"):
                 db.execute(f"DELETE FROM {table}")
             session = {"role": "host", "name": name, "address": address, "id": uuid.uuid4().hex,
                        "node": uuid.uuid4().hex, "token": secrets.token_hex(32)}
@@ -439,7 +450,7 @@ class ClusterStore:
                       origin=excluded.origin,checked=excluded.checked""",
                    (activity.dynamic_id, seq, payload, rank, now if activity.closed else expires, origin, now))
 
-    def _retry(self, db, job, now, *, delay, reason):
+    def _retry(self, db, job, now, *, delay, reason, remember_watch_failure=False):
         if job["kind"] == "video" and db.execute("SELECT 1 FROM checked_videos WHERE id=?", (job["key"],)).fetchone():
             db.execute("UPDATE jobs SET state='skipped',node=NULL,lease=NULL,until=0 WHERE id=?", (job["id"],))
             return
@@ -460,6 +471,8 @@ class ClusterStore:
                 return
         db.execute("UPDATE jobs SET state=?,node=NULL,lease=NULL,until=0,due=? WHERE id=?",
                    ("failed" if failed else "pending", now + delay, job["id"]))
+        if failed and job["kind"] == "watch_ref" and remember_watch_failure:
+            self._save_watch_ref(db, json.loads(job["params"]), now)
         result = "已达到重试上限" if failed else f"{delay} 秒后可重试" if delay else "已重新排队"
         self._event(db, now, f"{self._job_label(job)}：{reason}，{result}",
                     node=job["node"], level="error" if failed else "warning")
@@ -485,13 +498,49 @@ class ClusterStore:
                 (parent["id"], ref.key),
             ).fetchone():
                 continue
-            self._queue(db, 0, "watch_ref", f"{parent['id']}:{ref.kind}:{ref.key}", watch_id=parent["id"],
-                        mid=parent["key"], reference_kind=ref.kind, target=ref.key, depth=depth)
+            key = f"{parent['id']}:{ref.kind}:{ref.key}"
+            params = {"watch_id": parent["id"], "mid": parent["key"], "reference_kind": ref.kind,
+                      "target": ref.key, "depth": depth}
+            db.execute("""INSERT INTO jobs(round,kind,key,params) VALUES(0,'watch_ref',?,?)
+                          ON CONFLICT(round,kind,key) DO UPDATE SET params=excluded.params,
+                          state=CASE WHEN jobs.state='done' THEN 'pending' ELSE jobs.state END
+                          WHERE jobs.state IN ('pending','leased','done')
+                            AND json_extract(jobs.params,'$.depth')>json_extract(excluded.params,'$.depth')""",
+                       (key, _dump(params)))
 
     @staticmethod
     def _watch_refs(db, job_id):
         return dict(db.execute("""SELECT state,count(*) FROM jobs WHERE round=0 AND kind='watch_ref'
                                  AND json_extract(params,'$.watch_id')=? GROUP BY state""", (job_id,)))
+
+    @staticmethod
+    def _save_watch_ref(db, params, now, report=None):
+        payload = None if report is None else _dump({
+            "references": [ref.model_dump() for ref in report.references],
+            "activities": [activity.dynamic_id for activity in report.activities if not activity.closed],
+        })
+        expires = now + (WATCH_FAILED_TTL if report is None else WATCH_VERIFIED_TTL)
+        db.execute("""INSERT INTO watch_ref_results VALUES(?,?,?,?) ON CONFLICT(kind,target) DO UPDATE SET
+                      expires=excluded.expires,payload=excluded.payload""",
+                   (params["reference_kind"], params["target"], expires, payload))
+
+    def _reuse_watch_ref(self, db, job, now):
+        params = json.loads(job["params"])
+        cached = db.execute("SELECT payload FROM watch_ref_results WHERE kind=? AND target=? AND expires>?",
+                            (params["reference_kind"], params["target"], now)).fetchone()
+        if cached is None:
+            return False
+        parent = db.execute("SELECT * FROM jobs WHERE id=?", (params["watch_id"],)).fetchone()
+        payload = json.loads(cached["payload"]) if cached["payload"] is not None else None
+        if payload is not None:
+            db.execute("""INSERT OR IGNORE INTO sightings(round,job,kind,key)
+                          SELECT 0,?,'open_activity',id FROM catalog
+                          WHERE expires>? AND id IN (SELECT value FROM json_each(?))""",
+                       (parent["id"], now, _dump(payload["activities"])))
+            self._queue_watch_refs(db, parent, [Reference.model_validate(ref) for ref in payload["references"]],
+                                   params["depth"] + 1)
+        db.execute("UPDATE jobs SET state=? WHERE id=?", ("failed" if payload is None else "done", job["id"]))
+        return True
 
     def _complete_watch(self, db, job, now, *, node=None, failed=False):
         hits = db.execute("SELECT count(*) FROM sightings WHERE round=0 AND job=? AND kind='open_activity'",
@@ -500,6 +549,11 @@ class ClusterStore:
                    ("failed" if failed else "done", job["id"]))
         db.execute("""INSERT INTO watch_checks VALUES(?,?,?) ON CONFLICT(mid) DO UPDATE SET
                       checked=excluded.checked,hits=excluded.hits""", (job["key"], now, hits))
+        if not failed and (collection := json.loads(job["params"]).get("collection_coverage")):
+            key = f"watch_coverage:{job['key']}"
+            coverage = self.get(db, key, {})
+            if collection["published_at"] >= coverage.get("collection", {}).get("published_at", 0):
+                self.put(db, key, {**coverage, "collection": collection})
         message = "部分线索核验失败" if failed else "完成"
         self._event(db, now, f"{self._job_label(job)}{message}，核验 {hits} 项开放活动",
                     node=node, level="warning" if failed else "info")
@@ -557,9 +611,11 @@ class ClusterStore:
             return
         if report.outcome == "retry":
             self._retry(db, job, now, delay=30 * 2 ** (job["attempts"] - 1),
-                        reason=RETRY_LABEL.get(report.reason, "任务未能完成"))
+                        reason=RETRY_LABEL.get(report.reason, "任务未能完成"),
+                        remember_watch_failure=report.reason in {"dynamic_detail", "dynamic_body", "source_response"})
             return
         if kind == "watch_ref":
+            self._save_watch_ref(db, params, now, report)
             if parent:
                 self._queue_watch_refs(db, parent, report.references, params["depth"] + 1)
             db.execute("UPDATE jobs SET state='done',node=NULL,lease=NULL,until=0 WHERE id=?", (job["id"],))
@@ -567,6 +623,13 @@ class ClusterStore:
             return
         if kind == "watch":
             params = json.loads(job["params"])
+            coverage_key = f"watch_coverage:{job['key']}"
+            coverage = self.get(db, coverage_key, {})
+            if report.watch_through and coverage.get("dynamics", 0) < report.watch_through <= now:
+                self.put(db, coverage_key, {**coverage, "dynamics": report.watch_through})
+            if report.watch_collection and report.watch_collection.published_at <= now:
+                params["collection_coverage"] = report.watch_collection.model_dump()
+                db.execute("UPDATE jobs SET params=? WHERE id=?", (_dump(params), job["id"]))
             if params.get("legacy_batch_check") and collection_source_for_mid(job["key"]):
                 params.update(legacy_batch_check=False, collection_pending=True)
                 db.execute("""UPDATE jobs SET params=?,state='pending',node=NULL,lease=NULL,until=0,due=0,attempts=0
@@ -580,7 +643,8 @@ class ClusterStore:
                 db.execute("UPDATE jobs SET state='checking',node=NULL,lease=NULL,until=0 WHERE id=?", (job["id"],))
                 self._event(db, now, f"合集已读出 {sum(refs.values())} 条线索，交由追踪节点核验", node=node)
             else:
-                self._complete_watch(db, job, now, node=node)
+                completed = db.execute("SELECT * FROM jobs WHERE id=?", (job["id"],)).fetchone()
+                self._complete_watch(db, completed, now, node=node)
             return
         round_id = job["round"]
         db.execute("UPDATE jobs SET state='done',node=NULL,lease=NULL,until=0 WHERE id=?", (job["id"],))
@@ -600,7 +664,8 @@ class ClusterStore:
         if kind == "search":
             params = json.loads(job["params"])
             before = self._video_count(db, round_id)
-            self._add_videos(db, job, report)
+            cutoff = self.get(db, f"search_coverage:{params['keyword']}", 0) if params["order"] == "pubdate" else 0
+            overflow = self._add_videos(db, job, report, cutoff)
             count = self._video_count(db, round_id)
             new_videos = count - before
             summary = f"返回 {len(report.references)} 个视频，去重后收录 {new_videos} 个"
@@ -610,7 +675,12 @@ class ClusterStore:
             ).fetchone()
             repeated = previous and not db.execute("""SELECT key FROM sightings WHERE job=? AND kind='video'
                 EXCEPT SELECT key FROM sightings WHERE job=? AND kind='video'""", (job["id"], previous["id"])).fetchone()
-            if report.more_pages and not repeated and params["page"] < SEARCH_PAGE_LIMIT:
+            covered = params["order"] == "pubdate" and self._record_search_page(
+                db, job, params, report, now, cutoff, overflow or bool(repeated),
+            )
+            if covered:
+                summary += "，到达已覆盖时间边界"
+            if report.more_pages and not repeated and not covered and params["page"] < SEARCH_PAGE_LIMIT:
                 params["page"] += 1
                 next_key = f"{params['order']}:{params['keyword']}:{params['page']}"
                 self._queue(db, round_id, "search", next_key, **params)
@@ -628,19 +698,58 @@ class ClusterStore:
         return db.execute("SELECT count(*) FROM jobs WHERE round=? AND kind='video' AND state<>'skipped'",
                           (round_id,)).fetchone()[0]
 
-    def _add_videos(self, db, job, report):
+    def _add_videos(self, db, job, report, cutoff):
         round_id = job["round"]
         remaining = TARGET - self._video_count(db, round_id)
+        overflow = False
+        dates = report.search_dates or {}
         for ref in report.references:
             if ref.kind != "video":
                 continue
             db.execute("INSERT OR IGNORE INTO sightings VALUES(?,?,?,?)", (round_id, job["id"], ref.kind, ref.key))
-            if remaining <= 0 or db.execute("SELECT 1 FROM checked_videos WHERE id=?", (ref.key,)).fetchone():
+            if ref.key in dates and dates[ref.key] < cutoff:
+                continue
+            if db.execute("SELECT 1 FROM checked_videos WHERE id=?", (ref.key,)).fetchone():
+                continue
+            if remaining <= 0:
+                if not db.execute("SELECT 1 FROM jobs WHERE round=? AND kind='video' AND key=?",
+                                  (round_id, ref.key)).fetchone():
+                    overflow = True
                 continue
             if db.execute("INSERT OR IGNORE INTO jobs(round,kind,key,params) VALUES(?,'video',?,'{}')",
                           (round_id, ref.key)).rowcount:
                 remaining -= 1
                 db.execute("INSERT OR IGNORE INTO sightings VALUES(?,?,'collected',?)", (round_id, job["id"], ref.key))
+        return overflow
+
+    def _record_search_page(self, db, job, params, report, now, cutoff, interrupted):
+        key = f"search_scan:{params['keyword']}"
+        state = {"round": job["round"], "page": 0} if params["page"] == 1 else self.get(db, key, {})
+        dates = report.search_dates
+        if (interrupted or dates is None or state.get("round") != job["round"]
+                or state.get("page") != params["page"] - 1):
+            self.put(db, key, {})
+            return False
+        timestamps = [dates.get(ref.key) for ref in report.references if ref.kind == "video"]
+        page_times = ordered_page_times(timestamps, now, state.get("oldest"))
+        if timestamps and page_times is None:
+            self.put(db, key, {})
+            return False
+        if page_times is not None:
+            newest, state["oldest"] = page_times
+            state.setdefault("newest", newest)
+        covered = bool(page_times is not None and page_times[0] < cutoff)
+        state.update(page=params["page"], complete=covered or (report.search_exhausted is True and not report.more_pages))
+        self.put(db, key, state)
+        return covered
+
+    def _commit_search_coverage(self, db, round_id):
+        for keyword in KEYWORDS:
+            state = self.get(db, f"search_scan:{keyword}", {})
+            if state.get("round") == round_id and state.get("complete") and (newest := state.get("newest")):
+                key = f"search_coverage:{keyword}"
+                if newest > self.get(db, key, 0):
+                    self.put(db, key, newest)
 
     def _merge_history(self, db, node, batch, now):
         previous = db.execute("SELECT complete FROM node_history WHERE node=?", (node,)).fetchone()
@@ -750,6 +859,8 @@ class ClusterStore:
             return
         failed = db.execute("""SELECT count(*) FROM jobs WHERE round=? AND state='failed'
                                AND kind IN ('search','video')""", (round_id,)).fetchone()[0]
+        if not failed:
+            self._commit_search_coverage(db, round_id)
         self._event(db, now, f"第 {round_id} 轮结束，收录 {found}/{TARGET} 个视频，失败 {failed} 项",
                     level="warning" if failed else "info")
         self._begin_import(db, round_id, now, session)
@@ -808,12 +919,24 @@ class ClusterStore:
                      CASE WHEN json_extract(params,'$.collection_pending') THEN ? ELSE ? END))
             ORDER BY coalesce(json_extract(params,'$.collection_pending'),0),id LIMIT 1""",
             (now, node, batch.get("id"), preferred_modern, in_pool)).fetchone()
-        if job is None and in_pool and batch:
+        if job is not None or not in_pool or not batch:
+            return job, modern
+        # Drain cached results in batches so a large collection does not monopolize the write lock.
+        for _ in range(PAGE_SIZE):
             job = db.execute("""SELECT j.* FROM jobs j JOIN jobs parent ON parent.id=json_extract(j.params,'$.watch_id')
                 WHERE j.round=0 AND j.kind='watch_ref' AND j.state='pending' AND j.due<=?
                   AND parent.state='checking' AND json_extract(parent.params,'$.batch')=?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM jobs other JOIN jobs owner ON owner.id=json_extract(other.params,'$.watch_id')
+                    WHERE other.round=0 AND other.kind='watch_ref' AND owner.state='checking'
+                      AND (other.state='leased' OR (other.state='pending' AND other.id<j.id))
+                      AND json_extract(other.params,'$.reference_kind')=json_extract(j.params,'$.reference_kind')
+                      AND json_extract(other.params,'$.target')=json_extract(j.params,'$.target')
+                  )
                 ORDER BY j.id LIMIT 1""", (now, batch["id"])).fetchone()
-        return job, modern
+            if job is None or not self._reuse_watch_ref(db, job, now):
+                return job, modern
+        return None, modern
 
     def _claim(self, db, node, now, *, video_detection, watch_ready=False):
         phase = self.get(db, "phase")
@@ -945,10 +1068,21 @@ class ClusterStore:
         if not mids:
             raise ClusterError("集群尚无可追踪的 UP 主")
         batch = uuid.uuid4().hex
+        unresolved = db.execute("""SELECT owner.key AS mid,
+                json_extract(ref.params,'$.reference_kind') AS kind,
+                json_extract(ref.params,'$.target') AS target,
+                json_extract(ref.params,'$.depth') AS depth
+            FROM jobs ref JOIN jobs owner ON owner.id=json_extract(ref.params,'$.watch_id')
+            WHERE ref.round=0 AND ref.kind='watch_ref' AND ref.state='failed'""").fetchall()
+        db.execute("DELETE FROM watch_ref_results WHERE expires<=?", (now,))
         db.execute("DELETE FROM sightings WHERE round=0")
         db.execute("DELETE FROM jobs WHERE round=0 AND kind IN ('watch','watch_ref')")
         db.executemany("INSERT INTO jobs(round,kind,key,params) VALUES(0,'watch',?,?)",
                        ((mid, _dump({"batch": batch})) for mid in mids))
+        parents = {row["key"]: row for row in db.execute("SELECT * FROM jobs WHERE round=0 AND kind='watch'")}
+        for ref in unresolved:
+            if parent := parents.get(ref["mid"]):
+                self._queue_watch_refs(db, parent, [Reference(kind=ref["kind"], key=ref["target"])], ref["depth"])
         self.put(db, "watch_batch", {"id": batch, "nodes": nodes, "strict": strict})
         self._event(db, now, f"开始追踪全部 {len(mids)} 位 UP 主")
 
@@ -1007,6 +1141,8 @@ class ClusterStore:
                 params = json.loads(db.execute("SELECT params FROM jobs WHERE id=?", (task.task_id,)).fetchone()[0])
                 if mode := params.get("collection_mode"):
                     status["watch_collection_mode"] = mode
+                if coverage := self.get(db, f"watch_coverage:{task.key}"):
+                    status["watch_coverage"] = coverage
             return Feed(task=task, changes=changes, status=status)
 
     @staticmethod
@@ -1051,7 +1187,11 @@ class ClusterStore:
                 SELECT s.mid,min(s.name) AS name,json_group_array(n.name) AS sources
                 FROM watch_sources s JOIN nodes n ON n.id=s.node GROUP BY s.mid
                 ORDER BY name,s.mid LIMIT ? OFFSET ?
-            ) SELECT u.*, j.state, n.name AS assigned, w.checked, w.hits FROM users u
+            ) SELECT u.*, j.state, n.name AS assigned, w.checked, w.hits,
+                     (SELECT count(*) FROM jobs ref
+                      WHERE ref.round=0 AND ref.kind='watch_ref' AND ref.state='failed'
+                        AND json_extract(ref.params,'$.watch_id')=j.id) AS failed_refs
+              FROM users u
               LEFT JOIN jobs j ON j.round=0 AND j.kind='watch' AND j.key=u.mid
               LEFT JOIN nodes n ON n.id=coalesce(j.node,json_extract(j.params,'$.assigned'))
               LEFT JOIN watch_checks w ON w.mid=u.mid ORDER BY u.name,u.mid""",
@@ -1161,7 +1301,7 @@ class ClusterStore:
                 "round_keyword": keyword, "upcoming_keywords": self._upcoming_keywords(keyword),
                 "concurrency_limit": dispatch["concurrency"], "two_stage": True, "dispatch": dispatch,
                 "work_assignments": plan, "collection_paused": self.get(db, "collection_paused", False),
-                "node_rename_supported": True,
+                "node_rename_supported": True, "discovery_coverage": True,
                 "watch_tracking": True, "watch_batch_supported": True, "watch_link_workers": True, "watch_batch": batch,
                 "round_participation_supported": True,
                 "video_history": True,

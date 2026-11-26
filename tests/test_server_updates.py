@@ -37,7 +37,7 @@ def test_requests_require_server_admin_and_accept_a_single_pending_job(tmp_path,
     monkeypatch.setattr(server_update, "SERVER_UPDATE_ROOT", tmp_path)
     monkeypatch.setattr(update_routes, "SERVER_UPDATE_ROOT", tmp_path)
     monkeypatch.setattr(update_routes, "release_plan", lambda current, *, server: {
-        "current": current, "latest": "6.1.1.02", "available": True,
+        "current": current, "latest": "6.1.2.02", "available": True,
         "archive": "fixed-url", "checksums": "fixed-checksum",
     })
     app = FastAPI()
@@ -55,7 +55,7 @@ def test_requests_require_server_admin_and_accept_a_single_pending_job(tmp_path,
         }).status_code == 403
         headers["X-Binggo-Update-Admin"] = "a" * 64
         status = client.post("/api/updates/apply", headers=headers, json=payload).json()
-        assert status["update"]["target"] == "6.1.1.02"
+        assert status["update"]["target"] == "6.1.2.02"
         assert "token" not in (inbox / "request.json").read_text()
         plan = client.post("/api/updates/prepare", headers=headers).json()
         assert client.post("/api/updates/apply", headers=headers, json={"plan_id": plan["plan_id"]}).status_code == 409
@@ -64,12 +64,12 @@ def test_requests_require_server_admin_and_accept_a_single_pending_job(tmp_path,
 def test_rejects_links_in_systemd_package(systemd_worker, tmp_path):
     archive = tmp_path / "release.tar.gz"
     with tarfile.open(archive, "w:gz") as package:
-        item = tarfile.TarInfo("binggo-server-6.1.1.01/app")
+        item = tarfile.TarInfo("binggo-server-6.1.2.01/app")
         item.type = tarfile.SYMTYPE
         item.linkname = "outside"
         package.addfile(item)
     with pytest.raises(systemd_worker.UpdateError):
-        systemd_worker.extract_release(archive, tmp_path / "stage", "6.1.1.01")
+        systemd_worker.extract_release(archive, tmp_path / "stage", "6.1.2.01")
     assert not (tmp_path / "stage").exists()
 
 
@@ -97,7 +97,7 @@ def test_systemd_switch_preserves_or_restores_data_and_environment(systemd_worke
     monkeypatch.setattr(worker, "systemctl", actions.append)
 
     def verify(version, cluster=""):
-        if version == "6.1.1":
+        if version == "6.1.1.01":
             assert (data / "activity.db").read_text() == "before"
             return True
         assert cluster == "member"
@@ -111,7 +111,7 @@ def test_systemd_switch_preserves_or_restores_data_and_environment(systemd_worke
     phases = []
     dashboard = SimpleNamespace(verify=verify, worker=actions.append)
     result = worker.switch(dashboard, lambda phase, message, **kw: phases.append(phase), state, work,
-                           install / "new", install / "new-venv", "6.1.1", "6.1.1.01", "member")
+                           install / "new", install / "new-venv", "6.1.1.01", "6.1.2.01", "member")
     assert result == valid
     assert not (state / "hold").exists()
     assert (data / "activity.db").read_text() == "before"

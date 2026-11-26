@@ -2,14 +2,14 @@
   <img src="docs/images/logo.svg" alt="Binggo" width="80" height="80">
 </p>
 
-<h1 align="center">Binggo 6.1.1.01 集群版</h1>
+<h1 align="center">Binggo 6.1.2.01 集群版</h1>
 
 <p align="center">
   B 站抽奖助手 · 发现、核验、分享与参与活动
 </p>
 
 <p align="center">
-  <a href="https://github.com/Aggressiveless/bilibinggo/releases/tag/v6.1.1.01"><b>下载集群版</b></a>
+  <a href="https://github.com/Aggressiveless/bilibinggo/releases/tag/v6.1.2.01"><b>下载集群版</b></a>
   &nbsp;·&nbsp;
   <a href="#开始使用"><b>开始使用</b></a>
   &nbsp;·&nbsp;
@@ -20,37 +20,40 @@
 
 Binggo 可以从 UP 主合集、追踪动态和视频检索中发现抽奖活动。单台电脑可独立完成检索、核验、导入和参与。多台电脑也可以组成工作集群，共享已看视频记录和活动目录，分工检索与检测。
 
-本版本由 Aggressiveless 从 [Komerser 的 6.1.1 集群版](https://github.com/Komerser/bilibinggo/releases/tag/v6.1.1) 派生。原项目为 victor 的 [bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
+本版本由 Aggressiveless 从 [Komerser 的 6.1.2 集群版](https://github.com/Komerser/bilibinggo/releases/tag/v6.1.2) 派生。原项目为 victor 的 [bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
 
-## 6.1.1.01 更新
+## 6.1.2.01 更新
 
-- Ubuntu systemd 控制台新增「更新此服务器」。确认后下载并校验正式版，等待当前任务结束，再备份、安装和重启。
-- 启动后校验运行版本、网页与原集群连接。验证失败时尝试恢复旧程序和升级前数据。
-- Windows 控制台新增「更新版本」。更新时保留 `user-data`，等待期间可取消。
-- 进度、备份和恢复结果保存在「日志 → 本机更新日志」，各节点独立维护自己的版本。
+- 保留上游 6.1.2 的检索时间边界、UP 主扫描进度、线索核验缓存及追踪统计。
+- Ubuntu systemd 支持「更新此服务器」，Windows 支持「更新版本」。确认后下载并校验正式版，等待任务结束后备份、安装并重启。
+- 新版启动验证失败时尝试恢复旧程序和升级前数据。更新结果可在「日志 → 本机更新日志」查看。
 
 ## 下载与升级
 
-| 平台 | 6.1.1.01 下载 |
+| 平台 | 6.1.2.01 下载 |
 | --- | --- |
-| Windows x64 | [安装包](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/Binggo-Setup-win64.exe) · [便携版](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/Binggo-Portable-win64.zip) |
-| Ubuntu | [部署包](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/Binggo-6.1.1.01-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/Binggo-6.1.1.01-ubuntu.tar.gz.sha256) |
-| 源码与校验 | [源码 ZIP](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/Binggo-6.1.1.01-source.zip) · [SHA256SUMS.txt](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.1.01/SHA256SUMS.txt) |
+| Windows x64 | [安装包](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.2.01/Binggo-Setup-win64.exe) · [便携版](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.2.01/Binggo-Portable-win64.zip) |
+| Ubuntu | [部署包](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.2.01/Binggo-6.1.2.01-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.2.01/Binggo-6.1.2.01-ubuntu.tar.gz.sha256) |
+| 源码与校验 | [源码 ZIP](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.2.01/Binggo-6.1.2.01-source.zip) · [SHA256SUMS.txt](https://github.com/Aggressiveless/bilibinggo/releases/download/v6.1.2.01/SHA256SUMS.txt) |
 
 Windows 运行安装包，或解压便携版后启动 `Binggo-RepostFix.exe`。控制台默认地址为 [127.0.0.1:8182](http://127.0.0.1:8182)。已有用户请先等任务结束，退出程序并备份原目录中的 `user-data`。更新程序文件后保留该目录，即可沿用登录、设置和历史。
 
 Ubuntu 部署包内含预构建前端和安装说明。Ubuntu 24.04 及以上可用 systemd 安装。
 
 ```bash
-sha256sum -c Binggo-6.1.1.01-ubuntu.tar.gz.sha256
-tar -xzf Binggo-6.1.1.01-ubuntu.tar.gz
-cd binggo-server-6.1.1.01
+sha256sum -c Binggo-6.1.2.01-ubuntu.tar.gz.sha256
+tar -xzf Binggo-6.1.2.01-ubuntu.tar.gz
+cd binggo-server-6.1.2.01
 sudo bash deploy.sh install
 ```
 
-已有 systemd 部署请等待运行中的任务结束，从解压目录执行 `sudo bash deploy.sh upgrade`，首次装入更新服务并保留 `/var/lib/binggo`。以后可在「概览 → 项目信息 → 更新此服务器」确认安装。管理员通过 SSH 查看本机更新口令，见 [版本更新说明](docs/local-version-update.md)。
-
 Ubuntu 22.04 可在 Docker Engine 和 Compose 就绪后运行 `sudo bash deploy.sh docker`。systemd 的数据目录为 `/var/lib/binggo`，Docker 使用部署目录下的 `user-data`。单人远程使用时可以通过 SSH 端口转发访问控制台。要让其他设备加入集群，请配置成员能够访问的 HTTPS 入口。 [主节点入口配置](docs/cluster.md#主服务器入口)
+
+### 一键版本更新
+
+Windows 发行包可在「概览 → 项目信息」选择「更新版本」。Ubuntu systemd 的同一位置提供「更新此服务器」。程序从正式 Releases 下载部署包，等待任务结束并备份，再切换版本。查看进度和结果请用「日志 → 本机更新日志」。已有 Ubuntu systemd 部署首次升级到带更新器的发行包时，先结束任务，再从新部署包的解压目录执行 `sudo bash deploy.sh upgrade`。 [版本更新说明](docs/local-version-update.md)
+
+已使用本 fork 6.1.1.01 的实例，可以直接在控制台更新到 6.1.2.01。
 
 ## 开始使用
 

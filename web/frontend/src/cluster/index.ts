@@ -16,7 +16,7 @@ type Node = {
   local_work?: "idle" | "watch" | "participating" | "busy" | null;
 };
 type WatchUser = { mid: string; name: string; sources: string[]; assigned: string | null;
-  state: string | null; checked: number | null; hits: number | null };
+  state: string | null; checked: number | null; hits: number | null; failed_refs?: number };
 type WatchPage = { items: WatchUser[]; page: number; pages: number; total: number };
 type QueuedPage = { page: number; state: "pending" | "leased"; node: string | null };
 type SearchTask = {
@@ -431,8 +431,19 @@ async function refreshWatch(page = watchPage) {
       const detail = document.createElement("p");
       detail.className = "caption";
       const progress = item.state ? states[item.state] : undefined;
-      detail.textContent = progress ? [progress, item.assigned].filter(Boolean).join(" · ") : item.checked
-        ? `${eventTime.format(item.checked * 1000)} 检查 · ${count(item.hits ?? undefined)} 项开放活动` : "尚未检查";
+      const hits = `${count(item.hits ?? undefined)} 项开放活动`;
+      if (item.state === "failed" && item.failed_refs) {
+        detail.textContent = `${count(item.failed_refs)} 条线索核验失败 · ${hits}`;
+      } else if (progress) {
+        detail.textContent = [progress, item.assigned].filter(Boolean).join(" · ");
+      } else if (item.checked) {
+        const summary = [`${eventTime.format(item.checked * 1000)} 检查`];
+        if (item.state === "done" && item.failed_refs === 0) summary.push("0 条线索核验失败");
+        summary.push(hits);
+        detail.textContent = summary.join(" · ");
+      } else {
+        detail.textContent = "尚未检查";
+      }
       content.append(link, sources, detail);
       row.append(content);
       return row;

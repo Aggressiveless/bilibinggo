@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from src.discovery_coverage import publication_time
+
 EXCLUDE_CONTEXT_RE = re.compile(r"上期传送门|本期完|\(本期完\)")
 OPUS_ID_RE = re.compile(r"/opus/(\d{18,19})")
 T_BILI_RE = re.compile(r"t\.bilibili\.com/(\d{19})")
@@ -44,6 +46,15 @@ class CheckResult:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def collection_already_checked(covered: dict | None, container_id: str, publication) -> bool:
+    if not covered:
+        return False
+    published_at = publication_time(publication)
+    return container_id == covered["container_id"] or (
+        published_at is not None and published_at < covered["published_at"]
+    )
 
 
 def commit_source_checkpoint(result: CheckResult) -> None:

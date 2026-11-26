@@ -343,7 +343,7 @@ class ClusterService:
         except ClusterError as exc:
             raise RetryCheck("追踪结果尚未同步", reason="network") from exc
 
-    def _execute(self, session, task, *, two_stage, watch_batch=False, collection_mode=None):
+    def _execute(self, session, task, *, two_stage, watch_batch=False, collection_mode=None, watch_coverage=None):
         def publish(activities):
             self._publish_watch(session, task, activities=activities)
 
@@ -354,7 +354,7 @@ class ClusterService:
                        lambda key: self._analysis(session, task, key),
                        lambda key, result: self._analysis(session, task, key, result),
                        two_stage=two_stage, publish=publish if watch_batch and task.kind == "watch" else None,
-                       collection_mode=collection_mode, publish_references=publish_references)
+                       collection_mode=collection_mode, publish_references=publish_references, watch_coverage=watch_coverage)
 
     def _history(self):
         from web.control_service import get_control_service
@@ -516,6 +516,9 @@ class ClusterService:
                 if payload[field] is None:
                     del payload[field]
             if pending_report := payload["report"]:
+                if not self.status_remote.get("discovery_coverage"):
+                    for field in ("search_dates", "search_exhausted", "watch_through", "watch_collection"):
+                        pending_report.pop(field, None)
                 if "events" not in self.status_remote:
                     pending_report.pop("reason", None)
                 elif (not self.status_remote.get("retry_detail") and
@@ -552,6 +555,8 @@ class ClusterService:
             if feed.task and not self.stop_event.is_set():
                 self._task, self._task_node = feed.task, node
                 options = {"collection_mode": feed.status["watch_collection_mode"]} if feed.status.get("watch_collection_mode") else {}
+                if feed.task.kind == "watch" and feed.status.get("watch_coverage"):
+                    options["watch_coverage"] = feed.status["watch_coverage"]
                 self._job = pool.submit(self._execute, session, feed.task, two_stage=bool(feed.status.get("two_stage")),
                                         watch_batch=watch_batch, **options)
             return feed

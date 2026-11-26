@@ -41,6 +41,8 @@ Docker 部署仍通过部署包手动升级。
 `packaging/windows/build.ps1` 已加入更新器、能力声明及独立校验文件的构建。
 Windows Release 工作流上传对应校验文件。首次安装这项功能仍需部署一次本地发行包。
 
+Ubuntu 打包在前端构建完成后运行 `python packaging/linux/build.py`。发布时上传生成的部署包及同名 `.sha256`。
+
 ## 开发和预览
 
 源码运行不会覆盖 Git 工作区。设置 `BINGGO_UPDATE_DEMO=1` 可以在页面预览成功和失败恢复；真实安装被禁用。
