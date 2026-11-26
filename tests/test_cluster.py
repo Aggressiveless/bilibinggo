@@ -39,6 +39,76 @@ def _report(task, **values):
     return Report(task_id=task.task_id, lease=task.lease, outcome="done", **values)
 
 
+def test_time_search_remembers_completed_coverage_and_stops_at_it_after_restart(tmp_path):
+    from web.cluster_protocol import KEYWORDS
+
+    store, host, _ = _cluster(tmp_path)
+    now = int(time.time())
+    first = _exchange(store, host, work=True).task
+    original = Reference(kind="video", key=BVID)
+    video = _exchange(store, host, work=True, video_detection=True, report=_report(
+        first, references=[original], search_dates={original.key: now - 60}, search_exhausted=True,
+    )).task
+    assert video.kind == "video"
+    key = f"search_coverage:{first.keyword}"
+    assert store.read(key) is None
+    next_search = _exchange(store, host, work=True, report=_report(video)).task
+    assert store.read(key) == now - 60
+
+    store = ClusterStore(tmp_path)
+    for _ in KEYWORDS[1:]:
+        assert next_search.keyword != first.keyword
+        next_search = _exchange(store, host, work=True, report=_report(
+            next_search, search_dates={}, search_exhausted=True,
+        )).task
+    assert next_search.keyword == first.keyword
+    above = Reference(kind="video", key="BV0000000001")
+    equal = Reference(kind="video", key="BV0000000002")
+    below = Reference(kind="video", key="BV0000000003")
+    older = Reference(kind="video", key="BV0000000004")
+    page_two = _exchange(store, host, work=True, report=_report(
+        next_search, references=[above, equal, below], more_pages=True,
+        search_dates={above.key: now - 10, equal.key: now - 60, below.key: now - 70},
+    )).task
+    assert page_two.kind == "search" and page_two.page == 2
+    collecting = _exchange(store, host, report=_report(
+        page_two, references=[older], more_pages=True, search_dates={older.key: now - 80},
+    ))
+    assert collecting.status["phase"] == "detecting"
+    assert collecting.status["counts"]["search"] == {"done": 2}
+    assert {row["key"] for row in collecting.status["video_queue"]} == {above.key, equal.key}
+    assert store.read(key) == now - 60
+
+
+@pytest.mark.parametrize("interruption", ["target", "worker_without_dates", "video_failed"])
+def test_incomplete_cluster_search_keeps_previous_time_boundary(tmp_path, monkeypatch, interruption):
+    from web import cluster_store
+
+    store, host, _ = _cluster(tmp_path)
+    now = int(time.time())
+    monkeypatch.setattr(time, "time", lambda: now)
+    monkeypatch.setattr(cluster_store, "TARGET", 1)
+    search = _exchange(store, host, work=True).task
+    key = f"search_coverage:{search.keyword}"
+    old_cutoff = now - 500
+    store.write(key, old_cutoff)
+    report = _report(search, references=[Reference(kind="video", key=BVID)],
+                     more_pages=interruption == "target", search_exhausted=interruption != "target",
+                     search_dates=None if interruption == "worker_without_dates" else {BVID: now - 50})
+    video = _exchange(store, host, work=True, video_detection=True, report=report).task
+    if interruption == "video_failed":
+        for delay in (30, 60, 120, 0):
+            _exchange(store, host, report=Report(
+                task_id=video.task_id, lease=video.lease, outcome="retry", reason="network",
+            ))
+            if delay:
+                now += delay
+                video = _exchange(store, host, work=True, video_detection=True).task
+    else:
+        _exchange(store, host, report=_report(video))
+    assert store.read(key) == old_cutoff
+
+
 def test_round_deduplicates_video_and_fans_out_activity(tmp_path):
     store, host, member = _cluster(tmp_path)
     first = _exchange(store, host, work=True).task
@@ -471,7 +541,8 @@ def test_legacy_watch_node_can_check_dynamics_and_modern_node_finishes_collectio
     assert store.tracked_users(1)["items"][0]["hits"] == 1
 
 
-def test_older_nodes_share_collection_links_while_active_discovery_is_paused(tmp_path):
+@pytest.mark.parametrize("final_reference_fails", [False, True])
+def test_older_nodes_share_collection_links_while_active_discovery_is_paused(tmp_path, monkeypatch, final_reference_fails):
     from web.cluster_protocol import WatchFindings, WorkAssignments
 
     store, host, first = _cluster(tmp_path)
@@ -516,10 +587,94 @@ def test_older_nodes_share_collection_links_while_active_discovery_is_paused(tmp
     next_task = _exchange(store, second, work=True, **ready,
                           report=_report(second_lease.task, references=[dynamic, next_link])).task
     assert (next_task.key, next_task.depth) == (next_link.key, 2)
-    complete = _exchange(store, second, **ready, report=_report(next_task))
-    assert complete.status["watch_batch"]["counts"] == {"done": 1}
-    assert complete.status["watch_batch"]["references"] == {"done": 3}
-    assert store.tracked_users(1)["items"][0]["hits"] == 2
+    if final_reference_fails:
+        now = int(time.time())
+        monkeypatch.setattr(time, "time", lambda: now)
+        for retry_delay in (30, 60, 120, 0):
+            complete = _exchange(store, second, **ready, report=Report(
+                task_id=next_task.task_id, lease=next_task.lease, outcome="retry", reason="dynamic_detail",
+            ))
+            if retry_delay:
+                assert store.tracked_users(1)["items"][0]["failed_refs"] == 0
+                now += retry_delay
+                next_task = _exchange(store, second, work=True, **ready).task
+        assert complete.status["watch_batch"]["counts"] == {"failed": 1}
+        assert complete.status["watch_batch"]["references"] == {"done": 2, "failed": 1}
+    else:
+        complete = _exchange(store, second, **ready, report=_report(next_task))
+        assert complete.status["watch_batch"]["counts"] == {"done": 1}
+        assert complete.status["watch_batch"]["references"] == {"done": 3}
+    result = store.tracked_users(1)["items"][0]
+    assert result["failed_refs"] == int(final_reference_fails)
+    assert result["hits"] == 2
+
+
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_watch_shares_reference_results_and_keeps_pending_links_across_batches(tmp_path, monkeypatch, unreadable):
+    from web.cluster_protocol import CollectionCoverage, WatchFindings
+    from web.cluster_store import WATCH_FAILED_TTL
+
+    now = int(time.time())
+    monkeypatch.setattr(time, "time", lambda: now)
+    store, host, member = _cluster(tmp_path)
+    ready = {"video_detection": True, "local_work": "idle", "watch_batch_capable": True, "watch_link_workers": True}
+    _exchange(store, host, **ready, watch_list={
+        "revision": uuid.uuid4().hex, "complete": True,
+        "users": [{"mid": "885439", "name": "甲"}, {"mid": "126038161", "name": "乙"}],
+    })
+    store.set_collection_paused(True)
+    ref = Reference(kind="dynamic", key=KEY)
+    published = now - 100
+
+    def prepare(refs):
+        store.start_watch()
+        leases = [_exchange(store, node, work=True, **ready) for node in (host, member)]
+        for node, feed in zip((host, member), leases):
+            task = feed.task
+            assert task.kind == "watch"
+            if refs:
+                store.publish_watch_findings(WatchFindings(
+                    node=node["node"], task_id=task.task_id, lease=task.lease, references=refs,
+                ), node["token"])
+            _exchange(store, node, **ready, report=_report(
+                task, watch_through=now - 20,
+                watch_collection=CollectionCoverage(container_id=task.key, published_at=published),
+            ))
+        return leases
+
+    prepare([ref])
+    task = _exchange(store, host, work=True, **ready).task
+    assert task.kind == "dynamic"
+    assert _exchange(store, member, work=True, **ready).task is None
+    if unreadable:
+        for delay in (30, 60, 120, 0):
+            _exchange(store, host, **ready, report=Report(
+                task_id=task.task_id, lease=task.lease, outcome="retry", reason="dynamic_detail",
+            ))
+            if delay:
+                assert _exchange(store, member, work=True, **ready).task is None
+                now += delay
+                task = _exchange(store, host, work=True, **ready).task
+    else:
+        _exchange(store, host, **ready, report=_report(task, activities=[_activity(prize="合集活动")]))
+    assert _exchange(store, member, work=True, **ready).task is None
+    _exchange(store, host, **ready)
+    rows = store.tracked_users(1)["items"]
+    assert [(row["hits"], row["failed_refs"]) for row in rows] == ([(0, 1)] * 2 if unreadable else [(1, 0)] * 2)
+
+    store = ClusterStore(tmp_path)
+    leases = prepare([] if unreadable else [ref])
+    for feed in leases:
+        coverage = feed.status["watch_coverage"]
+        assert coverage["dynamics"] == published + 80
+        assert ("collection" in coverage) == (not unreadable)
+    assert _exchange(store, member, work=True, **ready).task is None
+    _exchange(store, host, **ready)
+    assert [row["failed_refs"] for row in store.tracked_users(1)["items"]] == ([1, 1] if unreadable else [0, 0])
+    if unreadable:
+        now += WATCH_FAILED_TTL
+        prepare([])
+        assert _exchange(store, host, work=True, **ready).task.key == KEY
 
 
 def test_collection_assignment_controls_search_and_detection_and_preserves_leases(tmp_path):
@@ -672,6 +827,50 @@ def test_watch_worker_checks_recent_original_and_forwarded_dynamics(monkeypatch)
     cluster_work._check_watched_author(object(), "31", activities)
     assert set(seen) == {direct, forwarded}
     assert {entry.prize for entry in activities} == {direct, forwarded}
+
+
+@pytest.mark.parametrize("reaches_boundary", [True, False])
+def test_watch_feed_stops_at_complete_per_creator_boundary(monkeypatch, reaches_boundary):
+    from web import cluster_work
+
+    now, cutoff = 500_000, 200_000
+    monkeypatch.setattr(time, "time", lambda: now)
+
+    def forward(digit, published):
+        return {"type": "DYNAMIC_TYPE_FORWARD", "orig": {"id_str": digit * 18},
+                "modules": {"module_author": {"pub_ts": published}}}
+
+    first = {"items": [forward("1", now - 10), forward("2", cutoff), forward("3", cutoff - 1)],
+             "has_more": True, "offset": "next"}
+    second = {"items": [forward("4", cutoff - 2)], "has_more": True, "offset": "unused"}
+    fetch = Mock(side_effect=[first, second] if reaches_boundary else [{**first, "offset": ""}])
+    verify = Mock(return_value=([], []))
+    monkeypatch.setattr(cluster_work, "read_data", fetch)
+    monkeypatch.setattr(cluster_work, "_dynamic", verify)
+
+    covered = cluster_work._check_watched_author(object(), "31", [], covered_through=cutoff)
+    assert {call.args[1] for call in verify.call_args_list} == {"1" * 18, "2" * 18}
+    assert covered == (now - 10 if reaches_boundary else None)
+    assert fetch.call_count == (2 if reaches_boundary else 1)
+
+
+def test_watched_video_collection_skips_covered_detail_but_reads_new_id_at_boundary(monkeypatch):
+    from contextlib import nullcontext
+
+    from src.sources import ds1_xiaozhuli
+
+    client = Mock()
+    monkeypatch.setattr(ds1_xiaozhuli, "BilibiliClient", Mock(return_value=nullcontext(client)))
+    covered = {"container_id": BVID, "published_at": 100}
+    client.get_latest_video.return_value = {"bvid": BVID, "created": 100}
+    assert ds1_xiaozhuli.check_update(force=True, covered=covered) is None
+    client.get_latest_video.return_value = {"bvid": "BV0000000000", "created": 99}
+    assert ds1_xiaozhuli.check_update(force=True, covered=covered) is None
+    client.get_video_detail.assert_not_called()
+    client.get_latest_video.return_value["created"] = 100
+    client.get_video_detail.return_value = {"desc": "", "pubdate": 100}
+    assert ds1_xiaozhuli.check_update(force=True, covered=covered).container_id == "BV0000000000"
+    client.get_video_detail.assert_called_once_with("BV0000000000")
 
 
 def test_worker_search_and_linked_activity_without_account_actions(tmp_path, monkeypatch):
@@ -838,7 +1037,9 @@ def test_collection_watch_uses_existing_source_checks_and_publishes_each_match(m
     from web import cluster_service, cluster_work
     from web.actions import DS_HANDLER_BY_ID
 
-    check = Mock(return_value=Mock(activity_links=[f"https://t.bilibili.com/{KEY}"] * 2))
+    check = Mock(return_value=Mock(
+        activity_links=[f"https://t.bilibili.com/{KEY}"] * 2, published_at=10, cv_id=None, container_id=BVID,
+    ))
     monkeypatch.setitem(DS_HANDLER_BY_ID, "DS-1", (check, None))
     findings = [_activity(prize="合集活动")]
     follow = Mock(return_value=([], findings))

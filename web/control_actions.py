@@ -216,6 +216,7 @@ def discover(service, job_id, params, event, progress=None):
                           resume=params.get("resume", True), replay_completed=params.get("replay_completed", True),
                           checkpoint_state=checkpoint_state, checkpoint_batches=True,
                           review_deferred=review_deferred, screen_videos=target is not None,
+                          search_cutoffs={} if comprehensive else service.store.discovery_search_coverage(),
                           collect_followers=params.get("collect_followers", False), **target_options)
             rows = discovery_candidates([row for category in ("open", "review", "closed", "joined", "rejected", "source")
                                          for row in report.get(category, [])])

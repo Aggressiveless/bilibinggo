@@ -6,6 +6,7 @@ from pathlib import Path
 from src.bilibili_client import BilibiliClient
 from src.sources.common import (
     CheckResult,
+    collection_already_checked,
     extract_opus_links_with_hints,
     load_previous_output,
     opus_link,
@@ -18,10 +19,12 @@ MID = 3546776042736296
 OUTPUT_PATH = DATA_DIR / "output" / "ds5_latest.json"
 
 
-def check_update(*, force: bool = False) -> CheckResult:
+def check_update(*, force: bool = False, covered: dict | None = None) -> CheckResult | None:
     with BilibiliClient() as client:
         latest = client.get_latest_article(MID)
         cv_id = int(latest["id"])
+        if collection_already_checked(covered, str(cv_id), latest.get("publish_time")):
+            return None
         previous = get_last_container(SOURCE_ID)
         previous_cv = get_last_cv_id(SOURCE_ID)
 

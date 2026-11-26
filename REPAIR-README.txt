@@ -1,6 +1,6 @@
-﻿Binggo 6.1.1 集群版（Komerser fork）
+Binggo 6.1.2 集群版（Komerser fork）
 
-下载：https://github.com/Komerser/bilibinggo/releases/tag/v6.1.1
+下载：https://github.com/Komerser/bilibinggo/releases/tag/v6.1.2
 源码：https://github.com/Komerser/bilibinggo
 上游：https://github.com/luovicter-collab/bilibinggo
 
