@@ -2,20 +2,20 @@
   <img src="docs/images/logo.svg" alt="Binggo" width="80" height="80">
 </p>
 
-<h1 align="center">Binggo 6.1.0 集群版</h1>
+<h1 align="center">Binggo 6.1.1 集群版</h1>
 
 <p align="center">
   B 站抽奖助手 · 发现、核验、分享与参与活动
 </p>
 
 <p align="center">
-  <a href="https://github.com/Komerser/bilibinggo/releases/tag/v6.1.0"><b>下载集群版</b></a>
+  <a href="https://github.com/Komerser/bilibinggo/releases/tag/v6.1.1"><b>下载集群版</b></a>
   &nbsp;·&nbsp;
   <a href="#开始使用"><b>开始使用</b></a>
   &nbsp;·&nbsp;
   <a href="#工作集群"><b>工作集群</b></a>
   &nbsp;·&nbsp;
-  <a href="#603-到-610-更新概要"><b>更新概要</b></a>
+  <a href="CHANGELOG.md"><b>更新概要</b></a>
 </p>
 
 Binggo 可以从 UP 主合集、追踪动态和视频检索中发现抽奖活动。单台电脑可独立完成检索、核验、导入和参与。多台电脑也可以组成工作集群，共享已看视频记录和活动目录，分工检索与检测。
@@ -24,19 +24,19 @@ Binggo 可以从 UP 主合集、追踪动态和视频检索中发现抽奖活动
 
 ## 下载与升级
 
-| 平台 | 6.1.0 下载 |
+| 平台 | 6.1.1 下载 |
 | --- | --- |
-| Windows x64 | [安装包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.0/Binggo-Setup-win64.exe) · [便携版](https://github.com/Komerser/bilibinggo/releases/download/v6.1.0/Binggo-Portable-win64.zip) |
-| Ubuntu | [部署包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.0/Binggo-6.1.0-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Komerser/bilibinggo/releases/download/v6.1.0/Binggo-6.1.0-ubuntu.tar.gz.sha256) |
+| Windows x64 | [安装包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-Setup-win64.exe) · [便携版](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-Portable-win64.zip) |
+| Ubuntu | [部署包](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-6.1.1-ubuntu.tar.gz) · [SHA-256 校验文件](https://github.com/Komerser/bilibinggo/releases/download/v6.1.1/Binggo-6.1.1-ubuntu.tar.gz.sha256) |
 
 Windows 运行安装包，或解压便携版后启动 `Binggo-RepostFix.exe`。控制台默认地址为 [127.0.0.1:8182](http://127.0.0.1:8182)。已有用户请先等任务结束，退出程序并备份原目录中的 `user-data`。更新程序文件后保留该目录，即可沿用登录、设置和历史。
 
 Ubuntu 部署包内含预构建前端和安装说明。Ubuntu 24.04 及以上可用 systemd 安装。
 
 ```bash
-sha256sum -c Binggo-6.1.0-ubuntu.tar.gz.sha256
-tar -xzf Binggo-6.1.0-ubuntu.tar.gz
-cd binggo-server-6.1.0
+sha256sum -c Binggo-6.1.1-ubuntu.tar.gz.sha256
+tar -xzf Binggo-6.1.1-ubuntu.tar.gz
+cd binggo-server-6.1.1
 sudo bash deploy.sh install
 ```
 
@@ -64,11 +64,11 @@ Windows 和 Ubuntu 都可以运行主节点或工作节点。成员从本机主�
 ### 集群怎样工作
 
 - **合并 BV 历史。** 支持该功能的成员上传本机已收录的 BV，主节点去重后持久保存。新的检索跳过集群已经看过的视频。
-- **逐轮检索与检测。** 每轮用一个关键词，按发布时间和综合排序检索，共用 **1,000 个不同视频**的收录目标。结果页先用完时，直接检测已收录的视频。在线节点在轮间依次导入活动，随后进入下一个关键词。
-- **指派追踪检查。** 各节点的追踪 UP 主按 UID 合并。主节点可以指定就绪的节点检查某个 UP 主近期是否发布或转发了抽奖信息，核验结果同步到集群活动目录。
+- **逐轮检索与检测。** 每轮由一个节点按发布时间检索一个关键词，目标为 **1,000 个历史未收录的视频**。结果页先用完时，直接检测已收录的视频。在线节点在轮间依次导入活动，随后进入下一个关键词。
+- **节点分工。** 主节点可以为节点勾选「追踪 UP 主」或「主动搜集」，并单独暂停主动搜集。合集作者与监控名单按 UID 合并，所选节点并行核验线索，结果同步到集群活动目录。
 - **查看任务和节点。** 工作集群页显示本轮关键词、待处理视频、各节点历史收录量、当前状态及累计检测命中率。「数据源 → 主动检索 → 成果展示」可以打开集群检出的仍开放活动。
 
-集群共享活动信息、BV 标识和追踪名单。B 站 Cookie、模型密钥及参与记录保存在各节点本机。实际参与仍由使用者在本机发起。完整调度、跨机器入口及旧节点兼容性见 [工作集群手册](docs/cluster.md)。
+集群共享活动信息、BV 标识和追踪名单。B 站 Cookie、模型密钥及参与记录保存在各节点本机。成员可用当前账号在本机授权轮间顺序参与。完整调度、跨机器入口及旧节点兼容性见 [工作集群手册](docs/cluster.md)。
 
 ## 6.0.3 到 6.1.0 更新概要
 
