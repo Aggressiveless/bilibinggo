@@ -21,10 +21,10 @@ import uuid
 
 # Isolated mode excludes the script directory. Only add the root-owned helper location.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from release_channel import REPOSITORY, STABLE_VERSION, version_key
+from release_channel import REPOSITORY, STABLE_VERSION, release_tag, version_key
 from update_state import SERVER_UPDATE_ROOT, read_json, record
 
-API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+API = f"https://api.github.com/repos/{REPOSITORY}/releases/tags"
 DOWNLOAD = f"https://github.com/{REPOSITORY}/releases/download"
 PORT_FILE = Path("/etc/binggo-updater/port")
 WORKER_TOKEN = Path("/etc/binggo-updater/worker-token")
@@ -90,14 +90,18 @@ def checksum(path, checksums):
 
 
 def fetch_release(version, work, progress):
-    with open_github(API) as response:
+    try:
+        tag = release_tag(version)
+    except ValueError as exc:
+        raise UpdateError(str(exc)) from exc
+    with open_github(f"{API}/{tag}") as response:
         payload = json.loads(response.read(2 * 1024**2 + 1))
-    if payload.get("tag_name") != f"v{version}" or payload.get("draft") or payload.get("prerelease"):
-        raise UpdateError("最新正式版本已变化，请重新检查更新")
+    if payload.get("tag_name") != tag or payload.get("draft") or payload.get("prerelease"):
+        raise UpdateError("指定的合并发行版不可用，请重新检查更新")
     name = f"Binggo-{version}-ubuntu.tar.gz"
     assets = {asset.get("name"): asset for asset in payload.get("assets", [])}
     sums_name = name + ".sha256" if name + ".sha256" in assets else "SHA256SUMS.txt"
-    prefix = f"{DOWNLOAD}/v{version}/"
+    prefix = f"{DOWNLOAD}/{tag}/"
     for item in (name, sums_name):
         if assets.get(item, {}).get("browser_download_url") != prefix + item:
             raise UpdateError("正式版缺少 Ubuntu 部署包或校验文件")
@@ -146,6 +150,13 @@ def validate_payload(bundle, version):
     manifest = read_json(bundle / "deployment-manifest.json", {})
     if manifest.get("version") != version or manifest.get("systemd_update_schema") != 1 or manifest.get("repository") != REPOSITORY:
         raise UpdateError("部署包版本或更新协议不匹配")
+    try:
+        expected_tag = release_tag(version)
+    except ValueError as exc:
+        raise UpdateError(str(exc)) from exc
+    if (manifest.get("release_tag") != expected_tag
+            or manifest.get("upstream_version") != version.rsplit(".", 1)[0]):
+        raise UpdateError("部署包的发行标签或上游版本不匹配")
     app = bundle / "app"
     required = ("packaging/linux/server.py", "packaging/linux/requirements.lock", "web/static/dist/index.html", "web/update_routes.py")
     if not all((app / name).is_file() for name in required) or program_version(app) != version:
@@ -358,7 +369,13 @@ def update(request, *, bundle=None):
         former_cluster = dashboard.get("/api/cluster/status")
         cluster = former_cluster.get("role") if former_cluster.get("connected") and not former_cluster.get("error") else ""
         progress("waiting", "等待正在执行的任务结束")
-        if not request.get("bootstrap"):
+        try:
+            can_drain = dashboard.get("/api/updates/status").get("supported")
+        except urllib.error.HTTPError as exc:
+            if not request.get("bootstrap") or exc.code != 404:
+                raise
+            can_drain = False
+        if not request.get("bootstrap") or can_drain:
             drained = True
             deadline = time.monotonic() + 24 * 3600
             while True:

@@ -136,6 +136,14 @@ def install_cluster(app):
         service.wake.set()
         return service.snapshot()
 
+    @dashboard.post("/watch-stop")
+    def watch_stop(request: Request):
+        _dashboard(request, check_login=True)
+        service = request.app.state.cluster
+        _run(service.store.stop_watch)
+        service.wake.set()
+        return service.snapshot()
+
     @dashboard.post("/node-name")
     def node_name(request: Request, body: NodeName):
         _dashboard(request, check_login=True)

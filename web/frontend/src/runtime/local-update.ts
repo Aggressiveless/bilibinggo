@@ -2,13 +2,18 @@ import { fetchJSON } from "../api/client";
 import { openAppConfirm } from "../shell/confirm";
 import { switchSection } from "../shell/nav";
 import { showToast } from "../shell/toast";
+import { checkForUpdates } from "./index";
 import "./local-update.css";
 
 interface UpdateEvent { phase: string; message: string; at: number }
 interface Update { id?: string; phase: string; message: string; current?: string; target?: string; demo?: boolean; finished?: boolean; data_status?: string; backup?: string; events?: UpdateEvent[] }
 interface Capabilities { supported: boolean; mode: "server" | "desktop"; label: string; current: string; reason: string }
 interface Snapshot extends Capabilities { demo_enabled: boolean; update: Update }
-interface Plan extends Capabilities { plan_id: string; available: boolean; latest: string; notes: string; busy: boolean }
+interface ReleaseSource { tag?: string; version?: string; detail?: string }
+interface Plan extends Capabilities {
+  plan_id: string; available: boolean; latest: string; notes: string; busy: boolean;
+  sources?: { fork: ReleaseSource; upstream: ReleaseSource }; upstream_pending?: boolean;
+}
 
 const phases = [["download", "下载更新包"], ["checksum", "校验更新包"], ["prepare", "检查运行环境"], ["waiting", "等待任务结束"], ["backup", "备份数据和旧版本"], ["switch", "切换到新版本"], ["restart", "重启服务"], ["verify", "验证运行状态"]];
 const terminal = new Set(["success", "error", "rolled_back", "cancelled"]);
@@ -103,17 +108,58 @@ export function bindLocalUpdates() {
     finally { acting = false; await refresh(); }
   }
 
+  function renderSources(plan: Plan): string {
+    if (!plan.sources) return plan.available ? `发现新版本 ${plan.latest}` : `当前 ${plan.current} 已是最新正式版`;
+    const { fork, upstream } = plan.sources;
+    el("server-update-sources").hidden = false;
+    const describe = (parts: Array<string | undefined>) => parts.filter(Boolean).join(" · ");
+    el("server-update-fork").textContent = describe([fork.tag, fork.detail]);
+    el("server-update-upstream").textContent = describe([upstream.version, upstream.detail]);
+    const messages = [];
+    if (plan.available) messages.push(`可安装合并版 ${plan.latest}`);
+    if (plan.upstream_pending) messages.push("上游有更新，待合并并发布本站部署包");
+    if (!messages.length) {
+      messages.push(fork.detail || upstream.detail ? "暂无已确认可安装的新版本" : "已安装当前合并版");
+    }
+    const message = messages.join("。");
+    el("server-update-alignment").textContent = message;
+    return message;
+  }
+
+  async function check() {
+    const plan = await post<Plan>("prepare");
+    return { plan, message: renderSources(plan) };
+  }
+
+  btn("check-updates").addEventListener("click", () => {
+    void action(async () => {
+      const button = btn("check-updates");
+      button.disabled = true;
+      try {
+        if (!snapshot) render(await fetchJSON<Snapshot>("/api/updates/status", { timeoutMs: 4000 }));
+        if (snapshot?.mode !== "server") {
+          await checkForUpdates(button);
+          return;
+        }
+        const { message } = await check();
+        showToast(message, "info");
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+
   btn("apply-local-update").addEventListener("click", () => void action(async () => {
     btn("apply-local-update").textContent = "检查中…";
     try {
-      const plan = await post<Plan>("prepare");
-      if (!plan.available) { showToast(`当前 ${plan.current} 已是最新正式版`, "success"); return; }
+      const { plan, message } = await check();
+      if (!plan.available) { showToast(message, "info"); return; }
       if (!plan.supported) { showToast(plan.reason, "info"); return; }
       const server = plan.mode === "server";
       let token = "";
       const confirmed = await openAppConfirm({ eyebrow: server ? "仅更新当前服务器" : "仅更新此电脑", title: `准备更新：${plan.current} → ${plan.latest}`,
         desc: plan.notes || "新版本的变更说明请查看发布页。",
-        bullets: [plan.busy ? "当前有任务运行，将等待任务结束后更新" : "安装期间会短暂重启服务", "更新前备份数据、配置和旧程序", "新版启动失败时尝试恢复旧版本和升级前数据", "结果仅写入本机工作日志"],
+        bullets: [...(plan.upstream_pending ? ["上游还有更新，等待发布后续合并版"] : []), plan.busy ? "当前有任务运行，将等待任务结束后更新" : "安装期间会短暂重启服务", "更新前备份数据、配置和旧程序", "新版启动失败时尝试恢复旧版本和升级前数据", "结果仅写入本机工作日志"],
         secretLabel: server ? "服务器更新口令（由 SSH 管理员提供）" : "",
         onSecret: (value: string) => { token = value; },
         confirmLabel: plan.busy ? "等待任务完成后更新" : "备份并更新", cancelLabel: "取消" });

@@ -13,6 +13,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -20,12 +21,14 @@ from pydantic import BaseModel, ConfigDict
 
 from src import app_paths, server_update
 from src.local_updater import EXE, MAX_ARCHIVE, unpack
-from src.release_channel import REPOSITORY, STABLE_VERSION
+from src.release_channel import (REPOSITORY, UPSTREAM_REPOSITORY, UPSTREAM_VERSION,
+                                 combined_version, version_key)
 from src.update_state import SERVER_UPDATE_ROOT, maintenance, process_alive, read_json, record, state_root, write_json
 from src.version_info import compare_versions
 
 REPO = REPOSITORY
 RELEASE_API = f"https://api.github.com/repos/{REPO}/releases/latest"
+UPSTREAM_API = f"https://api.github.com/repos/{UPSTREAM_REPOSITORY}/releases/latest"
 ASSET_NAME = "Binggo-Portable-win64.zip"
 ACTIVE = {"download", "checksum", "prepare", "waiting", "backup", "switch", "restart", "verify", "rollback"}
 
@@ -44,20 +47,30 @@ def _local(request: Request):
         raise HTTPException(403, "拒绝跨站更新请求")
 
 
-def release_plan(current: str, *, server: bool = False) -> dict:
-    with httpx.Client(timeout=15, follow_redirects=False) as client:
-        response = client.get(RELEASE_API, headers={"Accept": "application/vnd.github+json"})
+def _release(api):
+    with httpx.Client(timeout=8, follow_redirects=False) as client:
+        response = client.get(api, headers={"Accept": "application/vnd.github+json"})
         response.raise_for_status()
         release = response.json()
-    version = str(release.get("tag_name", "")).removeprefix("v")
-    if not STABLE_VERSION.fullmatch(version) or release.get("prerelease") or release.get("draft"):
+    if not isinstance(release, dict) or release.get("prerelease") or release.get("draft"):
         raise ValueError("未找到可安装的正式版本")
-    assets = {a["name"]: a for a in release.get("assets", [])}
+    return release
+
+
+def _plan_from_release(current, release, *, server):
+    tag = str(release.get("tag_name", ""))
+    merged = combined_version(tag)
+    assets = {a["name"]: a for a in release.get("assets", []) if isinstance(a, dict) and "name" in a}
+    merged_archive = f"Binggo-{merged}-ubuntu.tar.gz"
+    # Historical releases used the tag version as the package and runtime version.
+    version = merged if merged_archive in assets else tag.removeprefix("v")
     result = {"current": current, "latest": version, "available": compare_versions(current, version) == -1,
               "notes": str(release.get("body", ""))[:1800],
-              "release_url": f"https://github.com/{REPO}/releases/tag/v{version}"}
+              "release_tag": tag, "release_url": f"https://github.com/{REPO}/releases/tag/{tag}"}
+    if server and version != merged:
+        result["available"] = False
     if result["available"]:
-        prefix = f"https://github.com/{REPO}/releases/download/v{version}/"
+        prefix = f"https://github.com/{REPO}/releases/download/{tag}/"
         archive = f"Binggo-{version}-ubuntu.tar.gz" if server else ASSET_NAME
         checksum_name = archive + ".sha256" if archive + ".sha256" in assets else "SHA256SUMS.txt"
         for key, name in (("archive", archive), ("checksums", checksum_name)):
@@ -69,6 +82,40 @@ def release_plan(current: str, *, server: bool = False) -> dict:
         if int(assets[archive].get("size", 0)) > MAX_ARCHIVE:
             raise ValueError("更新包超过允许大小")
     return result
+
+
+def release_plan(current: str, *, server: bool = False) -> dict:
+    if not server:
+        return _plan_from_release(current, _release(RELEASE_API), server=False)
+    result = {"current": current, "latest": current, "available": False, "notes": "",
+              "release_url": f"https://github.com/{REPO}/releases"}
+    sources = {
+        "fork": {"repository": REPO, "url": result["release_url"]},
+        "upstream": {"repository": UPSTREAM_REPOSITORY, "url": f"https://github.com/{UPSTREAM_REPOSITORY}/releases"},
+    }
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fork = pool.submit(_release, RELEASE_API)
+        upstream = pool.submit(_release, UPSTREAM_API)
+        try:
+            release = fork.result()
+            tag = str(release.get("tag_name", ""))
+            sources["fork"]["tag"] = tag
+            result.update(_plan_from_release(current, release, server=True))
+            if result["latest"] == tag.removeprefix("v"):
+                sources["fork"]["detail"] = "此发行版没有 .02 合并部署包"
+        except (httpx.HTTPError, ValueError):
+            sources["fork"]["detail"] = "无法读取可安装的合并发行版"
+        try:
+            upstream_version = str(upstream.result().get("tag_name", "")).removeprefix("v")
+            if not UPSTREAM_VERSION.fullmatch(upstream_version):
+                raise ValueError("Invalid upstream version")
+            sources["upstream"]["version"] = upstream_version
+        except (httpx.HTTPError, ValueError):
+            sources["upstream"]["detail"] = "暂时无法读取上游正式版"
+    installed_or_available = max(version_key(current), version_key(result["latest"]))
+    pending = bool(sources["upstream"].get("version") and
+                   version_key(sources["upstream"]["version"])[:3] > installed_or_available[:3])
+    return {**result, "sources": sources, "upstream_pending": pending}
 
 
 def download(url: str, output: Path, limit: int):

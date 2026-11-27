@@ -354,8 +354,24 @@ def api_runtime() -> dict[str, Any]:
 )
 def api_updates_check() -> dict[str, Any]:
     """手动检查 GitHub Releases；网络失败也返回 200 + ok=false。"""
+    from src.server_update import configured
     from src.update_check import check_for_updates
 
+    if configured():
+        from src.version_info import get_version
+        from web.update_routes import release_plan
+
+        plan = release_plan(get_version(), server=True)
+        fork = plan["sources"]["fork"]
+        if plan["available"]:
+            message = f"发现合并版 {plan['latest']}"
+        elif plan["upstream_pending"]:
+            message = "上游有更新，待合并并发布本站部署包"
+        else:
+            message = fork.get("detail") or plan["sources"]["upstream"].get("detail") or "已安装当前合并版"
+        return {"ok": bool(fork.get("tag")), "current": plan["current"], "latest": plan["latest"],
+                "update_available": plan["available"], "release_url": plan["release_url"],
+                "download_url": plan.get("archive"), "message": message, "platform": "linux"}
     return check_for_updates().to_dict()
 
 

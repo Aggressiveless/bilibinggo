@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: app/packaging/linux/Dockerfile
-    image: binggo-server:6.1.2.01
+    image: binggo-server:6.1.3.02
     restart: unless-stopped
     network_mode: host
     init: true

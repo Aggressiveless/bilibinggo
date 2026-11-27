@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 from pathlib import Path
 import shutil
 import tarfile
@@ -11,9 +13,46 @@ from fastapi.testclient import TestClient
 import pytest
 
 from src import server_update
+from src.release_channel import REPOSITORY
 from web import update_routes
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def merged_release(base):
+    tag = f"v{base}.01"
+    archive = f"Binggo-{base}.02-ubuntu.tar.gz"
+    prefix = f"https://github.com/{REPOSITORY}/releases/download/{tag}/"
+    return {"tag_name": tag, "assets": [
+        {"name": name, "browser_download_url": prefix + name}
+        for name in (archive, archive + ".sha256")
+    ]}
+
+
+@pytest.mark.parametrize("fork_has_package,upstream,available,pending", [
+    (False, "6.1.4", False, True),
+    (True, "6.1.4", True, False),
+    (True, "6.1.5", True, True),
+    (True, None, True, False),
+])
+def test_server_sources_are_independent(monkeypatch, fork_has_package, upstream, available, pending):
+    def get_release(url):
+        if url == update_routes.RELEASE_API:
+            return merged_release("6.1.4") if fork_has_package else {"tag_name": "v6.1.3.01", "assets": []}
+        assert url == update_routes.UPSTREAM_API
+        if upstream is None:
+            raise ValueError("Unavailable")
+        return {"tag_name": f"v{upstream}", "assets": []}
+
+    monkeypatch.setattr(update_routes, "_release", get_release)
+    plan = update_routes.release_plan("6.1.3.02", server=True)
+    assert plan["available"] is available
+    assert plan["upstream_pending"] is pending
+    if available:
+        assert plan["latest"] == "6.1.4.02"
+        assert plan["archive"].endswith("/v6.1.4.01/Binggo-6.1.4.02-ubuntu.tar.gz")
+    else:
+        assert "archive" not in plan
 
 
 @pytest.fixture
@@ -23,6 +62,27 @@ def systemd_worker(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_worker_fetches_only_the_exact_fork_tag(systemd_worker, tmp_path, monkeypatch):
+    worker = systemd_worker
+    calls = []
+
+    def open_github(url):
+        calls.append(url)
+        return io.BytesIO(json.dumps(merged_release("6.1.4")).encode())
+
+    monkeypatch.setattr(worker, "open_github", open_github)
+    monkeypatch.setattr(worker, "download", lambda url, *_: calls.append(url))
+    monkeypatch.setattr(worker, "checksum", lambda *_: None)
+    worker.fetch_release("6.1.4.02", tmp_path, lambda *_: None)
+    with pytest.raises(worker.UpdateError):
+        worker.fetch_release("6.1.4", tmp_path, lambda *_: None)
+    assert calls == [
+        f"https://api.github.com/repos/{REPOSITORY}/releases/tags/v6.1.4.01",
+        f"https://github.com/{REPOSITORY}/releases/download/v6.1.4.01/Binggo-6.1.4.02-ubuntu.tar.gz",
+        f"https://github.com/{REPOSITORY}/releases/download/v6.1.4.01/Binggo-6.1.4.02-ubuntu.tar.gz.sha256",
+    ]
 
 
 def test_requests_require_server_admin_and_accept_a_single_pending_job(tmp_path, monkeypatch):

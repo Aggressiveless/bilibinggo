@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from src.app_paths import __version__
-from src.release_channel import REPOSITORY
+from src.release_channel import REPOSITORY, release_tag
 
 PACKAGE = f"binggo-server-{__version__}"
 CONFIG = {"config/cookies.txt.example", "config/llm.env.example", "config/sources.yaml"}
@@ -41,6 +41,12 @@ def inputs():
 
 def make_bundle(destination: Path) -> Path:
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    tag = release_tag(__version__)
+    upstream_version = __version__.rsplit(".", 1)[0]
+    upstream_commit = subprocess.check_output(
+        ["git", "rev-parse", f"v{upstream_version}^{{commit}}"], cwd=ROOT, text=True,
+    ).strip()
+    subprocess.run(["git", "merge-base", "--is-ancestor", upstream_commit, commit], cwd=ROOT, check=True)
     frontend = ROOT / "web/static/dist"
     if not (frontend / "index.html").is_file():
         raise SystemExit("Build the frontend before packaging")
@@ -57,6 +63,7 @@ def make_bundle(destination: Path) -> Path:
         for name in ("README.md", "compose.yaml", "deploy.sh"):
             copy(ROOT / "packaging/linux" / name, bundle / name)
         manifest = {"version": __version__, "repository": REPOSITORY, "commit": commit,
+                    "release_tag": tag, "upstream_version": upstream_version, "upstream_commit": upstream_commit,
                     "systemd_update_schema": 1, "data_directory": "/var/lib/binggo"}
         (bundle / "deployment-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         files = sorted(path for path in bundle.rglob("*") if path.is_file())

@@ -191,6 +191,13 @@ class ParticipationPreference(Payload):
     enabled: bool
 
 
+class ParticipationResult(Payload):
+    joined: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    skipped: int = Field(ge=0)
+    remaining: int = Field(ge=0)
+
+
 class Exchange(Payload):
     node: NodeId
     after: int = Field(default=0, ge=0, lt=2**63)
@@ -207,6 +214,9 @@ class Exchange(Payload):
     watch_batch_capable: bool | None = None
     watch_link_workers: bool | None = None
     round_participation: Literal["ready", "running", "done", "failed", "disabled"] | None = None
+    participation_pending: int | None = Field(default=None, ge=0)
+    participation_enabled: bool | None = None
+    participation_result: ParticipationResult | None = None
 
 
 class Analysis(Lease):

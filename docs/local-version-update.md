@@ -2,11 +2,22 @@
 
 各节点独立更新。Windows 使用「更新版本」，Ubuntu systemd 使用「更新此服务器」。
 
+Ubuntu 的「检查更新」和「更新此服务器」同时查看两个正式发行源。
+
+| 来源 | 作用 |
+| --- | --- |
+| Aggressiveless/bilibinggo | 提供经合并和验证的本站安装包，标签使用 `vX.Y.Z.01`。 |
+| Komerser/bilibinggo | 显示上游正式版本和功能同步状态。 |
+
+例如上游 `v6.1.3` 对应本站发行标签 `v6.1.3.01` 和运行版本 `6.1.3.02`。启动升级时，服务按对应标签下载 `Binggo-6.1.3.02-ubuntu.tar.gz` 并核验 SHA-256、部署清单和程序版本。上游领先时，页面显示「待合并并发布本站部署包」；已发布且可安装的合并包仍可选用。
+
+发布后续合并版时，从现有合并分支合入上游正式标签 `vX.Y.Z`，运行测试并将程序版本设为 `X.Y.Z.02`。Ubuntu 构建会验证该上游标签所指提交已纳入当前提交，并将其写入部署清单。将该提交的部署包和校验文件发布到本站标签 `vX.Y.Z.01`。
+
 ## 使用
 
 ### Ubuntu systemd
 
-首次安装通过 Ubuntu 部署包执行 `sudo bash deploy.sh install`。已有 systemd 部署先等待任务结束，再执行 `sudo bash deploy.sh upgrade`。如旧服务使用非默认端口，可将端口作为第二个参数传入。
+首次安装通过 Ubuntu 部署包执行 `sudo bash deploy.sh install`。从旧版首次迁移到标签和版本分离的合并版时，先校验部署包，从解压目录执行 `sudo bash deploy.sh upgrade`。如旧服务使用非默认端口，可将端口作为第二个参数传入。旧版 Windows 更新器也需要手动迁移一次，并保留 `user-data`。
 
 以后从「概览 → 项目信息 → 更新此服务器」检查和安装。管理员在自己的 SSH 终端运行 `sudo cat /etc/binggo-updater/admin-token` 查看确认口令，只在当前服务器的受信任管理页输入。浏览器关闭后更新继续运行。
 

@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from src.log_redact import redact_text
-from src.release_channel import REPOSITORY
+from src.release_channel import FORK_TAG, REPOSITORY, combined_version
 from src.version_info import compare_versions, get_version, strip_v_prefix
 
 GITHUB_REPO = REPOSITORY
@@ -192,6 +192,10 @@ def check_for_updates(*, platform: str | None = None) -> UpdateCheckResult:
         excerpt = body[:_NOTES_MAX] + ("…" if len(body) > _NOTES_MAX else "")
         notes = redact_text(excerpt)
     assets = payload.get("assets") if isinstance(payload.get("assets"), list) else []
+    if FORK_TAG.fullmatch(tag):
+        merged = combined_version(tag)
+        if any(isinstance(asset, dict) and asset.get("name") == f"Binggo-{merged}-ubuntu.tar.gz" for asset in assets):
+            latest = merged
     download_url = _pick_download_url(assets, plat)
 
     if not latest:

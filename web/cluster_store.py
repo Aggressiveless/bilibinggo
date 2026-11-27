@@ -23,7 +23,8 @@ MAX_ATTEMPTS = 4
 MAX_NODES = 32
 MAX_CONCURRENT = 4
 ONLINE_SECONDS = 30
-IMPORT_TIMEOUT = 120
+PARTICIPATION_TIMEOUT = 120
+WATCH_ROUND_INTERVAL = 60
 SEARCH_PAGE_LIMIT = 60
 EVENT_RETENTION = 2000
 RECENT_EVENTS = 80
@@ -111,6 +112,11 @@ class ClusterStore:
                 CREATE TABLE IF NOT EXISTS node_history(node TEXT PRIMARY KEY, complete INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS node_video_history(node TEXT, bvid TEXT, PRIMARY KEY(node,bvid));
                 CREATE TABLE IF NOT EXISTS node_local_work(node TEXT PRIMARY KEY, state TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS node_participation(
+                    node TEXT PRIMARY KEY, handled INTEGER NOT NULL DEFAULT 0,
+                    offer INTEGER NOT NULL DEFAULT 0, deadline INTEGER NOT NULL DEFAULT 0,
+                    pending INTEGER, enabled INTEGER
+                );
                 CREATE TABLE IF NOT EXISTS watch_sources(
                     node TEXT NOT NULL, mid TEXT NOT NULL, name TEXT NOT NULL, revision TEXT NOT NULL,
                     PRIMARY KEY(node,mid)
@@ -255,7 +261,7 @@ class ClusterStore:
             for table in ("nodes", "catalog", "jobs", "checked_videos", "sightings", "analyses",
                           "cluster_events", "cluster_node_round", "cluster_video_results", "node_history",
                           "node_video_history", "node_detection_totals", "node_local_work", "watch_sources", "watch_checks",
-                          "watch_ref_results"):
+                          "watch_ref_results", "node_participation"):
                 db.execute(f"DELETE FROM {table}")
             session = {"role": "host", "name": name, "address": address, "id": uuid.uuid4().hex,
                        "node": uuid.uuid4().hex, "token": secrets.token_hex(32)}
@@ -328,6 +334,7 @@ class ClusterStore:
             db.execute("DELETE FROM node_history WHERE node=?", (node,))
             db.execute("DELETE FROM node_video_history WHERE node=?", (node,))
             db.execute("DELETE FROM node_local_work WHERE node=?", (node,))
+            db.execute("DELETE FROM node_participation WHERE node=?", (node,))
             db.execute("DELETE FROM watch_sources WHERE node=?", (node,))
             db.execute("UPDATE jobs SET until=0 WHERE node=? AND state='leased'", (node,))
             for setting, fields in (("dispatch", ("search_nodes", "video_nodes")), ("watch_batch", ("nodes",)),
@@ -773,76 +780,92 @@ class ClusterStore:
         return db.execute("""SELECT count(*) FROM node_history h JOIN nodes n ON n.id=h.node
                              WHERE h.complete=0 AND n.seen>?""", (now - ONLINE_SECONDS,)).fetchone()[0]
 
-    def _begin_import(self, db, round_id, now, session):
-        nodes = [row[0] for row in db.execute("""SELECT n.id FROM nodes n JOIN node_history h ON h.node=n.id
-            WHERE n.seen>? AND h.complete=1 ORDER BY n.id<>?, n.name, n.id""", (now - ONLINE_SECONDS, session["node"]))]
-        self.put(db, "phase", "importing")
-        self.put(db, "next_round", 0)
-        self.put(db, "round_import", {"round": round_id, "pending": nodes,
-                                     "done": 0, "skipped": 0, "deadline": now + IMPORT_TIMEOUT})
-        if nodes:
-            self._event(db, now, f"开始轮间活动导入，共 {len(nodes)} 个节点")
+    def _queue_participation(self, db):
+        previous = self.get(db, "participation_checkpoint", {})
+        epoch = max(previous.get("epoch", 0), self.get(db, "round", 0)) + 1
+        cursor = db.execute("SELECT coalesce(max(seq),0) FROM catalog").fetchone()[0]
+        self.put(db, "participation_checkpoint", {"epoch": epoch, "cursor": cursor})
 
-    def _advance_import(self, db, body, now, *, advance_round):
-        state = self.get(db, "round_import")
-        pending = state["pending"]
+    def _participation_turn(self, db, body, now, *, ready_to_claim):
+        state = db.execute("SELECT * FROM node_participation WHERE node=?", (body.node,)).fetchone()
+        outcome = body.round_participation if body.import_round == state["offer"] else None
+        if state["offer"] and outcome == "running":
+            db.execute("UPDATE node_participation SET deadline=? WHERE node=?", (now + PARTICIPATION_TIMEOUT, body.node))
+        elif state["offer"] and outcome in {"done", "failed", "disabled"}:
+            db.execute("UPDATE node_participation SET handled=offer,offer=0,deadline=0 WHERE node=?", (body.node,))
+            if outcome != "disabled":
+                message = "轮间顺序参与完成" if outcome == "done" else "轮间顺序参与未全部完成"
+                if summary := body.participation_result:
+                    message += (f"，成功 {summary.joined}，失败 {summary.failed}，"
+                                f"跳过 {summary.skipped}，未执行 {summary.remaining}")
+                self._event(db, now, message, node=body.node, level="warning" if outcome == "failed" else "info")
+            # Give the returning node a chance to work before a newer checkpoint.
+            return None, False
+        expired = db.execute("SELECT node FROM node_participation WHERE offer>0 AND deadline<=?", (now,)).fetchall()
+        for node, in expired:
+            db.execute("UPDATE node_participation SET handled=offer,offer=0,deadline=0 WHERE node=?", (node,))
+            self._event(db, now, "轮间参与未收到节点确认", node=node, level="warning")
+        state = db.execute("SELECT * FROM node_participation WHERE node=?", (body.node,)).fetchone()
+        if state["offer"]:
+            return {"epoch": state["offer"], "granted": True}, True
+        checkpoint = self.get(db, "participation_checkpoint")
+        if not checkpoint or state["handled"] >= checkpoint["epoch"]:
+            return None, False
+        epoch = checkpoint["epoch"]
         latest = db.execute("SELECT coalesce(max(seq),0) FROM catalog").fetchone()[0]
-        while pending:
-            node = pending[0]
-            seen = db.execute("SELECT seen FROM nodes WHERE id=?", (node,)).fetchone()
-            acknowledged = body.node == node and body.import_round == state["round"]
-            if acknowledged and state.get("participating") == node and body.round_participation == "running":
-                state["deadline"] = now + IMPORT_TIMEOUT
-            imported = acknowledged and body.after >= latest
-            if imported:
-                outcome = body.round_participation
-                if outcome in {"ready", "running"}:
-                    if not advance_round and state.get("participating") != node:
-                        break
-                    if state.get("participating") != node:
-                        state["participating"] = node
-                        state["deadline"] = now + IMPORT_TIMEOUT
-                        self._event(db, now, "已导入集群活动，安排轮间顺序参与", node=node)
-                    if state["deadline"] > now:
-                        break
-                    imported = False
-                if outcome in {"done", "failed"} and state.get("participating") == node:
-                    self._event(db, now, "轮间顺序参与完成" if outcome == "done" else "轮间顺序参与未全部完成",
-                                node=node, level="info" if outcome == "done" else "warning")
-            if imported:
-                state["done"] += 1
-                self._event(db, now, "轮间活动导入完成", node=node)
-            elif not seen or seen[0] <= now - ONLINE_SECONDS or state["deadline"] <= now:
-                state["skipped"] += 1
-                self._event(db, now, "节点离线或超时，轮间导入已跳过，将随恢复连接继续同步",
-                            node=node, level="warning")
-            else:
-                break
-            pending.pop(0)
-            state.pop("participating", None)
-            state["deadline"] = now + IMPORT_TIMEOUT
-        self.put(db, "round_import", state)
-        if not pending and advance_round and not self.get(db, "collection_paused", False):
-            self._next_round(db, now)
+        if body.after < min(checkpoint["cursor"], latest):
+            return None, False
+        modern = body.participation_enabled is not None
+        legacy_ack = not modern and state["handled"] < (body.import_round or 0) <= epoch
+        if (modern and (not body.participation_enabled or body.participation_pending == 0)
+                or legacy_ack and body.round_participation == "disabled"):
+            db.execute("UPDATE node_participation SET handled=? WHERE node=?", (epoch, body.node))
+            return None, False
+        if self.get(db, "paused", False) or self.get(db, "cooldown_until", 0) > now:
+            return None, False
+        preview = ({"epoch": epoch, "granted": False} if not modern else None)
+        if not modern and not (legacy_ack and body.round_participation == "ready"):
+            # Advertise a turn to older workers without holding a lease slot for
+            # clients that never implemented the readiness acknowledgement.
+            return preview, False
+        if not ready_to_claim or db.execute("SELECT 1 FROM jobs WHERE node=? AND state='leased'", (body.node,)).fetchone():
+            return preview, False
+        plan = self.get(db, "work_assignments") or {}
+        pools = (plan.get("collection_nodes"), plan.get("watch_nodes"))
+        for other, in db.execute("""SELECT node FROM node_participation WHERE offer>0
+            UNION SELECT w.node FROM node_local_work w JOIN nodes n ON n.id=w.node
+            WHERE w.state='participating' AND n.seen>?""", (now - ONLINE_SECONDS,)):
+            if any(pool is None or (body.node in pool and other in pool) for pool in pools):
+                return preview, False
+        db.execute("UPDATE node_participation SET offer=?,deadline=? WHERE node=?",
+                   (epoch, now + PARTICIPATION_TIMEOUT, body.node))
+        db.execute("UPDATE nodes SET search_ready=0 WHERE id=?", (body.node,))
+        self._event(db, now, "已安排轮间顺序参与", node=body.node)
+        return {"epoch": epoch, "granted": True}, True
 
-    def _tick(self, db, now, body, session):
+    def _tick(self, db, now):
         for job in db.execute("SELECT * FROM jobs WHERE state='leased' AND until<=?", (now,)).fetchall():
             self._retry(db, job, now, delay=0, reason="节点未在租约内交回任务")
         self._settle_watch_collections(db, now)
-        can_advance = not (self.get(db, "paused", False) or self.get(db, "cooldown_until", 0) > now
-                           or self._history_syncing(db, now))
-        if self.get(db, "phase") == "importing":
-            self._advance_import(db, body, now, advance_round=can_advance)
+        if self.get(db, "paused", False) or self.get(db, "cooldown_until", 0) > now or self._history_syncing(db, now):
             return
-        if not can_advance or self.get(db, "collection_paused", False):
+        self._tick_watch(db, now)
+        if self.get(db, "collection_paused", False):
             return
         round_id = self.get(db, "round", 0)
         if not round_id:
             self._next_round(db, now)
             return
-        if self.get(db, "next_round", 0):  # Upgrade a host that was waiting on the old timer.
-            self._begin_import(db, round_id, now, session)
-            self._advance_import(db, body, now, advance_round=True)
+        if self.get(db, "phase") == "importing" or self.get(db, "next_round", 0):
+            # Preserve the granted job ID when upgrading a host mid-import.
+            previous = self.get(db, "round_import") or {}
+            if node := previous.get("participating"):
+                db.execute("""INSERT INTO node_participation(node,offer,deadline) VALUES(?,?,?)
+                              ON CONFLICT(node) DO UPDATE SET offer=excluded.offer,deadline=excluded.deadline""",
+                           (node, round_id, now + PARTICIPATION_TIMEOUT))
+            self._queue_participation(db)
+            self.put(db, "round_import", None)
+            self._next_round(db, now)
             return
         found = self._video_count(db, round_id)
         if self.get(db, "phase") == "collecting":
@@ -863,8 +886,8 @@ class ClusterStore:
             self._commit_search_coverage(db, round_id)
         self._event(db, now, f"第 {round_id} 轮结束，收录 {found}/{TARGET} 个视频，失败 {failed} 项",
                     level="warning" if failed else "info")
-        self._begin_import(db, round_id, now, session)
-        self._advance_import(db, body, now, advance_round=True)
+        self._queue_participation(db)
+        self._next_round(db, now)
 
     @staticmethod
     def _has_work(db, round_id, kind):
@@ -885,8 +908,11 @@ class ClusterStore:
         if search.get("round") != job["round"]:  # Allow an in-flight round from the previous scheduler to finish.
             return True
         owner = search["node"]
-        if owner and (pool is None or owner in pool) and db.execute("SELECT 1 FROM nodes WHERE id=? AND seen>?",
-                                (owner, now - ONLINE_SECONDS)).fetchone():
+        if owner and (pool is None or owner in pool) and db.execute("""
+                SELECT 1 FROM nodes n LEFT JOIN node_local_work w ON w.node=n.id
+                LEFT JOIN node_participation p ON p.node=n.id
+                WHERE n.id=? AND n.seen>? AND coalesce(w.state,'idle')<>'participating'
+                  AND coalesce(p.offer,0)=0""", (owner, now - ONLINE_SECONDS)).fetchone():
             return node == owner
         # Rotate in registration order and wrap, skipping nodes that cannot take work.
         cursor = self.get(db, "search_rotation_cursor", 0)
@@ -949,10 +975,7 @@ class ClusterStore:
                 or db.execute("SELECT count(*) FROM jobs WHERE state='leased'").fetchone()[0] >= dispatch.get("concurrency", MAX_CONCURRENT)):
             return None
         job = None
-        watch_allowed = phase != "importing" or (
-            collection_paused and not self.get(db, "round_import", {}).get("pending")
-        )
-        if watch_ready and video_detection and watch_allowed:
+        if watch_ready and video_detection:
             job, modern = self._watch_job(db, node, now)
         if job is None and kind and not collection_paused and (kind != "video" or video_detection):
             pool = assignments["collection_nodes"] if assignments is not None else self._effective_pool(
@@ -1049,6 +1072,32 @@ class ClusterStore:
             plan = self.get(db, "work_assignments")
             nodes = plan["watch_nodes"] if plan is not None else (self.get(db, "watch_batch") or {}).get("nodes")
             self._assign_watch_batch(db, nodes, strict=plan is not None, start_only=True)
+            self.put(db, "watch_repeating", True)
+            self.put(db, "watch_next", 0)
+
+    def stop_watch(self):
+        with self.tx() as db:
+            if (self.get(db, "session") or {}).get("role") != "host":
+                raise ClusterError("只有主节点可以停止追踪轮转")
+            self.put(db, "watch_repeating", False)
+            self.put(db, "watch_next", 0)
+
+    def _tick_watch(self, db, now):
+        batch = self.get(db, "watch_batch")
+        if not batch or self._has_work(db, 0, "watch"):
+            return
+        if self.get(db, "watch_finished") != batch["id"]:
+            self.put(db, "watch_finished", batch["id"])
+            self._event(db, now, "本轮追踪结束")
+            self._queue_participation(db)
+            if self.get(db, "watch_repeating", False):
+                self.put(db, "watch_next", max(now, batch.get("started", now) + WATCH_ROUND_INTERVAL))
+        if not self.get(db, "watch_repeating", False) or self.get(db, "watch_next", 0) > now:
+            return
+        if batch["nodes"] == [] or not db.execute("SELECT 1 FROM watch_sources LIMIT 1").fetchone():
+            return
+        self._assign_watch_batch(db, batch["nodes"], strict=bool(batch.get("strict")), start_only=True)
+        self.put(db, "watch_next", 0)
 
     def _assign_watch_batch(self, db, nodes, *, strict, start_only=False):
         if nodes == []:
@@ -1083,7 +1132,7 @@ class ClusterStore:
         for ref in unresolved:
             if parent := parents.get(ref["mid"]):
                 self._queue_watch_refs(db, parent, [Reference(kind=ref["kind"], key=ref["target"])], ref["depth"])
-        self.put(db, "watch_batch", {"id": batch, "nodes": nodes, "strict": strict})
+        self.put(db, "watch_batch", {"id": batch, "nodes": nodes, "strict": strict, "started": now})
         self._event(db, now, f"开始追踪全部 {len(mids)} 位 UP 主")
 
     @staticmethod
@@ -1110,6 +1159,9 @@ class ClusterStore:
                 db.execute("DELETE FROM node_local_work WHERE node=?", (body.node,))
             else:
                 db.execute("INSERT OR REPLACE INTO node_local_work VALUES(?,?)", (body.node, body.local_work))
+            db.execute("""INSERT INTO node_participation(node,pending,enabled) VALUES(?,?,?)
+                ON CONFLICT(node) DO UPDATE SET pending=excluded.pending,enabled=excluded.enabled""",
+                       (body.node, body.participation_pending, body.participation_enabled))
             if body.watch_list is not None:
                 self._sync_watch_list(db, body.node, body.watch_list)
             sequence = self.get(db, "sequence", 0)
@@ -1125,18 +1177,23 @@ class ClusterStore:
                 self._renew(db, body.node, body.working, now)
             if body.report:
                 self._finish(db, body.node, body.report, now)
-            self._tick(db, now, body, session)
+            self._tick(db, now)
+            turn, reserved = self._participation_turn(db, body, now, ready_to_claim=ready_to_claim)
             task = None
-            if ready_to_claim:
+            if ready_to_claim and not reserved:
                 task = self._claim(db, body.node, now, video_detection=body.video_detection,
                                    watch_ready=body.local_work == "idle")
-            pending = self.get(db, "round_import", {}).get("pending", [])
-            waiting_turn = self.get(db, "phase") == "importing" and pending and pending[0] != body.node
-            rows = [] if waiting_turn else db.execute("""SELECT seq,payload FROM catalog WHERE seq>?
+            rows = db.execute("""SELECT seq,payload FROM catalog WHERE seq>?
                                   AND (? OR json_extract(payload,'$.lottery_time') IS NOT NULL)
                                   ORDER BY seq LIMIT ?""", (body.after, body.unknown_activity_time, PAGE_SIZE))
             changes = [Change(seq=row["seq"], activity=Activity.model_validate_json(row["payload"])) for row in rows]
             status = self._status(db, session, now, work_node=body.node)
+            if turn and body.participation_enabled is not None:
+                status["participation_turn"] = turn
+            elif turn:
+                status["round_import"] = {"round": turn["epoch"], "node": body.node,
+                                          "pending": 1, "done": 0, "skipped": 0,
+                                          **({"participating": True} if turn["granted"] else {})}
             if task and task.kind == "watch":
                 params = json.loads(db.execute("SELECT params FROM jobs WHERE id=?", (task.task_id,)).fetchone()[0])
                 if mode := params.get("collection_mode"):
@@ -1233,6 +1290,7 @@ class ClusterStore:
         nodes = [dict(row) for row in db.execute("""
             SELECT n.id,n.name,n.seen,n.work,n.watch_batch,n.completed,n.model_calls,j.kind,j.key,j.params,
                    h.complete AS history_complete,l.state AS local_work,
+                   p.pending AS participation_pending,p.enabled AS participation_enabled,
                    CASE WHEN j.kind IN ('watch','watch_ref') THEN
                        (SELECT min(name) FROM watch_sources WHERE mid=coalesce(json_extract(j.params,'$.mid'),j.key))
                    END AS watch_name,
@@ -1243,12 +1301,15 @@ class ClusterStore:
             FROM nodes n LEFT JOIN jobs j ON n.id=j.node AND j.state='leased' AND j.until>?
             LEFT JOIN node_history h ON h.node=n.id
             LEFT JOIN node_local_work l ON l.node=n.id
+            LEFT JOIN node_participation p ON p.node=n.id
             LEFT JOIN cluster_node_round r ON r.round=? AND r.node=n.id
             LEFT JOIN node_detection_totals t ON t.node=n.id
             ORDER BY n.seen DESC,n.name""", (now, round_id))]
         for node in nodes:
             node["online"] = node["seen"] > now - ONLINE_SECONDS
             node["host"] = node["id"] == session.get("node")
+            if node["participation_enabled"] is not None:
+                node["participation_enabled"] = bool(node["participation_enabled"])
             node["task_label"] = self._job_label(node) if node["kind"] else None
             if node["kind"] == "watch_ref":
                 node["kind"] = "watch"
@@ -1272,8 +1333,6 @@ class ClusterStore:
                                 FROM cluster_video_results WHERE round=?""", (work_node, work_node, round_id)).fetchone()
         catalog = db.execute("SELECT count(*),coalesce(sum(rank=2),0) FROM catalog WHERE expires>?", (now,)).fetchone()
         phase = self.get(db, "phase", "collecting")
-        importing = self.get(db, "round_import", {}) if phase == "importing" else {}
-        import_pending = importing.get("pending", [])
         batch = self.get(db, "watch_batch")
         if batch:
             batch = {**batch, "counts": dict(db.execute("""SELECT
@@ -1303,15 +1362,14 @@ class ClusterStore:
                 "work_assignments": plan, "collection_paused": self.get(db, "collection_paused", False),
                 "node_rename_supported": True, "discovery_coverage": True,
                 "watch_tracking": True, "watch_batch_supported": True, "watch_link_workers": True, "watch_batch": batch,
-                "round_participation_supported": True,
+                "round_participation_supported": True, "independent_participation": True,
+                "watch_repeating": self.get(db, "watch_repeating", False),
+                "watch_next": self.get(db, "watch_next", 0),
                 "video_history": True,
                 "known_videos": db.execute("SELECT count(*) FROM checked_videos").fetchone()[0],
                 "history_syncing": self._history_syncing(db, now),
                 "search_tasks": self._search_tasks(db, round_id), "video_queue": video_queue,
-                "round_import": {"round": round_id, "node": import_pending[0] if import_pending else None,
-                                 **({"participating": True} if importing.get("participating") else {}),
-                                 "pending": len(import_pending), "done": importing.get("done", 0),
-                                 "skipped": importing.get("skipped", 0)} if importing else None,
+                "round_import": None,
                 "search_pages_total": self.get(db, "search_pages_archived", 0) + search[1],
                 "search_history_start": self.get(db, "search_history_start", search[0] or round_id),
                 "local_work": dict(local_round) if local_round else {"pages": 0, "found": 0, "videos": 0, "activities": 0},
