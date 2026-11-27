@@ -431,6 +431,19 @@ def summarize_sequential_participate_targets(**filters) -> dict[str, Any]:
     return {"count": len(targets), "items": _format_triple_target_items(targets), "execution": "sequential"}
 
 
+def count_pending_participation() -> int:
+    participations = load_participations()
+    pending = set()
+    for item in _load_activities_payload().get("activities") or []:
+        if not _participatable_stored(item) or item.get("lottery_type") not in PARTICIPATABLE_TYPES:
+            continue
+        key = str(item.get("dynamic_id") or "").strip()
+        status = _resolve_activity_status(item, participations.get(key))
+        if is_valid_dynamic_id(key) and status == "未参加" and _can_participate(item, status):
+            pending.add(key)
+    return len(pending)
+
+
 def summarize_triple_participate_targets(
     *,
     status: str | None = None,

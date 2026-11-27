@@ -14,6 +14,7 @@ type Node = {
   videos_checked?: number; videos_total?: number; videos_counted?: number; videos_matched?: number;
   watch_batch?: boolean;
   local_work?: "idle" | "watch" | "participating" | "busy" | null;
+  participation_pending?: number | null; participation_enabled?: boolean | null;
 };
 type WatchUser = { mid: string; name: string; sources: string[]; assigned: string | null;
   state: string | null; checked: number | null; hits: number | null; failed_refs?: number };
@@ -57,6 +58,7 @@ type Status = {
     watch_tracking?: boolean;
     watch_batch_supported?: boolean;
     watch_batch?: { counts: Counts; collection_pending?: number; strict?: boolean; references?: Counts } | null;
+    watch_repeating?: boolean; watch_next?: number;
     work_assignments?: Assignment;
     collection_paused?: boolean;
     node_rename_supported?: boolean;
@@ -328,10 +330,11 @@ function updateDispatchControls(snapshot: Status) {
     (plan[key] === null || plan[key].includes(id)) !== chosen[key].includes(id)));
   const batch = snapshot.status.watch_batch;
   const tracking = Boolean((batch?.counts.pending || 0) + (batch?.counts.leased || 0));
-  set("watch-start", tracking ? "追踪进行中" : "开始追踪");
+  const repeating = snapshot.status.watch_repeating;
+  set("watch-start", repeating ? "停止追踪轮转" : tracking ? "追踪进行中" : "开始追踪");
   byId<HTMLButtonElement>("dispatch-save").disabled = busy || !dispatchDirty;
-  byId<HTMLButtonElement>("watch-start").disabled = busy || tracking || dispatchDirty ||
-    chosen.watch_nodes.length === 0 || watchTotal === 0;
+  byId<HTMLButtonElement>("watch-start").disabled = busy || (!repeating &&
+    (tracking || dispatchDirty || chosen.watch_nodes.length === 0 || watchTotal === 0));
   const waitingForCollection = batch?.collection_pending && !nodes.some(node => node.online && node.work === 2 &&
     node.watch_batch && (!batch.strict || chosen.watch_nodes.includes(node.id)));
   const references = batch?.references || {};
@@ -339,8 +342,10 @@ function updateDispatchControls(snapshot: Status) {
   const referenceProgress = referenceTotal
     ? `合集线索已核验 ${count(references.done || 0)} / ${count(referenceTotal)} 条${references.leased ? `，${count(references.leased)} 条核验中` : ""}${references.failed ? `，${count(references.failed)} 条失败` : ""}`
     : "";
+  const nextWatch = snapshot.status.watch_next;
   const note = dispatchDirty ? "保存后应用新的节点分工，已领取的任务会继续完成。"
-    : waitingForCollection ? "合集读取正在等待已勾选追踪的新版节点。" : referenceProgress;
+    : waitingForCollection ? "合集读取正在等待已勾选追踪的新版节点。"
+    : repeating && nextWatch && !tracking ? "下一轮追踪 " + time(nextWatch) : referenceProgress;
   set("dispatch-note", note);
   byId("dispatch-note").hidden = !note;
 }
@@ -562,6 +567,9 @@ function renderNodes(snapshot: Status, found: number) {
       ["累计已检测", count(node.videos_total), node.videos_checked === undefined ? "" : `本轮 ${count(node.videos_checked)}`],
       ["累计命中率", checked ? percent.format(matched / checked) : "—",
         checked ? `${count(matched)} / ${count(checked)}` : ""],
+      ["待参与活动", count(node.participation_pending ?? undefined),
+        node.participation_pending == null ? "等待节点上报"
+          : !node.online ? "上次上报" : node.participation_enabled ? "已开启轮间参与" : "轮间参与未开启"],
     ]) {
       const item = document.createElement("div");
       const term = document.createElement("dt");
@@ -667,7 +675,7 @@ export function bindCluster() {
   });
   byId("watch-prev").addEventListener("click", () => void refreshWatch(watchPage - 1));
   byId("watch-next").addEventListener("click", () => void refreshWatch(watchPage + 1));
-  byId("watch-start").addEventListener("click", () => void action("watch-start"));
+  byId("watch-start").addEventListener("click", () => void action(current?.status.watch_repeating ? "watch-stop" : "watch-start"));
   byId("dispatch-form").addEventListener("change", () => {
     if (current) updateDispatchControls(current);
   });

@@ -422,29 +422,69 @@ def test_history_merges_joined_nodes_and_reopens_search_if_queue_shrinks(tmp_pat
     assert store.status()["known_videos"] == 3
 
 
-def test_round_import_uses_node_order_and_waits_for_applied_catalog_cursor(tmp_path, monkeypatch):
+def test_participating_node_does_not_block_collection_and_rejoins_current_round(tmp_path, monkeypatch):
+    from web.cluster_protocol import WorkAssignments
+
     monkeypatch.setattr("web.cluster_store.TARGET", 1)
     store, host, member = _cluster(tmp_path)
-    history = {"ids": [], "complete": True}
-    _exchange(store, member, video_history=history)
-    search = _exchange(store, host, work=True, video_history=history).task
-    scan = _exchange(store, host, work=True, video_detection=True,
+    store.set_work_assignments(WorkAssignments(collection_nodes=[host["node"], member["node"]], watch_nodes=[]))
+    ready = {"work": True, "video_detection": True, "local_work": "idle"}
+    opt_in = {"participation_enabled": True, "participation_pending": 2}
+    search = _exchange(store, host, **ready, **opt_in).task
+    scan = _exchange(store, host, **ready, **opt_in,
                      report=_report(search, references=[Reference(kind="video", key=BVID)])).task
-    first = _exchange(store, host, work=True, report=_report(scan, activities=[_activity(prize="测试活动")]))
-    assert first.task is None
-    assert first.status["phase"] == "importing"
-    assert first.status["round_import"] == {"round": 1, "node": host["node"], "pending": 2, "done": 0, "skipped": 0}
-    assert _exchange(store, member, work=True, import_round=1).changes == []
-    assert _exchange(store, host, import_round=1).status["round_import"]["node"] == host["node"]
-    seq = first.changes[-1].seq
-    assert _exchange(store, host, after=seq, import_round=1).status["round_import"]["node"] == member["node"]
-    member_import = _exchange(store, member, import_round=1)
-    assert member_import.changes[-1].seq == seq
-    next_round = _exchange(store, member, after=seq, work=True, import_round=1)
-    assert next_round.task.kind == "search" and next_round.status["round"] == 2
-    assert next_round.status["known_videos"] == 1
-    host_work = next(node for node in next_round.status["nodes"] if node["host"])
+    boundary = _exchange(store, host, **opt_in, report=_report(scan, activities=[_activity(prize="测试活动")]))
+    assert boundary.status["round"] == 2
+    assert "participation_turn" not in boundary.status
+    member_sync = _exchange(store, member, participation_enabled=False, participation_pending=3)
+    seq = boundary.changes[-1].seq
+    assert member_sync.changes[-1].seq == seq
+    grant = _exchange(store, host, **ready, **opt_in, after=seq)
+    epoch = grant.status["participation_turn"]["epoch"]
+    assert grant.task is None
+    live = _exchange(store, member, **ready, after=seq, participation_enabled=True, participation_pending=3)
+    assert live.task.kind == "search" and live.status["round"] == 2
+    assert "participation_turn" not in live.status
+    assert {n["name"]: n["participation_pending"] for n in live.status["nodes"]} == {"主节点": 2, "工作节点": 3}
+    keep_running = _exchange(store, host, local_work="participating", **opt_in, after=seq,
+                             import_round=epoch, round_participation="running")
+    assert keep_running.task is None
+    later_scan = _exchange(store, member, **ready, after=seq, report=_report(
+        live.task, references=[Reference(kind="video", key="BV0000000001")])).task
+    assert later_scan.kind == "video"
+    later = _exchange(store, member, after=seq, report=_report(later_scan))
+    assert later.status["round"] == 3
+    resumed = _exchange(store, host, **ready, after=seq, participation_enabled=True, participation_pending=0,
+                        import_round=epoch, round_participation="done",
+                        participation_result={"joined": 2, "failed": 0, "skipped": 0, "remaining": 0})
+    assert resumed.task.kind == "search" and resumed.status["round"] == 3
+    host_work = next(node for node in resumed.status["nodes"] if node["host"])
     assert (host_work["videos_checked"], host_work["videos_total"], host_work["videos_matched"]) == (0, 1, 1)
+
+
+def test_manual_participation_hands_off_an_existing_search(tmp_path):
+    store, host, member = _cluster(tmp_path)
+    search = _exchange(store, host, work=True).task
+    _exchange(store, host, local_work="participating", report=_report(search, more_pages=True))
+    continuation = _exchange(store, member, work=True)
+    assert continuation.status["round"] == 1
+    assert continuation.task.page == 2
+
+
+def test_upgrade_preserves_in_flight_legacy_participation_without_a_round_barrier(tmp_path):
+    store, host, member = _cluster(tmp_path)
+    search = _exchange(store, host, work=True).task
+    with store.tx() as db:
+        db.execute("UPDATE jobs SET state='done' WHERE id=?", (search.task_id,))
+        store.put(db, "phase", "importing")
+        store.put(db, "round_import", {"round": 1, "pending": [host["node"], member["node"]],
+                                      "participating": host["node"]})
+    synced = _exchange(ClusterStore(tmp_path), host, local_work="participating", import_round=1,
+                       round_participation="running")
+    assert synced.status["round"] == 2
+    assert synced.status["round_import"]["round"] == 1
+    assert synced.status["round_import"]["participating"]
+    assert _exchange(store, member, work=True).task.kind == "search"
 
 
 def test_cluster_watch_merges_by_mid_and_prioritizes_assignment_for_selected_node(tmp_path):
@@ -543,7 +583,7 @@ def test_legacy_watch_node_can_check_dynamics_and_modern_node_finishes_collectio
 
 @pytest.mark.parametrize("final_reference_fails", [False, True])
 def test_older_nodes_share_collection_links_while_active_discovery_is_paused(tmp_path, monkeypatch, final_reference_fails):
-    from web.cluster_protocol import WatchFindings, WorkAssignments
+    from web.cluster_protocol import WatchBatch, WatchFindings, WorkAssignments
 
     store, host, first = _cluster(tmp_path)
     second = Register(name="另一台旧节点", node=uuid.uuid4().hex, token=secrets.token_hex(32))
@@ -558,7 +598,7 @@ def test_older_nodes_share_collection_links_while_active_discovery_is_paused(tmp
         host["node"], first["node"], second["node"],
     ]))
     store.set_collection_paused(True)
-    store.start_watch()
+    store.assign_watch_batch(WatchBatch())
     dynamics = _exchange(store, first, work=True, **ready).task
     assert dynamics.kind == "watch"
     previously_found = _activity(prize="已找到")
@@ -611,7 +651,7 @@ def test_older_nodes_share_collection_links_while_active_discovery_is_paused(tmp
 
 @pytest.mark.parametrize("unreadable", [False, True])
 def test_watch_shares_reference_results_and_keeps_pending_links_across_batches(tmp_path, monkeypatch, unreadable):
-    from web.cluster_protocol import CollectionCoverage, WatchFindings
+    from web.cluster_protocol import CollectionCoverage, WatchBatch, WatchFindings
     from web.cluster_store import WATCH_FAILED_TTL
 
     now = int(time.time())
@@ -627,7 +667,7 @@ def test_watch_shares_reference_results_and_keeps_pending_links_across_batches(t
     published = now - 100
 
     def prepare(refs):
-        store.start_watch()
+        store.assign_watch_batch(WatchBatch())
         leases = [_exchange(store, node, work=True, **ready) for node in (host, member)]
         for node, feed in zip((host, member), leases):
             task = feed.task
@@ -770,37 +810,71 @@ def test_dispatch_falls_back_only_when_selected_search_nodes_are_offline(tmp_pat
     assert _exchange(store, member, work=True).task.page == 2
 
 
-def test_round_import_waits_for_enabled_nodes_and_worker_starts_only_once(tmp_path, monkeypatch):
+def test_legacy_worker_gets_a_private_turn_and_starts_once(tmp_path, monkeypatch):
     from web import cluster_service
 
     svc = ClusterService(tmp_path)
     host = svc.store.start_host("主节点", "http://127.0.0.1:8182")
-    history = {"ids": [], "complete": True}
-    first = _exchange(svc.store, host, work=True, video_history=history).task
-    _exchange(svc.store, host, report=_report(first))
-    assert svc.store.status()["phase"] == "importing"
+    first = _exchange(svc.store, host, work=True, local_work="idle").task
+    boundary = _exchange(svc.store, host, local_work="idle", report=_report(first))
+    turn = boundary.status["round_import"]
+    assert boundary.status["round"] == 2
+    assert turn["node"] == host["node"] and "participating" not in turn
+    assert svc.store.status()["round_import"] is None
+    epoch = turn["round"]
     runner = Mock()
     runner.is_running.return_value = False
     runner.try_start.return_value = 17
     runner.resolve_job_status.return_value = Mock(state="success", result={"failed": 0})
     monkeypatch.setattr(cluster_service, "get_login_uid", lambda: 42)
     monkeypatch.setattr(cluster_service, "is_llm_ready", lambda: True)
-    assert svc._round_participation(host, 1, runner) == "disabled"
+    assert svc._round_participation(host, epoch, runner)[0] == "disabled"
     svc.set_round_participation(True)
-    assert svc._round_participation(host, 1, runner) == "ready"
+    assert svc._round_participation(host, epoch, runner)[0] == "ready"
     runner.try_start.assert_not_called()
-    grant = _exchange(svc.store, host, import_round=1, round_participation="ready")
+    grant = _exchange(svc.store, host, work=True, local_work="idle", import_round=epoch, round_participation="ready")
     assert grant.status["round_import"]["participating"]
+    assert grant.task is None
     svc.status_remote, svc.last_sync = grant.status, int(time.time())
-    assert svc._round_participation(host, 1, runner) == "running"
-    assert svc._round_participation(host, 1, runner) == "done"
-    assert svc._round_participation(host, 1, runner) == "done"
+    assert svc._round_participation(host, epoch, runner)[0] == "running"
+    assert svc._round_participation(host, epoch, runner)[0] == "done"
+    assert svc._round_participation(host, epoch, runner)[0] == "done"
     runner.try_start.assert_called_once()
-    finished = _exchange(svc.store, host, import_round=1, round_participation="done")
-    assert finished.status["round"] == 2
+    finished = _exchange(svc.store, host, work=True, local_work="idle", import_round=epoch, round_participation="done")
+    assert finished.status["round"] == 2 and finished.task.kind == "search"
     monkeypatch.setattr(cluster_service, "get_login_uid", lambda: 43)
-    assert svc._round_participation(host, 2, runner) == "disabled"
+    assert svc._round_participation(host, epoch + 1, runner)[0] == "disabled"
     svc.http.close()
+
+
+def test_tracking_repeats_while_other_node_participates_and_can_stop(tmp_path, monkeypatch):
+    from web.cluster_protocol import WorkAssignments
+    from web.cluster_store import WATCH_ROUND_INTERVAL
+
+    now = int(time.time())
+    monkeypatch.setattr(time, "time", lambda: now)
+    store, host, member = _cluster(tmp_path)
+    ready = {"work": True, "video_detection": True, "local_work": "idle"}
+    enabled = {"participation_enabled": True, "participation_pending": 1}
+    disabled = {"participation_enabled": False, "participation_pending": 0}
+    _exchange(store, host, watch_list={
+        "revision": uuid.uuid4().hex, "complete": True, "users": [{"mid": "31", "name": "作者"}],
+    })
+    store.set_work_assignments(WorkAssignments(collection_nodes=[], watch_nodes=[host["node"], member["node"]]))
+    store.set_collection_paused(True)
+    store.start_watch()
+    first = _exchange(store, host, **ready, **enabled).task
+    now += WATCH_ROUND_INTERVAL
+    # Renew the existing lease on the completion pulse, then start the next watch batch.
+    result = _exchange(store, host, **ready, **enabled, report=_report(first))
+    epoch = result.status["participation_turn"]["epoch"]
+    assert result.task is None
+    second = _exchange(store, member, **ready, **disabled).task
+    assert second.kind == "watch" and second.task_id != first.task_id
+    _exchange(store, host, local_work="participating", **enabled, import_round=epoch, round_participation="running")
+    store.stop_watch()
+    ended = _exchange(store, member, **ready, **disabled, report=_report(second))
+    assert ended.task is None and not ended.status["watch_repeating"]
 
 
 def test_watch_worker_checks_recent_original_and_forwarded_dynamics(monkeypatch):
@@ -938,11 +1012,13 @@ def test_conversion_tracks_completed_videos_and_catalog_deduplicates(tmp_path, m
         db.execute("UPDATE jobs SET due=0 WHERE id=?", (first.task_id,))
     retried = _exchange(store, host, work=True, video_detection=True).task
     _exchange(store, host, report=_report(retried, activities=[valid]))
-    assert store.status()["conversion"] == {"matched": 2, "checked": 2}
-    assert store.status()["local_conversion"] == {"matched": 1, "checked": 1}
+    status = store.status()
+    assert status["round"] == 2 and status["conversion"] == {"matched": 0, "checked": 0}
+    assert {node["name"]: node["videos_matched"] for node in status["nodes"]} == {"主节点": 1, "工作节点": 1}
     assert store.detected_activities(1)["total"] == 1
 
     with store.tx() as db:
+        store.put(db, "round", 1)
         store.put(db, "video_results_backfilled", False)
         db.execute("DELETE FROM cluster_events WHERE message LIKE '第 1 轮开始%'")
         db.execute("DELETE FROM cluster_video_results")

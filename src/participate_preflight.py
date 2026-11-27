@@ -21,6 +21,10 @@ from src.sources.common import is_valid_dynamic_id, load_previous_output
 from src.status_refresh import persist_activity_record
 
 
+class ActivityPreflightRejected(RuntimeError):
+    """This activity could not pass its read-only participation check."""
+
+
 def _load_activity_item(dynamic_id: str) -> dict | None:
     payload = load_previous_output(ENRICHED_OUTPUT_PATH) or {}
     for item in payload.get("activities") or []:
@@ -57,14 +61,14 @@ def _sync_live_fields(
     dynamic_id = str(item.get("dynamic_id") or "")
     detail = fetch_dynamic_detail(client, dynamic_id)
     if not detail:
-        raise RuntimeError("无法打开活动链接，请稍后重试")
+        raise ActivityPreflightRejected("无法打开活动链接，请稍后重试")
     if is_upower_dynamic(detail):
-        raise RuntimeError("充电专属抽奖，不参与")
+        raise ActivityPreflightRejected("充电专属抽奖，不参与")
 
     if lottery_type == "互动抽奖":
         resolved = fetch_notice_for_interact(client, dynamic_id)
         if not resolved:
-            raise RuntimeError("无法获取抽奖信息，活动可能已结束或不可参与")
+            raise ActivityPreflightRejected("无法获取抽奖信息，活动可能已结束或不可参与")
         notice, _, _ = resolved
         _apply_notice_fields(item, notice)
         return
@@ -104,14 +108,14 @@ def refresh_activity_status_from_live(
 
     item = _load_activity_item(dynamic_id)
     if not item:
-        raise RuntimeError("未找到活动信息，请先执行一键更新")
+        raise ActivityPreflightRejected("未找到活动信息，请先执行一键更新")
 
     if is_charging_lottery_activity(item):
-        raise RuntimeError("充电专属抽奖，不参与")
+        raise ActivityPreflightRejected("充电专属抽奖，不参与")
 
     lottery_type = str(lottery_type_hint or item.get("lottery_type") or "").strip()
     if lottery_type not in PARTICIPATABLE_TYPES:
-        raise RuntimeError("未找到可参与的活动类型，请先执行一键更新")
+        raise ActivityPreflightRejected("未找到可参与的活动类型，请先执行一键更新")
 
     item["lottery_type"] = lottery_type
     _sync_live_fields(client, item, lottery_type=lottery_type)
@@ -133,10 +137,10 @@ def ensure_activity_participatable(
     )
     deadline = item.get("cluster_deadline")
     if type(deadline) is int and deadline <= time.time():
-        raise RuntimeError("活动报名已截止")
+        raise ActivityPreflightRejected("活动报名已截止")
     status = str(item.get("activity_status") or "")
     if status != "未参加":
-        raise RuntimeError(f"活动当前为「{status}」，无法参与")
+        raise ActivityPreflightRejected(f"活动当前为「{status}」，无法参与")
     if str(item.get("draw_status") or "") == "ended":
-        raise RuntimeError("活动已结束，无法参与")
+        raise ActivityPreflightRejected("活动已结束，无法参与")
     return item
