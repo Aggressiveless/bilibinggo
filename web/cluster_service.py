@@ -22,11 +22,11 @@ from src.pipeline.status_step import apply_initial_status
 from src.sources.common import is_valid_dynamic_id, opus_link
 from src.watch_users import list_watch_users
 from web.account_service import has_login_cookie
-from web.activity_service import SOURCE_LABELS, SOURCE_SPACE_URLS, invalidate_activity_cache
+from web.activity_service import SOURCE_LABELS, SOURCE_SPACE_URLS, count_pending_participation, invalidate_activity_cache
 from web.cluster_protocol import (Activity, Analysis, DetectionPageRequest, Exchange, Feed, HISTORY_PAGE_SIZE, Lease,
                                   LINK_PATTERNS, MAX_LOTTERY_TIME, PAGE_SIZE, PEER_PATH, POLL_SECONDS, Register, Report,
                                   RenameNode, VideoHistory, WATCH_PAGE_SIZE, WatchFindings, WatchList, WatchUser,
-                                  normalize_address)
+                                  ParticipationResult, normalize_address)
 from web.cluster_store import ClusterError, ClusterStore
 from web.cluster_work import RetryCheck, execute
 
@@ -251,32 +251,40 @@ class ClusterService:
         key = f"round_participation:{session['id']}"
         progress = self.store.read(key) or {}
         if progress.get("round", 0) > round_id:
-            return "failed"
+            return "failed", None
         if progress.get("round") == round_id:
             if not progress.get("job"):
-                return "failed"  # An interrupted submission may already have posted actions.
+                return "failed", None  # An interrupted submission may already have posted actions.
             job = runner.resolve_job_status(progress["job"])
             if job.state == "running":
-                return "running"
-            return "done" if job.state == "success" and not (job.result or {}).get("failed") else "failed"
+                return "running", None
+            result = job.result or {}
+            outcome = "done" if job.state == "success" and not result.get("failed") else "failed"
+            summary = ParticipationResult(
+                joined=result.get("joined", 0), failed=result.get("failed", int(outcome == "failed")),
+                skipped=len([item for item in result.get("items", []) if item.get("status") == "skipped"]),
+                remaining=result.get("remaining", 0),
+            )
+            return outcome, summary
         uid = self._participation_uid(session)
         if not uid:
-            return "disabled"
-        turn = self.status_remote.get("round_import") or {}
-        if (not turn.get("participating") or self.status_remote.get("paused") or self._job
+            return "disabled", None
+        granted = (self.status_remote.get("participation_turn") or {}).get("granted") or (
+            self.status_remote.get("round_import") or {}).get("participating")
+        if (not granted or self.status_remote.get("paused") or self._job
                 or not self.last_sync or time.time() - self.last_sync > 20
                 or runner.is_running()):
-            return "ready"
+            return "ready", None
         if not is_llm_ready():
-            return "failed"
+            return "failed", None
         with self.lock:
             if self.store.read("session") != session or self._participation_uid(session) != uid:
-                return "disabled"
+                return "disabled", None
             self.store.write(key, {"round": round_id, "job": None})
             job = runner.try_start("participate_sequential", {"from_auto": True, "_cluster_account": uid},
                                    source="auto")
             self.store.write(key, {"round": round_id, "job": job} if job is not None else progress)
-        return "running" if job is not None else "ready"
+        return ("running" if job is not None else "ready"), None
 
     def _supports_unknown_time(self, session):
         return session["role"] == "host" or bool(self.status_remote.get("unknown_activity_time"))
@@ -353,6 +361,8 @@ class ClusterService:
         return {key for key in ids if re.fullmatch(LINK_PATTERNS["video"], key)}
 
     def _import_turn(self, node):
+        if turn := self.status_remote.get("participation_turn"):
+            return turn["epoch"]
         state = self.status_remote.get("round_import") or {}
         return state.get("round") if state.get("node") == node else None
 
@@ -395,7 +405,8 @@ class ClusterService:
                             now = int(time.time())
                             unknown_time = self._supports_unknown_time(session)
                             turn = self._import_turn(session_node)
-                            if turn and turn != import_turn:
+                            independent = self.status_remote.get("independent_participation")
+                            if not independent and turn and turn != import_turn:
                                 export_queue, exported, reload_at = [], set(), 0
                             import_turn = turn
                             waiting_turn = bool(self.status_remote.get("round_import")) and not turn
@@ -429,7 +440,8 @@ class ClusterService:
                                 if watch_queue:
                                     watch = watch_queue[0]
                             feed = self._sync(session, [row for _, row in batch], pool, history=history, watch=watch,
-                                              import_round=turn if len(export_queue) <= len(batch) else None)
+                                              import_round=turn if independent
+                                              or len(export_queue) <= len(batch) else None)
                             if feed:
                                 if watch is not None:
                                     watch_queue.pop(0)
@@ -474,9 +486,10 @@ class ClusterService:
         watch_batch = session["role"] == "host" or bool(self.status_remote.get("watch_batch_supported"))
         watch_link_workers = session["role"] == "host" or bool(self.status_remote.get("watch_link_workers"))
         participation_support = session["role"] == "host" or self.status_remote.get("round_participation_supported")
-        round_participation = self._round_participation(session, import_round, runner) if (
+        round_participation, participation_result = self._round_participation(session, import_round, runner) if (
             participation_support and import_round
-        ) else None
+        ) else (None, None)
+        independent = session["role"] == "host" or self.status_remote.get("independent_participation")
         local = runner.get_status()
         local_work = "idle"
         if local.state == "running":
@@ -493,13 +506,17 @@ class ClusterService:
                            watch_list=watch, local_work=local_work if tracking else None,
                            watch_batch_capable=True if watch_batch else None,
                            watch_link_workers=True if watch_link_workers else None,
-                           round_participation=round_participation)
+                           round_participation=round_participation,
+                           participation_pending=count_pending_participation() if independent else None,
+                           participation_enabled=self._participation_uid(session) is not None if independent else None,
+                           participation_result=participation_result if independent else None)
         if session["role"] == "host":
             feed = self.store.exchange(message, session["token"])
         else:
             payload = message.model_dump()
             for field in ("video_history", "import_round", "watch_list", "local_work",
-                          "watch_batch_capable", "watch_link_workers", "round_participation"):
+                          "watch_batch_capable", "watch_link_workers", "round_participation",
+                          "participation_pending", "participation_enabled", "participation_result"):
                 if payload[field] is None:
                     del payload[field]
             if pending_report := payload["report"]:

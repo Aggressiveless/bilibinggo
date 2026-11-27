@@ -3,6 +3,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from src.participate_preflight import ActivityPreflightRejected
 from web.actions import run_action
 from web.activity_service import list_activities
 from web.app import app
@@ -55,3 +56,28 @@ def test_executes_more_than_three_in_order_and_stops_on_failure(isolated_home, f
             assert result["ok"] and result["result"]["joined"] == 7
         assert pick.call_args.kwargs["limit"] is None
     assert attempted == [v["dynamic_id"] for v in rows[:fail_at or 7]]
+
+
+def test_cluster_sequential_continues_past_rejected_preflight(isolated_home):
+    rows = targets(3)
+    first = rows[0]["dynamic_id"]
+
+    def preflight(_client, identifier, **kwargs):
+        if identifier == first:
+            raise ActivityPreflightRejected("无法获取抽奖信息")
+
+    def participate(identifier, *args, **kwargs):
+        return {"dynamic_id": identifier, "lottery_type": "预约抽奖", "status": "joined", "actions": []}
+
+    with patch("web.actions.get_login_uid", return_value=42), \
+         patch("web.actions.pick_triple_participate_targets", return_value=rows), \
+         patch("web.actions.BilibiliClient"), \
+         patch("web.actions.ensure_activity_participatable", side_effect=preflight), \
+         patch("web.actions._participate_dynamic_payload", side_effect=participate) as submit, \
+         patch("web.actions.mark_enriched_joined"), \
+         patch("web.actions.refresh_local_activity_statuses"), \
+         patch("web.actions.invalidate_activity_cache"):
+        result = run_action("participate_sequential", {"_cluster_account": 42})
+    assert result["result"]["joined"] == 2
+    assert result["result"]["skipped"] == 1
+    assert [call.args[0] for call in submit.call_args_list] == [item["dynamic_id"] for item in rows[1:]]

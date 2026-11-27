@@ -18,7 +18,7 @@ from src.log_redact import redact_text
 from src.log_span import PhaseSpanTracker, log_span
 from src.lottery_actions import ActionResult
 from src.lottery_classifier import PARTICIPATABLE_TYPES
-from src.participate_preflight import ensure_activity_participatable
+from src.participate_preflight import ActivityPreflightRejected, ensure_activity_participatable
 from src.participation import participate_activity
 from src.participation_log import participation_succeeded
 from src.pipeline.refresh_all_pipeline import PipelineResult, run_batched_new_links_pipeline, run_refresh_all_pipeline
@@ -897,23 +897,32 @@ def run_action(
             }
 
         results: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
         _emit_triple_progress()
         if serial:
-            for target in targets:
+            for index, target in enumerate(targets):
                 dynamic_id = str(target.get("dynamic_id") or "")
                 try:
                     results.append(_participate_triple_target(target))
                 except Exception as exc:
+                    if sequential and account and isinstance(exc, ActivityPreflightRejected):
+                        task_states[dynamic_id] = f"已跳过：{exc}"
+                        if entry := progress_plan.get(dynamic_id):
+                            task_step_progress[dynamic_id] = entry[1]
+                        skipped.append({"dynamic_id": dynamic_id, "status": "skipped", "message": str(exc)})
+                        _emit_triple_progress(log_append=f"{dynamic_id}：已跳过，{exc}")
+                        continue
                     task_states[dynamic_id] = f"失败：{exc}"
                     _mark_other_tasks_stopped(dynamic_id, reason="已停止（其他活动失败）")
                     _emit_triple_progress(log_append=f"{dynamic_id}：{exc}")
                     if sequential:
                         failed = getattr(exc, "participation_result", None) or {}
+                        remaining = len(targets) - index - 1
                         exc.participation_result = {"targets": triple_target_items,
-                            "message": f"顺序参与停止：成功 {len(results)}，失败 1，尚余 {len(targets) - len(results) - 1} 个活动未执行",
-                            "items": [*[item["payload"] for item in results],
+                            "message": f"顺序参与停止：成功 {len(results)}，失败 1，尚余 {remaining} 个活动未执行",
+                            "items": [*[item["payload"] for item in results], *skipped,
                                       {**failed, "dynamic_id": dynamic_id, "status": "failed", "message": str(exc)}],
-                            "joined": len(results), "failed": 1, "remaining": len(targets) - len(results) - 1}
+                            "joined": len(results), "failed": 1, "skipped": len(skipped), "remaining": remaining}
                     raise
                 progress(
                     step=_overall_progress_step(),
@@ -955,7 +964,8 @@ def run_action(
         refresh_local_activity_statuses()
         results.sort(key=lambda item: target_ids.index(item["dynamic_id"]))
         log_blocks = [format_participation_log(item["payload"]) for item in results]
-        message = f"{label}完成：{len(results)} 个活动全部成功"
+        message = (f"{label}完成：成功 {len(results)} 个，跳过 {len(skipped)} 个" if skipped
+                   else f"{label}完成：{len(results)} 个活动全部成功")
         progress(step=total_steps, total=total_steps, message=message, log_append=message)
         logger.info("%s成功 count=%s", label, len(results))
         invalidate_activity_cache()
@@ -971,8 +981,9 @@ def run_action(
                     }
                     for item in results
                 ],
-                "items": [item["payload"] for item in results],
+                "items": [*[item["payload"] for item in results], *skipped],
                 "joined": len(results),
+                "skipped": len(skipped),
             },
             "log": "\n\n".join(log_blocks).strip(),
         }
