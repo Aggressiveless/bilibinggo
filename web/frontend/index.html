@@ -704,15 +704,36 @@
             </article>
 
             <div class="panel sources-collections-panel">
+              <div class="action-row" role="group" aria-label="合集数据源">
+                <button type="button" class="filter-pill active" data-collection-view="organizers" aria-controls="collection-organizers" aria-pressed="true">活动整理UP主</button>
+                <button type="button" class="filter-pill" data-collection-view="publishers" aria-controls="collection-publishers" aria-pressed="false">活动发布UP主</button>
+              </div>
+              <div id="collection-organizers">
               <div class="panel-head panel-head-row">
                 <div>
                   <p class="eyebrow">合集数据源</p>
-                  <h2 class="section-title">UP 合集</h2>
+                  <h2 class="section-title">活动整理UP主</h2>
                   <p class="section-desc">检查新专栏 → 分类 → 拉取详情 → 入库，仅处理新增链接。</p>
                 </div>
                 <button type="button" class="btn btn-secondary btn-pill" data-action="refresh_all">一键更新</button>
               </div>
               <div class="source-list" id="source-grid"></div>
+              </div>
+              <div id="collection-publishers" hidden>
+                <div class="panel-head panel-head-row">
+                  <div>
+                    <h2 class="section-title">活动发布UP主</h2>
+                    <p class="section-desc">近期多次发布已核验抽奖活动的账号。移除前会核实最近 60 天的发布记录。</p>
+                  </div>
+                  <button type="button" class="btn btn-secondary btn-pill" data-action="refresh_publishers">自动更新并搜索</button>
+                </div>
+                <p class="caption" id="publisher-source-status" role="status"></p>
+                <ul id="publisher-source-list"></ul>
+                <div class="action-row">
+                  <button type="button" class="btn btn-secondary btn-compact btn-pill" id="publisher-source-prev" disabled>上一页</button>
+                  <button type="button" class="btn btn-secondary btn-compact btn-pill" id="publisher-source-next" disabled>下一页</button>
+                </div>
+              </div>
             </div>
           </div>
         </section>

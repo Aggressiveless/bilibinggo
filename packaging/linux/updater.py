@@ -21,7 +21,7 @@ import uuid
 
 # Isolated mode excludes the script directory. Only add the root-owned helper location.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from release_channel import REPOSITORY, STABLE_VERSION, release_tag, version_key
+from release_channel import REPOSITORY, STABLE_VERSION, UPSTREAM_VERSION, release_tag, version_key
 from update_state import SERVER_UPDATE_ROOT, read_json, record
 
 API = f"https://api.github.com/repos/{REPOSITORY}/releases/tags"
@@ -154,8 +154,9 @@ def validate_payload(bundle, version):
         expected_tag = release_tag(version)
     except ValueError as exc:
         raise UpdateError(str(exc)) from exc
-    if (manifest.get("release_tag") != expected_tag
-            or manifest.get("upstream_version") != version.rsplit(".", 1)[0]):
+    upstream = manifest.get("upstream_version")
+    if (manifest.get("release_tag") != expected_tag or not isinstance(upstream, str)
+            or not UPSTREAM_VERSION.fullmatch(upstream) or version_key(upstream) > version_key(version)):
         raise UpdateError("部署包的发行标签或上游版本不匹配")
     app = bundle / "app"
     required = ("packaging/linux/server.py", "packaging/linux/requirements.lock", "web/static/dist/index.html", "web/update_routes.py")

@@ -1,6 +1,7 @@
 """Build the Ubuntu release from tracked project files and built frontend assets."""
 from __future__ import annotations
 
+import argparse
 import gzip
 import hashlib
 import json
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from src.app_paths import __version__
-from src.release_channel import REPOSITORY, release_tag
+from src.release_channel import REPOSITORY, UPSTREAM_VERSION, release_tag, version_key
 
 PACKAGE = f"binggo-server-{__version__}"
 CONFIG = {"config/cookies.txt.example", "config/llm.env.example", "config/sources.yaml"}
@@ -39,12 +40,16 @@ def inputs():
         yield name
 
 
-def make_bundle(destination: Path) -> Path:
+def make_bundle(destination: Path, upstream_tag: str | None = None) -> Path:
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     tag = release_tag(__version__)
-    upstream_version = __version__.rsplit(".", 1)[0]
+    upstream_tag = upstream_tag or f"v{__version__.rsplit('.', 1)[0]}"
+    upstream_version = upstream_tag.removeprefix("v")
+    if (not upstream_tag.startswith("v") or not UPSTREAM_VERSION.fullmatch(upstream_version)
+            or version_key(upstream_version) > version_key(__version__)):
+        raise SystemExit("Choose an upstream release at or before the app version.")
     upstream_commit = subprocess.check_output(
-        ["git", "rev-parse", f"v{upstream_version}^{{commit}}"], cwd=ROOT, text=True,
+        ["git", "rev-parse", f"{upstream_tag}^{{commit}}"], cwd=ROOT, text=True,
     ).strip()
     subprocess.run(["git", "merge-base", "--is-ancestor", upstream_commit, commit], cwd=ROOT, check=True)
     frontend = ROOT / "web/static/dist"
@@ -86,4 +91,8 @@ def make_bundle(destination: Path) -> Path:
 
 
 if __name__ == "__main__":
-    print(make_bundle(Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "dist"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("destination", nargs="?", type=Path, default=ROOT / "dist")
+    parser.add_argument("--upstream-tag", help="Actual upstream release included in a fork feature build")
+    args = parser.parse_args()
+    print(make_bundle(args.destination.resolve(), args.upstream_tag))

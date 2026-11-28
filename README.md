@@ -22,6 +22,10 @@ Binggo 可以从 UP 主合集、追踪动态和视频检索中发现抽奖活动
 
 本版本由 Aggressiveless 从 [Komerser 的 6.1.3 集群版](https://github.com/Komerser/bilibinggo/releases/tag/v6.1.3) 派生。原项目为 victor 的 [bilibinggo](https://github.com/luovicter-collab/bilibinggo)。
 
+## 6.1.4.02 试用
+
+「数据源 → 监控与合集」现可切换「活动整理UP主」与「活动发布UP主」。发布者名单由已核验的原创抽奖动态累积，可通过「自动更新并搜索」提交本机任务。支持新版本的集群会依次检查两类来源，长期无发布的账号会从发布者名单移除并留下工作日志。
+
 ## 6.1.3.02 更新
 
 - 合入上游 6.1.3 的连续追踪、独立轮间参与、节点待参与数量及逐条预检跳过；保留 6.1.2 的检索和核验缓存。

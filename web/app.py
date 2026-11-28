@@ -127,6 +127,7 @@ _JOB_REQUIRES_LOGIN = frozenset(
         "refresh_source",
         "refresh_status",
         "refresh_watch",
+        "refresh_publishers",
     }
 )
 _JOB_REQUIRES_LLM = frozenset(
@@ -137,6 +138,7 @@ _JOB_REQUIRES_LLM = frozenset(
         "refresh_all",
         "refresh_source",
         "refresh_watch",
+        "refresh_publishers",
     }
 )
 
@@ -316,7 +318,7 @@ def api_start_job(request: JobRequest, enqueue: bool = False) -> dict[str, Any]:
         dynamic_id = str(params.get("dynamic_id") or "").strip()
         if not is_valid_dynamic_id(dynamic_id):
             raise AppError(ErrorCode.VALIDATION_ERROR, "活动 ID 无效")
-    if enqueue and request.action in QUEUEABLE_ACTIONS:
+    if (enqueue or request.action == "refresh_publishers") and request.action in QUEUEABLE_ACTIONS:
         entry = get_task_queue().submit(request.action, params)
         current = runner.resolve_job_status(entry["job_id"]) if entry["job_id"] else runner.get_status()
         return {"ok": True, "job": current.to_dict(), "queue_entry": entry}

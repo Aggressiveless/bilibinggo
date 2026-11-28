@@ -96,6 +96,18 @@ def install_cluster(app):
         _dashboard(request)
         return _run(request.app.state.cluster.tracked_users, page)
 
+    @dashboard.get("/publisher-sources")
+    def publisher_sources(request: Request, page: int = Query(default=1, ge=1, le=1_000_000)):
+        _dashboard(request)
+        return _run(request.app.state.cluster.publisher_listing, page)
+
+    @peer.post("/publisher-sources")
+    async def peer_publisher_sources(request: Request):
+        token = _bearer(request)
+        body = await _read(request, DetectionPageRequest)
+        return await run_in_threadpool(_run, request.app.state.cluster.store.publisher_listing,
+                                       body.page, node=body.node, token=token)
+
     @dashboard.post("/watch-assignment")
     def watch_assignment(request: Request, body: WatchAssignment):
         _dashboard(request, check_login=True)
